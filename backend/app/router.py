@@ -176,7 +176,8 @@ def answer_followup(session_id: str, body: dict, db: Session = Depends(get_db)):
     except ValueError as e:
         raise HTTPException(409, str(e))
     return {"state": s.state, "evidence_level": s.evidence_level,
-            "followup_count": s.followup_count, "chain_focus": s.chain_focus}
+            "followup_count": s.followup_count, "chain_focus": s.chain_focus,
+            "can_refine": s.can_refine}
 
 
 @router.post("/diagnoses/{session_id}/skip-followup")

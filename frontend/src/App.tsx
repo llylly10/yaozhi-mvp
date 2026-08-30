@@ -983,7 +983,7 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
 
       <AnimatePresence mode="wait">
         {diagnosis && (
-          <DiagnosisPanel key={diagnosis.state + diagnosis.followup_count}
+          <DiagnosisPanel key={diagnosis.session_id}
             diagnosis={diagnosis} onRefresh={refresh} onStartTraining={startTraining} onError={setError} />
         )}
       </AnimatePresence>
@@ -1136,21 +1136,7 @@ function DiagnosisPanel({ diagnosis, onRefresh, onStartTraining, onError }: {
   const [answering, setAnswering] = useState(false)
   const [showEvidence, setShowEvidence] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
-  const [retrying, setRetrying] = useState(false)
-
-  // followup 缺失时自动补拉一次（提交后瞬时未就绪的兜底）
-  useEffect(() => {
-    if (diagnosis.state === 'followup_required' && !diagnosis.followup) {
-      const timer = setTimeout(() => onRefresh(diagnosis.session_id), 1000)
-      return () => clearTimeout(timer)
-    }
-  }, [diagnosis])
-
-  function retryFetch() {
-    setRetrying(true)
-    onRefresh(diagnosis.session_id)
-    setTimeout(() => setRetrying(false), 800)
-  }
+  const [showFollowup, setShowFollowup] = useState(false)
 
   async function answer(optionKey?: string) {
     if (!diagnosis.followup) return
@@ -1184,20 +1170,7 @@ function DiagnosisPanel({ diagnosis, onRefresh, onStartTraining, onError }: {
         </div>
       </motion.div>
 
-      {diagnosis.state === 'followup_required' && !diagnosis.followup && (
-        <div className="card p-8">
-          <div className="skeleton mb-3 h-6 w-2/3" />
-          <div className="skeleton h-14 w-full" />
-          <p className="mt-3 text-xs text-ink-3">正在生成定向追问…
-            <button onClick={retryFetch} disabled={retrying}
-              className="btn ml-3 rounded-full border border-line px-3 py-1 text-xs hover:border-primary hover:text-primary">
-              {retrying ? '刷新中…' : '手动刷新'}
-            </button>
-          </p>
-        </div>
-      )}
-
-      {diagnosis.state === 'followup_required' && diagnosis.followup && (
+      {showFollowup && diagnosis.followup && (
         <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="card p-8">
           <div className="mb-1 flex items-center justify-between">
             <p className="flex items-center gap-2 text-xs font-semibold text-ink-3">
@@ -1241,11 +1214,27 @@ function DiagnosisPanel({ diagnosis, onRefresh, onStartTraining, onError }: {
           ) : (
             <OpenAnswer onAnswer={() => answer()} disabled={answering} />
           )}
-          <button onClick={skip} disabled={answering}
-            className="btn mt-5 items-center gap-1 text-[13px] text-ink-3 hover:text-ink">
-            <SkipForward size={13} />跳过追问，生成低证据归因
-          </button>
+          <div className="mt-5 flex items-center gap-3">
+            <button onClick={skip} disabled={answering}
+              className="btn items-center gap-1 text-[13px] text-ink-3 hover:text-ink">
+              <SkipForward size={13} />跳过追问，维持低证据归因
+            </button>
+            <button onClick={() => setShowFollowup(false)}
+              className="btn text-[13px] text-ink-3 hover:text-ink">返回诊断卡</button>
+          </div>
         </motion.div>
+      )}
+
+      {diagnosis.card?.can_refine && !showFollowup && (
+        <motion.button initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => setShowFollowup(true)}
+          className="btn card w-full items-center gap-3 p-5 text-left hover:shadow-[var(--shadow-lg)]">
+          <span className="grid size-9 flex-none place-items-center rounded-xl bg-gold-soft font-serif font-bold text-gold">问</span>
+          <span>
+            <span className="block text-sm font-medium">追问对话 · 进一步定位你的理解缺口</span>
+            <span className="block text-xs text-ink-3 mt-0.5">证据等级为低——回答几个定向问题，可将归因细化到高证据（可选，最多 3 轮）</span>
+          </span>
+          <ArrowRight size={15} className="ml-auto text-ink-3" />
+        </motion.button>
       )}
 
       {diagnosis.card && (
@@ -1264,11 +1253,13 @@ function DiagnosisPanel({ diagnosis, onRefresh, onStartTraining, onError }: {
             </div>
           </div>
           <div className="p-8">
-            {diagnosis.followup_count > 0 && (
+            {diagnosis.followup_count > 0 && !diagnosis.card.can_refine && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={spring}
                 className="mb-5 flex justify-start">
                 <div className="max-w-[85%] rounded-2xl rounded-tl-sm border border-line-2 bg-paper px-4 py-2.5 text-[13px] text-ink-2">
-                  证据已足够，归因收敛为「{diagnosis.card.misconception.category}」，证据等级提升为 {diagnosis.card.evidence_level}。
+                  {diagnosis.card.evidence_level === '高'
+                    ? `证据已足够，归因收敛为「${diagnosis.card.misconception.category}」，证据等级提升为 高。`
+                    : `追问已完成。当前归因维持为「${diagnosis.card.misconception.category}」，证据等级：低——稍后可再来细化。`}
                 </div>
               </motion.div>
             )}

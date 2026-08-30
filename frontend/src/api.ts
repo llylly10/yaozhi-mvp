@@ -74,6 +74,7 @@ export type Diagnosis = {
     evidence_level: string
     evidences: { type: string; source: string; content: string }[]
     alternatives?: { code: string; name: string; primary: boolean }[]
+    can_refine?: boolean
   },
   turns: { who: 'ai' | 'student'; text: string }[]
   training?: boolean
