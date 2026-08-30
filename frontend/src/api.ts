@@ -4,8 +4,10 @@ const jsonHeaders = { 'Content-Type': 'application/json' }
 
 async function handle(res: Response) {
   if (!res.ok) {
+    if (res.status === 404) throw new Error('数据不存在或已被重置，请刷新页面后重试')
+    if (res.status >= 500) throw new Error('服务器开小差了，请稍后重试（已记录日志）')
     const detail = await res.text().catch(() => '')
-    throw new Error(`API ${res.status}: ${detail.slice(0, 200)}`)
+    throw new Error(`请求失败 ${res.status}: ${detail.slice(0, 150)}`)
   }
   return res.json()
 }
