@@ -101,7 +101,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
     <div className="relative z-10 mx-auto grid min-h-[100dvh] w-full max-w-[1140px] items-stretch gap-7 px-5 py-10 lg:grid-cols-[1.08fr_0.92fr]">
       {/* 英雄区 */}
       <motion.div initial={{ opacity: 0, y: 22 }} animate={{ opacity: 1, y: 0 }} transition={spring}
-        className="relative flex flex-col overflow-hidden rounded-[28px] p-11 text-white min-h-[540px]"
+        className="relative flex flex-col overflow-hidden rounded-[28px] p-11 text-white"
         style={{ background: 'linear-gradient(155deg, var(--color-primary-deep) 0%, #0C6150 55%, #128A70 100%)' }}>
         {/* 苯环装饰 */}
         <div className="pointer-events-none absolute -right-8 -top-10 opacity-20">
@@ -146,7 +146,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
       {/* 同意卡（玻璃） */}
       <motion.div initial={{ opacity: 0, y: 22 }} animate={{ opacity: 1, y: 0 }}
         transition={{ ...spring, delay: 0.1 }}
-        className="glass relative z-10 flex flex-col self-center rounded-[28px] p-9">
+        className="glass relative z-10 flex flex-col rounded-[28px] p-9">
         <div className="flex items-center gap-3">
           <span className="rx-badge">Rx</span>
           <div>
