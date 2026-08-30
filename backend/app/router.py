@@ -489,11 +489,33 @@ def question_analysis(question_id: str, db: Session = Depends(get_db)):
             "option": opt["key"], "option_text": opt["text"],
             "category": mis.category if mis else "待归类",
             "misconception": mis.name if mis else "该选项暂无错因标注（待顾问补充）",
+            "misconception_code": mis.code if mis else None,
             "note": sig.get("note", ""),
         })
+    # 假设性主错因：权重最高的干扰项标注
+    primary, top_w = None, -1.0
+    for a in analysis:
+        sig = (q.distractor_signals or {}).get(a["option"]) or {}
+        w = float(sig.get("weight", 0))
+        if w > top_w:
+            top_w, primary = w, a
+    # 衔接追问预览：主错因关联的预置追问节点（按 code 排序）
+    followups = []
+    if primary and primary.get("misconception_code"):
+        from .models import MisconceptionFollowup, FollowupNode
+        mis_obj = db.execute(select(Misconception).where(
+            Misconception.code == primary["misconception_code"])).scalar_one_or_none()
+        if mis_obj:
+            node_ids = db.execute(select(MisconceptionFollowup.followup_node_id).where(
+                MisconceptionFollowup.misconception_id == mis_obj.id)).scalars().all()
+            nodes = sorted([db.get(FollowupNode, n) for n in node_ids if db.get(FollowupNode, n)],
+                           key=lambda n: n.code)
+            followups = [{"question_text": n.question_text, "options": n.options} for n in nodes]
     return {"question_code": q.code, "stem": q.stem, "answer": q.answer,
             "evidence": [{"ref": e.evidence_chunk_id, "text": e.content_text} for e in evidence],
-            "analysis": analysis}
+            "analysis": analysis,
+            "primary": primary,
+            "followups": followups}
 
 
 @router.get("/questions/{question_id}")

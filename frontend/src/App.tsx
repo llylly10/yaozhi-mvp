@@ -786,6 +786,8 @@ type Analysis = {
   question_code: string; stem: string; answer: string
   evidence: { ref: string; text: string }[]
   analysis: { option: string; option_text: string; category: string; misconception: string; note: string }[]
+  primary?: { option: string; option_text: string; category: string; misconception: string; note: string } | null
+  followups?: { question_text: string; options: { key: string; text: string }[] | null }[]
 }
 
 type MasteryRow = { domain: string; category: string | null; state: string; reason: string }
@@ -1147,11 +1149,10 @@ function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onE
   const [showFollowup, setShowFollowup] = useState(false)
   const [openAnalysis, setOpenAnalysis] = useState(false)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
-  const [data, setData] = useState<{ question_code: string } | null>(null)
 
   useEffect(() => {
     if (diagnosis.is_correct) {
-      api.questionAnalysis(questionId).then((r: Analysis) => { setAnalysis(r); setData({ question_code: r.question_code }) }).catch((e) => onError(String(e)))
+      api.questionAnalysis(questionId).then(setAnalysis).catch((e) => onError(String(e)))
     }
   }, [diagnosis.is_correct])
 
@@ -1207,23 +1208,52 @@ function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onE
             </div>
           </div>
           <div className="p-8">
-            {analysis?.analysis.map((a: Analysis['analysis'][number]) => (
-              <div key={a.option} className="mb-4 rounded-xl bg-paper px-5 py-4">
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <span className="grid size-6 place-items-center rounded-full border border-line text-xs font-bold text-ink-2">{a.option}</span>
-                  <span className="text-sm font-medium">{a.option_text}</span>
-                  <CategoryTag category={a.category} />
+            {/* 假设性错因诊断卡（与真实诊断卡同构） */}
+            {analysis?.primary && (
+              <div className="rounded-2xl border-2 border-primary/30 bg-primary-soft/60 p-5 mb-5">
+                <div className="flex flex-wrap items-center gap-3">
+                  <CategoryTag category={analysis.primary.category} />
+                  <p className="text-[15px] font-semibold">假设性主要错因（假设误选 {analysis.primary.option} {analysis.primary.option_text}）</p>
                 </div>
-                <p className="mt-2 text-[13px] leading-relaxed text-ink-2">若误选此项，会被归因为：{a.misconception}{a.note ? `（${a.note}）` : ''}</p>
-              </div>
-            ))}
-            {analysis && analysis.evidence.length > 0 && (
-              <div className="rounded-xl bg-paper px-5 py-4 text-[13px]">
-                <p className="mb-1 text-xs text-ink-3">解析（{data?.question_code ?? ''}）</p>
-                <p className="leading-relaxed text-ink-2">{analysis.evidence[0]?.text}</p>
+                <p className="mt-2 text-sm leading-relaxed text-ink-2">{analysis.primary.misconception}</p>
+                <p className="mt-3 text-xs text-ink-3">
+                  真实练习中：若你在后续同域题目上同样在这个干扰项出错，系统即确认此归因并出具完整诊断。
+                </p>
               </div>
             )}
-            <button onClick={onExit} className="btn btn-primary mt-6">返回今日待办</button>
+
+            <p className="mb-3 flex items-center gap-2 text-xs font-semibold text-ink-3">
+              <span className="capsule" />候选错因（其余错误选项对应的典型误区）
+            </p>
+            <div className="space-y-2.5">
+              {(analysis?.analysis ?? []).filter((a) => a.option !== analysis?.primary?.option).map((a) => (
+                <div key={a.option} className="flex flex-wrap items-center gap-2.5 rounded-xl border border-line-2 bg-white px-4 py-3 text-sm text-ink-2">
+                  <span className="grid size-6 flex-none place-items-center rounded-full border border-line text-xs font-bold">{a.option}</span>
+                  <span className="font-medium">{a.option_text}</span>
+                  <span className="ml-auto"><CategoryTag category={a.category} /></span>
+                </div>
+              ))}
+            </div>
+
+            <p className="mb-3 mt-6 flex items-center gap-2 text-xs font-semibold text-ink-3">
+              <span className="capsule gold" />衔接追问 · 若进入追问，系统将依次提出（真实练习中为交互对话）
+            </p>
+            <div className="space-y-3">
+              {(analysis?.followups ?? []).map((f, i) => (
+                <div key={i} className="rounded-2xl rounded-tl-sm border border-line-2 bg-paper px-4 py-3 text-sm">
+                  <p className="text-[11px] font-semibold text-ink-3 mb-1">第 {i + 1} 轮追问</p>
+                  <p className="leading-relaxed">{f.question_text}</p>
+                  {f.options && (
+                    <p className="mt-1.5 text-xs text-ink-3">选项：{f.options.map((o) => `${o.key}. ${o.text}`).join('　')}</p>
+                  )}
+                </div>
+              ))}
+              {(analysis?.followups ?? []).length === 0 && (
+                <p className="text-xs text-ink-3">该错因暂无预置追问，将直接进入靶向训练。</p>
+              )}
+            </div>
+
+            <button onClick={onExit} className="btn btn-primary mt-7">返回今日待办</button>
           </div>
         </motion.div>
       )}
