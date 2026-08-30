@@ -81,11 +81,15 @@ def get_diagnosis(session_id: str, db: Session = Depends(get_db)):
         from .models import DiagnosisEvidence
         evidences = db.execute(select(DiagnosisEvidence).where(
             DiagnosisEvidence.session_id == s.id)).scalars().all()
+        # 用户可见的证据链用可读标签，不暴露内部 ID（v1.1 证据化输出）
+        label = {"选项标注": "作答记录", "作答理由": "你的解题思路", "追问回答": "追问回答", "知识库切片": "知识点原文"}
+        source_label = {"选项标注": f"题目 {question.code}", "作答理由": "", "追问回答": "", "知识库切片": "教材知识点"}
         card = {
             "misconception": {"code": m.code, "name": m.name, "category": m.category},
             "evidence_level": s.evidence_level,
-            "evidences": [{"type": e.evidence_type, "source": e.source_ref, "content": e.content}
-                          for e in evidences],
+            "evidences": [{"type": label.get(e.evidence_type, e.evidence_type),
+                           "source": source_label.get(e.evidence_type, ""),
+                           "content": e.content} for e in evidences],
         }
     followup = dx.current_followup(db, s)
     return {

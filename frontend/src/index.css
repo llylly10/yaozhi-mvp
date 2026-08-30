@@ -1,28 +1,50 @@
 @import "tailwindcss";
 
 /*
- * 设计令牌（Design Read：教育学习工具，信任优先、专注低干扰）
- * 拨盘：VARIANCE 3 / MOTION 3 / DENSITY 5
- * 单强调色 Emerald；中性色 Zinc；圆角统一 12px；无装饰性光效
+ * 设计令牌 —— 对齐产品原型（Redesign-Preserve）
+ * 纸感绿底 + 深墨绿主色 + 金色点缀；Noto Sans SC 正文 + Noto Serif SC 展示标题
+ * 拨盘：VARIANCE 4 / MOTION 3 / DENSITY 5；radius 14px；绿色调阴影
  */
 @theme {
-  --font-sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
-  --color-surface: #fafafa;
-  --color-ink: #18181b;
-  --color-ink-soft: #52525b;
-  --color-line: #e4e4e7;
-  --color-accent: #059669;
-  --color-accent-strong: #047857;
-  --color-accent-soft: #ecfdf5;
-  --color-warn: #b45309;
-  --color-warn-soft: #fffbeb;
-  --radius-card: 12px;
+  --font-sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-serif: "Noto Serif SC", Georgia, "Songti SC", serif;
+
+  --color-paper: #F3F6F3;
+  --color-paper-2: #EAF0EB;
+  --color-ink: #16312A;
+  --color-ink-2: #48605A;
+  --color-ink-3: #7C8F89;
+  --color-line: #DCE5DF;
+  --color-line-2: #EBF0EC;
+  --color-primary: #0E7A63;
+  --color-primary-deep: #0A5D4C;
+  --color-primary-soft: #E0EDE7;
+  --color-gold: #C28E2E;
+  --color-gold-soft: #F4E9CF;
+  --color-cat-blue: #3B6FB6;
+  --color-cat-blue-soft: #E7EEF7;
+  --color-cat-purple: #7A5FB0;
+  --color-cat-purple-soft: #EDE8F5;
+  --color-cat-orange: #D98A2B;
+  --color-cat-orange-soft: #F8EBD8;
+  --color-cat-red: #C95B4D;
+  --color-cat-red-soft: #F7E7E4;
+  --color-ok: #2E9E6B;
+  --color-ok-soft: #E2F2E9;
+  --color-warn: #D98A2B;
+  --color-warn-soft: #F8EBD8;
+
+  --radius-card: 14px;
+  --shadow-card: 0 1px 2px rgba(22, 49, 42, 0.05), 0 10px 28px -22px rgba(22, 49, 42, 0.28);
+  --shadow-lg: 0 2px 6px rgba(22, 49, 42, 0.06), 0 24px 60px -30px rgba(22, 49, 42, 0.35);
 }
 
 html {
   font-family: var(--font-sans);
-  background: var(--color-surface);
+  background: var(--color-paper);
   color: var(--color-ink);
+  font-size: 15px;
+  line-height: 1.6;
 }
 
 body {
@@ -30,24 +52,114 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* 统一交互反馈：按压 1px 下沉 */
+.display {
+  font-family: var(--font-serif);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+/* 按钮：统一 12px 圆角 + 按压反馈 */
 .btn {
-  transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1), background-color 120ms;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .btn:active:not(:disabled) {
   transform: translateY(1px);
 }
 .btn:disabled {
-  opacity: 0.45;
+  opacity: 0.5;
   cursor: not-allowed;
 }
+.btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+  padding: 11px 22px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-deep);
+}
 
-/* 骨架屏（非转圈 spinner） */
+/* 卡片 */
+.card {
+  background: #fff;
+  border: 1px solid var(--color-line-2);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+/* 六边形分子徽标（原型签名元素） */
+.molecule {
+  width: 46px;
+  height: 52px;
+  position: relative;
+  flex: none;
+}
+.molecule::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--mol-bg, var(--color-primary-soft));
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  transition: all 0.25s;
+}
+.molecule i {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mol-ink, var(--color-ink-2));
+}
+
+/* 渐变英雄区（登录/欢迎） */
+.hero-gradient {
+  background: linear-gradient(160deg, var(--color-primary-deep), #0E7A63 60%, #2E9E6B);
+}
+
+/* 步骤轨 */
+.rail-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--color-ink-3);
+  transition: all 0.15s;
+}
+.rail-chip.active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+/* fadeUp 屏幕切换（尊重 reduced motion） */
+.fade-up {
+  animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fade-up { animation: none; }
+  .btn { transition: none; }
+}
+
+/* 骨架屏 */
 .skeleton {
-  background: linear-gradient(90deg, #e4e4e7 25%, #f4f4f5 50%, #e4e4e7 75%);
+  background: linear-gradient(90deg, var(--color-line-2) 25%, #F6F9F7 50%, var(--color-line-2) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.4s infinite;
-  border-radius: 8px;
+  border-radius: 10px;
 }
 @keyframes shimmer {
   0% { background-position: 200% 0; }
@@ -55,5 +167,21 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .skeleton { animation: none; }
-  .btn { transition: none; }
+}
+
+/* 输入 */
+.input {
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  font-size: 14px;
+  background: #FBFCFB;
+  color: var(--color-ink);
+  transition: border 0.15s;
+}
+.input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  background: #fff;
 }
