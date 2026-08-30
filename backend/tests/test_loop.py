@@ -135,15 +135,16 @@ def test_skip_followup_yields_low_evidence():
     assert r.json()["evidence_level"] == "低"
 
 
-def test_correct_answer_skips_strong_attribution():
-    """答对不应产生错因归因会话卡（is_correct=True 仍建会话但规则无干扰项信号）。"""
+def test_correct_answer_skips_diagnosis():
+    """答对不产出错因卡、不写薄弱状态（US-2 前提是"做错"）。"""
     user = fresh_user()
     out = attempt(user, "Q-ANS-01", "B")
     s = client.get(f"/diagnoses/{out['session_id']}").json()
     assert s["is_correct"] is True
-    # 无信号命中 → 通用候选低分 → 追问路径或低等级，绝不输出高等级强归因
-    if s["state"] == "diagnosed":
-        assert s["card"]["evidence_level"] == "低"
+    assert s["state"] == "completed"
+    assert s["card"] is None and s["followup"] is None
+    m = client.get("/mastery/me", params={"user_id": user}).json()
+    assert all(x["state"] != "薄弱" for x in m), "答对不得标记薄弱"
 
 
 def test_training_and_mastery_transition():

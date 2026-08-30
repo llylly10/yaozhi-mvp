@@ -109,6 +109,14 @@ def submit_attempt(body: AttemptIn, db: Session = Depends(get_db)):
                       time_spent=body.time_spent, idempotency_key=body.idempotency_key)
     db.add(attempt)
     db.commit()
+    # 答对不进诊断（US-2 前提是"做错"）：直接完成会话，不产出错因卡、不写薄弱
+    if attempt.is_correct:
+        session = DiagnosisSession(attempt_id=attempt.id, state="completed", evidence_level=None)
+        db.add(session)
+        audit(db, "system", "diagnosis.skipped_correct", f"session:{session.id}")
+        db.commit()
+        return {"attempt_id": attempt.id, "session_id": session.id,
+                "state": "completed", "is_correct": True}
     session = dx.start_session(db, attempt)
     return {"attempt_id": attempt.id, "session_id": session.id,
             "state": session.state, "is_correct": attempt.is_correct}
