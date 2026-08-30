@@ -121,7 +121,8 @@ export default function App() {
                 onMaterial={(domainId) => { setMaterialDomain(domainId); setScreen('material') }} />
             )}
             {screen === 'material' && materialDomain && (
-              <MaterialView key={materialDomain} domainId={materialDomain} onError={setError} />
+              <MaterialView key={materialDomain} domainId={materialDomain} onError={setError}
+                onPractice={(q) => { setActiveQuestion(q); setScreen('flow'); setDiagnosis(null) }} />
             )}
             {screen === 'flow' && userId && activeQuestion && (
               <PracticeFlow key={activeQuestion.id} userId={userId} question={activeQuestion}
@@ -684,11 +685,11 @@ type MaterialData = {
   evidence: { ref: string; text: string }[]
 }
 
-function MaterialView({ domainId, onError }: {
-  domainId: string; onError: (m: string) => void
+function MaterialView({ domainId, onPractice, onError }: {
+  domainId: string; onPractice: (q: Question) => void; onError: (m: string) => void
 }) {
   const [mat, setMat] = useState<MaterialData | null>(null)
-  const [done, setDone] = useState(false)
+  const [starting, setStarting] = useState(false)
 
   useEffect(() => { window.scrollTo(0, 0) }, [])
   useEffect(() => {
@@ -761,16 +762,19 @@ function MaterialView({ domainId, onError }: {
       )}
 
       <div className="sticky bottom-4 mt-5 flex justify-center">
-        {!done ? (
-          <button onClick={() => setDone(true)} className="btn btn-primary !px-8 !py-3.5 shadow-[var(--shadow-lg)]">
-            <CheckCircle size={16} />完成学习，进入练习
-          </button>
-        ) : (
-          <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-            className="glass rounded-full px-6 py-3 text-sm text-ink-2">
-            学习已标记完成 — 从左侧「今日待办」选择对应练习
-          </motion.p>
-        )}
+        <button
+          onClick={() => {
+            setStarting(true)
+            api.questions().then((list) => {
+              const q = list.find((x: Question) => x.domain_id === domainId)
+              if (q) onPractice(q)
+              else onError("该诊断域暂无练习题，请从今日待办选择其他任务。")
+            }).catch((e) => onError(String(e))).finally(() => setStarting(false))
+          }}
+          disabled={starting}
+          className="btn btn-primary !px-8 !py-3.5 shadow-[var(--shadow-lg)]">
+          <CheckCircle size={16} />{starting ? "正在进入…" : "完成学习，进入练习"}
+        </button>
       </div>
     </motion.div>
   )
