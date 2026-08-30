@@ -31,6 +31,15 @@ export const api = {
   feedback: (sessionId: string, matches: boolean) =>
     fetch(`/api/diagnoses/${sessionId}/feedback`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ matches }) }).then(handle),
 
+  learningPlan: (userId: string) => fetch(`/api/learning-plan/${userId}`).then(handle),
+
+  materials: (domainId: string) => fetch(`/api/materials/${domainId}`).then(handle),
+
+  retest: (trainingId: string) => fetch(`/api/retest/${trainingId}`).then(handle),
+
+  submitRetest: (trainingId: string, answers: Record<string, string>) =>
+    fetch(`/api/retest/${trainingId}/submit`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answers }) }).then(handle),
+
   questions: () => fetch('/api/questions?usage=diagnostic').then(handle),
 
   submitAttempt: (body: {
@@ -67,7 +76,8 @@ export type Diagnosis = {
     alternatives?: { code: string; name: string; primary: boolean }[]
   },
   turns: { who: 'ai' | 'student'; text: string }[]
+  training?: boolean
   followup: null | { node_id: string; question_text: string; options: { key: string; text: string }[] | null; turn_max: number }
 }
 
-export type Question = { id: string; code: string; stem: string; options: { key: string; text: string }[]; type: string }
+export type Question = { id: string; code: string; stem: string; options: { key: string; text: string }[]; type: string; domain_id: string }

@@ -15,17 +15,20 @@ import { api, type Diagnosis, type Question } from './api'
 
 const USER_KEY = 'yaozhi_user_id_v2'
 
-type Screen = 'register' | 'consent' | 'goal' | 'assessment' | 'portrait' | 'list' | 'flow' | 'profile'
+type Screen = 'register' | 'consent' | 'goal' | 'assessment' | 'portrait' | 'list' | 'material' | 'flow' | 'profile'
 type View = 'todo' | 'material' | 'wrongbook' | 'profile'
 
-const STEPS = ['注册', '同意', '目标', '摸底', '画像', '题库', '作答', '诊断', '追问', '训练', '档案'] as const
+const STEPS = ['注册', '同意', '目标', '摸底', '画像', '路径', '学习', '练习', '诊断', '追问', '训练', '复测', '档案'] as const
 
 const spring = { type: 'spring', stiffness: 120, damping: 20 } as const
+const Rconst = 52
+const Cconst = 2 * Math.PI * Rconst
 
 function stepIndex(screen: Screen, diagnosis: Diagnosis | null): number {
   const map: Record<Screen, number> = {
     register: 0, consent: 1, goal: 2, assessment: 3, portrait: 4,
     list: 5, flow: 6, profile: 10,
+    material: 6,
   }
   if (screen !== 'flow') return map[screen]
   if (!diagnosis) return 6
@@ -43,6 +46,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [goal, setGoal] = useState<string>('期末冲绩')
   const [portrait, setPortrait] = useState<PortraitResult | null>(null)
+  const [materialDomain, setMaterialDomain] = useState<string | null>(null)
 
   function onRegistered(id: string) {
     localStorage.setItem(USER_KEY, id)
@@ -57,7 +61,7 @@ export default function App() {
   }
 
   const step = stepIndex(screen, diagnosis)
-  const inLearning = screen === 'list' || screen === 'flow' || screen === 'profile' || screen === 'goal' || screen === 'assessment' || screen === 'portrait'
+  const inLearning = ['list', 'flow', 'profile', 'goal', 'assessment', 'portrait', 'material'].includes(screen)
 
   return (
     <div className="relative min-h-[100dvh]">
@@ -112,20 +116,23 @@ export default function App() {
               <Portrait key="portrait" result={portrait} onEnter={() => { setScreen('list'); setView('todo') }} />
             )}
             {screen === 'list' && userId && view === 'todo' && (
-              <TodoHome key="list" userId={userId}
-                onPick={(q) => { setError(null); setActiveQuestion(q); setScreen('flow'); setDiagnosis(null) }} />
+              <LearningPathHome key="plan" userId={userId}
+                onPick={(q) => { setError(null); setActiveQuestion(q); setScreen('flow'); setDiagnosis(null) }}
+                onMaterial={(domainId) => { setMaterialDomain(domainId); setScreen('material') }} />
+            )}
+            {screen === 'material' && materialDomain && (
+              <MaterialView key={materialDomain} domainId={materialDomain} onError={setError} />
             )}
             {screen === 'flow' && userId && activeQuestion && (
               <PracticeFlow key={activeQuestion.id} userId={userId} question={activeQuestion}
                 onDiagnosis={setDiagnosis} onError={setError}
+                onStep={() => {}}
                 onExit={() => { setScreen('list'); setActiveQuestion(null); setDiagnosis(null); setView('todo') }} />
             )}
             {screen === 'profile' && userId && (view === 'wrongbook' || view === 'profile') && (
               <Profile key={view} userId={userId} />
             )}
-            {screen === 'list' && view === 'material' && (
-              <EmptyPanel key="material" text="学习材料（知识点精讲 + 记忆卡）将在 W3 上线，当前版本请先从今日待办进入练习。" />
-            )}
+
           </AnimatePresence>
         </div>
       </div>
@@ -189,7 +196,7 @@ function Sidebar({ view, onNav }: { view: View; onNav: (v: View) => void }) {
         <div>
           <p className="mb-1.5 px-3.5 text-[11px] font-semibold text-ink-3">学习</p>
           {item('todo', '今日待办', <CalendarBlank size={15} />)}
-          {item('material', '学习材料', <BookOpen size={15} />, true)}
+          {item('material', '学习材料', <BookOpen size={15} />)}
           {item('wrongbook', '错题本', <ClockCounterClockwise size={15} />)}
         </div>
         <div>
@@ -588,68 +595,188 @@ function Portrait({ result, onEnter }: { result: PortraitResult; onEnter: () => 
   )
 }
 
-/* ---------- 今日待办（题库） ---------- */
+/* ---------- 学习路径（今日待办） ---------- */
 
-function TodoHome({ userId, onPick }: { userId: string; onPick: (q: Question) => void }) {
+type PlanTask = { type: 'material' | 'practice'; domain_id: string; domain: string; category: string | null; state: string; title: string }
+
+function LearningPathHome({ userId, onPick, onMaterial }: {
+  userId: string; onPick: (q: Question) => void; onMaterial: (domainId: string) => void
+}) {
+  const [plan, setPlan] = useState<{ tasks: PlanTask[]; note: string } | null>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => { api.questions().then(setQuestions).catch((e) => setError(String(e))) }, [])
+  useEffect(() => {
+    api.learningPlan(userId).then(setPlan).catch((e) => setError(String(e)))
+    api.questions().then(setQuestions).catch(() => {})
+  }, [userId])
 
+  if (error) return <ErrorPanel message={error} />
+  if (!plan) {
+    return <div className="space-y-3">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-16" />)}</div>
+  }
+
+  const hasTasks = plan.tasks.length > 0
   return (
-    <motion.div key="list" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      <p className="text-xs font-semibold tracking-[0.18em] text-gold">STEP 3 · 今日待办</p>
-      <h2 className="display mt-2 text-[26px]">今天练什么</h2>
-      <p className="mt-2 text-sm text-ink-2">选择一道题开始。答错时，系统会定位你错在哪，而不是只告诉你错了。</p>
+    <motion.div key="plan" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <p className="text-xs font-semibold tracking-[0.18em] text-gold">STEP 6 · 学习路径</p>
+      <h2 className="display mt-2 text-[26px]">今日待办</h2>
+      <p className="mt-2 text-sm text-ink-2">{plan.note}</p>
 
-      {error && <ErrorPanel message={error} />}
-      {!questions && !error && (
-        <div className="mt-6 grid gap-4 sm:grid-cols-2">
-          {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-[120px]" />)}
+      {!hasTasks && (
+        <div className="card mt-6 p-8 text-center">
+          <p className="text-sm text-ink-2">当前没有薄弱项待办。</p>
+          <p className="mt-1 text-xs text-ink-3">完成一次「作答 → 诊断 → 训练」后，路径会按你的错因画像自动生成。</p>
+          {questions && questions.length > 0 && (
+            <button onClick={() => { const q = questions[0]; if (q) onPick(q) }}
+              className="btn btn-primary mt-5">自由练习一道</button>
+          )}
         </div>
       )}
-      {questions && questions.length === 0 && <div className="mt-6"><EmptyPanel text="当前没有可练习的题目，等待内容生产。" /></div>}
 
-      {questions && questions.length > 0 && (
-        <div className="mt-6 grid gap-4 sm:grid-cols-2">
-          {questions.map((q, i) => (
-            <SpotCard key={q.id} onClick={() => onPick(q)} delay={i * 0.05}>
-              <span className="grid size-9 flex-none place-items-center rounded-full bg-primary-soft font-serif text-sm font-bold text-primary">
-                {q.code.slice(-1)}
+      {hasTasks && (
+        <div className="relative mt-6 space-y-4 before:absolute before:left-[19px] before:top-3 before:bottom-3 before:w-px before:bg-line">
+          {plan.tasks.map((t, i) => (
+            <motion.div key={t.type + t.domain_id + t.category} initial={{ opacity: 0, x: -14 }}
+              animate={{ opacity: 1, x: 0 }} transition={{ ...spring, delay: i * 0.07 }}
+              className="relative flex items-center gap-4">
+              <span className={`z-10 grid size-10 flex-none place-items-center rounded-xl font-serif font-bold
+                ${t.type === 'material' ? 'bg-gold-soft text-gold' : 'bg-primary-soft text-primary'}`}>
+                {t.type === 'material' ? '学' : '练'}
               </span>
-              <span className="mt-3.5 block text-[14.5px] font-medium leading-relaxed">{q.stem}</span>
-              <span className="mt-3 flex items-center gap-2 text-xs text-ink-3">开始练习 <ArrowRight size={12} /></span>
-            </SpotCard>
+              <div className="card flex-1 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium">{t.title}</p>
+                  <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium
+                    ${t.state === '薄弱' ? 'bg-cat-red-soft text-cat-red' : t.state === '学习中' ? 'bg-gold-soft text-gold' : 'bg-primary-soft text-primary'}`}>
+                    {t.state}
+                  </span>
+                </div>
+                {t.type === 'material' ? (
+                  <button onClick={() => onMaterial(t.domain_id)}
+                    className="btn mt-2.5 items-center gap-1.5 rounded-full border border-line px-3.5 py-1.5 text-xs hover:border-primary hover:text-primary">
+                    进入学习<ArrowRight size={11} />
+                  </button>
+                ) : (
+                  questions && questions.length > 0 && (
+                    <button onClick={() => { const q = questions.find((x) => x.domain_id === t.domain_id) ?? questions[0]; onPick(q) }}
+                      className="btn mt-2.5 items-center gap-1.5 rounded-full border border-line px-3.5 py-1.5 text-xs hover:border-primary hover:text-primary">
+                      开始练习<ArrowRight size={11} />
+                    </button>
+                  )
+                )}
+              </div>
+            </motion.div>
           ))}
         </div>
       )}
-      <p className="mt-6 text-xs text-ink-3">演示账号 {userId.slice(0, 8)} · 作答记录已匿名保存 · 本系统不提供用药建议</p>
+      <p className="mt-6 text-xs text-ink-3">演示账号 {userId.slice(0, 8)} · 路径按「先学后练」规则生成 · 本系统不提供用药建议</p>
     </motion.div>
   )
 }
 
-/* ---------- 聚光边框卡片 ---------- */
+/* ---------- 学习材料 ---------- */
 
-function SpotCard({ children, onClick, delay = 0 }: {
-  children: React.ReactNode; onClick?: () => void; delay?: number
+type MaterialData = {
+  domain: { code: string; name: string; chapter_ref: string }
+  chain: { level: number; title: string; summary: string }[]
+  confusion_pairs: { drug_a: string; drug_b: string; distinction: string }[]
+  evidence: { ref: string; text: string }[]
+}
+
+function MaterialView({ domainId, onError }: {
+  domainId: string; onError: (m: string) => void
 }) {
-  const ref = useRef<HTMLButtonElement>(null)
+  const [mat, setMat] = useState<MaterialData | null>(null)
+  const [done, setDone] = useState(false)
+
+  useEffect(() => { window.scrollTo(0, 0) }, [])
+  useEffect(() => {
+    api.materials(domainId).then(setMat).catch((e) => onError(String(e)))
+  }, [domainId])
+
+  if (!mat) return <div className="space-y-3 pt-4">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-20" />)}</div>
+
   return (
-    <motion.button ref={ref} onClick={onClick}
-      initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ ...spring, delay }}
-      whileTap={{ scale: 0.985 }}
-      onMouseMove={(e) => {
-        const r = ref.current!.getBoundingClientRect()
-        ref.current!.style.setProperty('--mx', `${e.clientX - r.left}px`)
-        ref.current!.style.setProperty('--my', `${e.clientY - r.top}px`)
-      }}
-      className="spot-card w-full p-5 text-left">
-      {children}
-    </motion.button>
+    <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={spring}>
+      <p className="text-xs font-semibold tracking-[0.18em] text-gold">STEP 7 · 学习材料</p>
+      <h2 className="display mt-2 text-[26px]">{mat.domain.name}</h2>
+      <p className="mt-2 text-sm text-ink-2">{mat.domain.chapter_ref} · 学完机制链再做练习，效率最高。</p>
+
+      {/* 推理链 */}
+      <div className="card mt-6 p-7">
+        <h3 className="mb-5 flex items-center gap-2 text-sm font-semibold"><span className="capsule" />药理推理链 · 六环</h3>
+        <div className="space-y-0">
+          {mat.chain.map((c, i) => (
+            <motion.div key={c.level} initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }}
+              transition={{ ...spring, delay: i * 0.06 }} className="flex gap-4">
+              <div className="flex flex-col items-center">
+                <span className="grid size-8 flex-none place-items-center rounded-xl bg-primary-soft font-serif text-sm font-bold text-primary">
+                  L{c.level}
+                </span>
+                {i < mat.chain.length - 1 && <span className="w-px flex-1 bg-line" />}
+              </div>
+              <div className="pb-6">
+                <p className="text-sm font-semibold">{c.title}</p>
+                <p className="mt-1 text-[13px] leading-relaxed text-ink-2">{c.summary}</p>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+
+      {/* 混淆对 */}
+      {mat.confusion_pairs.length > 0 && (
+        <div className="card mt-4 p-7">
+          <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold"><span className="capsule gold" />易混药物对 · 双向辨析</h3>
+          <div className="space-y-4">
+            {mat.confusion_pairs.map((p, i) => (
+              <div key={i} className="rounded-xl border border-line-2 p-4">
+                <p className="text-sm font-semibold">
+                  <span className="text-primary">{p.drug_a}</span>
+                  <span className="mx-2 text-ink-3">vs</span>
+                  <span className="text-gold">{p.drug_b}</span>
+                </p>
+                <p className="mt-1.5 text-[13px] leading-relaxed text-ink-2">{p.distinction}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 知识点原文 */}
+      {mat.evidence.length > 0 && (
+        <div className="card mt-4 p-7">
+          <h3 className="mb-4 text-sm font-semibold">知识点原文（引用来源）</h3>
+          <div className="space-y-3">
+            {mat.evidence.map((e, i) => (
+              <div key={i} className="rounded-xl bg-paper px-4 py-3 text-[13px]">
+                <p className="mb-0.5 text-xs text-ink-3">{e.ref}</p>
+                <p className="leading-relaxed text-ink-2">{e.text}</p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-ink-3">正式版本将替换为授权教材的结构化切片。</p>
+        </div>
+      )}
+
+      <div className="sticky bottom-4 mt-5 flex justify-center">
+        {!done ? (
+          <button onClick={() => setDone(true)} className="btn btn-primary !px-8 !py-3.5 shadow-[var(--shadow-lg)]">
+            <CheckCircle size={16} />完成学习，进入练习
+          </button>
+        ) : (
+          <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="glass rounded-full px-6 py-3 text-sm text-ink-2">
+            学习已标记完成 — 从左侧「今日待办」选择对应练习
+          </motion.p>
+        )}
+      </div>
+    </motion.div>
   )
 }
 
-/* ---------- 学习档案 + 错题本 ---------- */
+/* ---------- 聚光边框卡片 ---------- *//* ---------- 聚光边框卡片 ---------- */
 
 type MasteryRow = { domain: string; category: string | null; state: string; reason: string }
 type WrongRow = {
@@ -663,6 +790,7 @@ function Profile({ userId }: { userId: string }) {
   const [mastery, setMastery] = useState<MasteryRow[] | null>(null)
   const [wrong, setWrong] = useState<WrongRow[] | null>(null)
 
+  useEffect(() => { window.scrollTo(0, 0) }, [])
   useEffect(() => {
     api.mastery(userId).then(setMastery).catch(() => setMastery([]))
     api.wrongBook(userId).then(setWrong).catch(() => setWrong([]))
@@ -670,12 +798,15 @@ function Profile({ userId }: { userId: string }) {
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      {view_title(userId)}
+      <p className="text-xs font-semibold tracking-[0.18em] text-gold">学习档案</p>
+      <h2 className="display mt-2 text-[26px]">你的错因画像与错题本</h2>
+      <p className="mt-2 text-sm text-ink-2">演示账号 {userId.slice(0, 8)} · 数据仅存于校内演示环境</p>
+
       <div className="mt-6 space-y-8">
         <section>
           <h3 className="mb-3.5 flex items-center gap-2 text-sm font-semibold"><span className="capsule" />掌握状态</h3>
           {!mastery && <div className="skeleton h-20" />}
-          {mastery && mastery.length === 0 && <EmptyPanel text="还没有掌握度记录：完成一次「作答 → 诊断 → 训练」后这里会出现你的错因画像。" />}
+          {mastery && mastery.length === 0 && <EmptyPanel text="还没有掌握度记录：完成一次「作答 → 诊断 → 训练 → 复测」后这里会出现你的错因画像。" />}
           {mastery && mastery.length > 0 && (
             <div className="space-y-3">
               {mastery.map((m, i) => (
@@ -719,18 +850,6 @@ function Profile({ userId }: { userId: string }) {
   )
 }
 
-function view_title(userId: string) {
-  return (
-    <div>
-      <p className="text-xs font-semibold tracking-[0.18em] text-gold">学习档案</p>
-      <h2 className="display mt-2 text-[26px]">你的错因画像与错题本</h2>
-      <p className="mt-2 text-sm text-ink-2">演示账号 {userId.slice(0, 8)} · 数据仅存于校内演示环境</p>
-    </div>
-  )
-}
-
-/* ---------- 作答 → 诊断（处方笺） → 追问 → 训练 ---------- */
-
 const CAT_STYLE: Record<string, { bg: string; fg: string }> = {
   '知识遗忘': { bg: 'var(--color-cat-blue-soft)', fg: 'var(--color-cat-blue)' },
   '概念混淆': { bg: 'var(--color-cat-purple-soft)', fg: 'var(--color-cat-purple)' },
@@ -748,11 +867,15 @@ function CategoryTag({ category }: { category: string }) {
   )
 }
 
-function PracticeFlow({ userId, question, onDiagnosis, onError, onExit }: {
+function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }: {
   userId: string; question: Question
   onDiagnosis: (d: Diagnosis | null) => void; onError: (m: string) => void; onExit: () => void
+  onStep: (n: number) => void
 }) {
   const [selected, setSelected] = useState<string | null>(null)
+  const [retest, setRetest] = useState<{ retest_id: string; questions: { id: string; stem: string; options: { key: string; text: string }[] }[] } | null>(null)
+  const [retestPicks, setRetestPicks] = useState<Record<string, string>>({})
+  const [retestResult, setRetestResult] = useState<{ passed: boolean; correct: number; total: number } | null>(null)
   const [rationale, setRationale] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null)
@@ -772,6 +895,7 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit }: {
         rationale: rationale || undefined, idempotency_key: crypto.randomUUID(),
       })
       pushDiagnosis(await api.diagnosis(r.session_id))
+      onStep(8)
     } catch (e) { setError(String(e)) } finally { setSubmitting(false) }
   }
 
@@ -783,6 +907,7 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit }: {
       const t = await api.training(diagnosis.session_id)
       setTraining(t)
       pushDiagnosis(await api.diagnosis(diagnosis.session_id))
+      onStep(10)
     } catch (e) { onError(String(e)) }
   }
 
@@ -791,7 +916,20 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit }: {
     try {
       const r = await api.submitTraining(training.training_id, trainingPicks)
       setTrainingResult({ score: r.score })
-    } catch (e) { setError(String(e)) }
+      if (r.score >= 0.6) {
+        const rt = await api.retest(training.training_id)
+        setRetest(rt)
+        onStep(11)
+      }
+    } catch (e) { onError(String(e)) }
+  }
+
+  async function finishRetest() {
+    if (!retest) return
+    try {
+      const r = await api.submitRetest(retest.retest_id, retestPicks)
+      setRetestResult({ passed: r.passed, correct: r.correct, total: r.total })
+    } catch (e) { onError(String(e)) }
   }
 
   return (
@@ -888,7 +1026,71 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit }: {
         </motion.div>
       )}
 
-      {trainingResult && <TrainingResult score={trainingResult.score} onExit={onExit} />}
+      {trainingResult && !retest && <TrainingResult score={trainingResult.score} onExit={onExit} />}
+
+      {retest && !retestResult && (
+        <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="card mt-5 !rounded-[24px] p-8">
+          <div className="mb-6 flex items-center justify-between">
+            <h3 className="display text-[19px]">迁移复测 · 新情境检验</h3>
+            <span className="rounded-full bg-gold-soft px-3 py-1 text-xs font-semibold text-gold">通过后标记「已突破」</span>
+          </div>
+          <p className="mb-5 text-xs text-ink-3">以下题目换了情境但考查同一个推理链——这才是真正掌握的检验。</p>
+          <div className="space-y-6">
+            {retest.questions.map((q, i) => (
+              <div key={q.id} className="rounded-2xl border border-line-2 p-6">
+                <p className="mb-3.5 text-sm font-medium leading-relaxed">{i + 1}. {q.stem}</p>
+                <div className="space-y-2.5">
+                  {q.options.map((o) => (
+                    <motion.button key={o.key} whileTap={{ scale: 0.99 }}
+                      onClick={() => setRetestPicks({ ...retestPicks, [q.id]: o.key })}
+                      className={`relative w-full rounded-xl border px-4 py-3 text-left text-sm
+                        ${retestPicks[q.id] === o.key ? 'border-primary' : 'border-line bg-white hover:border-ink-3/40'}`}>
+                      {retestPicks[q.id] === o.key && (
+                        <motion.span layoutId={`rt-${q.id}`} transition={spring} className="absolute inset-0 rounded-xl bg-primary-soft" />
+                      )}
+                      <span className="relative z-10 flex items-center gap-3">
+                        <span className={`grid size-6 flex-none place-items-center rounded-full border text-xs font-bold
+                          ${retestPicks[q.id] === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2'}`}>{o.key}</span>
+                        {o.text}
+                      </span>
+                    </motion.button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <button onClick={finishRetest} disabled={Object.keys(retestPicks).length < retest.questions.length}
+            className="btn btn-primary mt-7">提交复测</button>
+        </motion.div>
+      )}
+
+      {retestResult && (
+        <motion.div initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} transition={spring}
+          className="card mt-5 !rounded-[24px] p-10 text-center"
+          style={{ background: retestResult.passed ? 'var(--color-ok-soft)' : 'var(--color-cat-red-soft)' }}>
+          <div className="relative mx-auto size-[110px]">
+            <svg className="size-full -rotate-90" viewBox="0 0 120 120">
+              <circle cx="60" cy="60" r={Rconst} fill="none" stroke="#fff" strokeWidth={9} />
+              <motion.circle cx="60" cy="60" r={Rconst} fill="none" strokeWidth={9} strokeLinecap="round"
+                strokeDasharray={Cconst}
+                initial={{ strokeDashoffset: Cconst }}
+                animate={{ strokeDashoffset: Cconst * (1 - retestResult.correct / Math.max(retestResult.total, 1)) }}
+                transition={{ ...spring, delay: 0.25 }}
+                style={{ stroke: retestResult.passed ? 'var(--color-ok)' : 'var(--color-cat-red)' }} />
+            </svg>
+            <div className="absolute inset-0 grid place-items-center">
+              <p className="display text-[24px]">{retestResult.correct}/{retestResult.total}</p>
+            </div>
+          </div>
+          <h3 className="display mt-5 text-[20px]">{retestResult.passed ? '复测通过 · 已标记「掌握」' : '复测未通过 · 已退回薄弱项'}</h3>
+          <p className="mt-2 text-sm text-ink-2">
+            {retestResult.passed
+              ? '迁移情境下推理依然成立，这个缺口真正补上了。'
+              : '换个情境就没答对，说明之前是短期记忆——材料再看一遍，隔两天再来。'}
+          </p>
+          <button onClick={onExit} className="btn btn-primary mt-7">返回今日待办</button>
+        </motion.div>
+      )}
     </motion.div>
   )
 }

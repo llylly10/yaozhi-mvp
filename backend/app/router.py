@@ -202,6 +202,110 @@ def diagnosis_feedback(session_id: str, body: FeedbackIn, db: Session = Depends(
     return {"session_id": session_id, "feedback": s.feedback}
 
 
+# ---------- 学习路径 / 学习材料 / 迁移复测 ----------
+
+@router.get("/learning-plan/{user_id}")
+def learning_plan(user_id: str, db: Session = Depends(get_db)):
+    """规则生成的学习路径（v1.1 §12.2）：按掌握状态排序薄弱项，每项生成【学材料 → 练习】任务对。"""
+    from .models import MasteryState
+    order = {"薄弱": 0, "学习中": 1, "初步掌握": 2}
+    rows = db.execute(select(MasteryState).where(MasteryState.user_id == user_id)).scalars().all()
+    weak = sorted([r for r in rows if r.state in order], key=lambda r: order[r.state])
+    tasks = []
+    for r in weak:
+        domain = db.get(DiagnosticDomain, r.domain_id)
+        if not domain:
+            continue
+        if r.state == "薄弱":
+            tasks.append({"type": "material", "domain_id": r.domain_id, "domain": domain.name,
+                          "category": r.category, "state": r.state,
+                          "title": f"学习：{domain.name}" + (f"（{r.category}）" if r.category else "")})
+        tasks.append({"type": "practice", "domain_id": r.domain_id, "domain": domain.name,
+                      "category": r.category, "state": r.state,
+                      "title": f"练习：{domain.name}" + (f"（{r.category}）" if r.category else "")})
+    return {"tasks": tasks, "note": "路径按「先学后练」规则生成，可跳过；AI 个性化排序为 Post-MVP"}
+
+
+@router.get("/materials/{domain_id}")
+def get_materials(domain_id: str, db: Session = Depends(get_db)):
+    """学习材料：推理链 + 混淆对辨析 + 题目证据要点（现有合法内容组装）。"""
+    from .models import ChainNode, ConfusionPair, Question, QuestionEvidence
+    domain = db.get(DiagnosticDomain, domain_id) or _404()
+    chain = db.execute(select(ChainNode).where(ChainNode.domain_id == domain.id)
+                       .order_by(ChainNode.level)).scalars().all()
+    pairs = db.execute(select(ConfusionPair).where(ConfusionPair.domain_id == domain.id)).scalars().all()
+    qs = db.execute(select(Question).where(Question.domain_id == domain.id,
+                                           Question.review_status == "published")).scalars().all()
+    evidence = []
+    for q in qs:
+        for ev in db.execute(select(QuestionEvidence).where(
+                QuestionEvidence.question_id == q.id)).scalars():
+            if ev.content_text:
+                evidence.append({"ref": q.code, "text": ev.content_text})
+    return {"domain": {"code": domain.code, "name": domain.name, "chapter_ref": domain.chapter_ref},
+            "chain": [{"level": c.level, "title": c.title, "summary": c.summary} for c in chain],
+            "confusion_pairs": [{"drug_a": p.drug_a, "drug_b": p.drug_b,
+                                 "distinction": p.distinction_text} for p in pairs],
+            "evidence": evidence[:6]}
+
+
+@router.get("/retest/{training_id}")
+def get_retest(training_id: str, db: Session = Depends(get_db)):
+    """迁移复测：从同域题池取学生未作答过的题（不与训练题重复），近迁移新情境。"""
+    from .models import Attempt, TrainingSession, TrainingSessionQuestion
+    ts = db.get(TrainingSession, training_id) or _404()
+    s = db.get(DiagnosisSession, ts.diagnosis_id)
+    attempt = db.get(Attempt, s.attempt_id)
+    first = db.get(Attempt, s.attempt_id)
+    user_id, domain_id = first.user_id, db.get(Question, first.question_id).domain_id
+    answered = set(db.execute(select(Attempt.question_id).where(Attempt.user_id == user_id)).scalars())
+    trained = set(db.execute(select(TrainingSessionQuestion.question_id).where(
+        TrainingSessionQuestion.training_session_id == ts.id)).scalars())
+    pool = db.execute(select(Question).where(
+        Question.domain_id == domain_id, Question.usage == "retest",
+        Question.review_status == "published")).scalars().all()
+    if not pool:  # 无专用复测题池时回退：同域未答过的任意题
+        pool = [q for q in db.execute(select(Question).where(
+            Question.domain_id == domain_id, Question.review_status == "published")).scalars().all()
+            if q.id not in answered]
+    pool = [q for q in pool if q.id not in answered and q.id not in trained]
+    picked = pool[:2]
+    return {"retest_id": f"rt-{ts.id}", "questions": [
+        {"id": q.id, "stem": q.stem, "options": q.options} for q in picked]}
+
+
+class RetestSubmitIn(BaseModel):
+    answers: dict[str, str]
+
+
+@router.post("/retest/{training_id}/submit")
+def submit_retest(training_id: str, body: RetestSubmitIn, db: Session = Depends(get_db)):
+    from .models import Attempt, TrainingSession, TrainingSessionQuestion
+    ts = db.get(TrainingSession, training_id) or _404()
+    s = db.get(DiagnosisSession, ts.diagnosis_id)
+    attempt = db.get(Attempt, s.attempt_id)
+    question = db.get(Question, attempt.question_id)
+    correct = 0
+    total = 0
+    for qid, opt in body.answers.items():
+        q = db.get(Question, qid)
+        if not q:
+            continue
+        total += 1
+        if opt == q.answer:
+            correct += 1
+    passed = total > 0 and correct / total >= 0.6
+    attempt2_user = attempt.user_id
+    m = db.get(Misconception, s.hypothesis_id)
+    s.state = "completed"
+    mastery.transition(db, attempt2_user, question.domain_id, m.category,
+                       "retest_passed" if passed else "retest_failed")
+    db.commit()
+    audit(db, "system", "retest.completed", ts.id, passed=passed, correct=correct, total=total)
+    return {"retest_id": f"rt-{ts.id}", "passed": passed,
+            "correct": correct, "total": total, "mastery_state": None}
+
+
 # ---------- 摸底测试与画像 ----------
 
 @router.get("/assessment/{user_id}")
@@ -234,13 +338,19 @@ def submit_assessment(user_id: str, body: dict, db: Session = Depends(get_db)):
         if not ok:
             sig = (q.distractor_signals or {}).get(picked or "") or {}
             cat = None
+            mis = None
             if sig.get("misconception"):
-                m = db.execute(select(Misconception).where(
+                mis = db.execute(select(Misconception).where(
                     Misconception.code == sig["misconception"])).scalar_one_or_none()
-                cat = m.category if m else None
+                cat = mis.category if mis else None
             weak.append({"question_code": q.code, "stem": q.stem, "domain_id": q.domain_id,
                          "domain": domain_map.get(q.domain_id, q.domain_id),
                          "category": cat or "待诊断"})
+            if cat:  # 摸底答错 → 该错因类别标记薄弱（驱动学习路径）；已薄弱则幂等跳过
+                from .models import MasteryState
+                st = db.get(MasteryState, (user_id, q.domain_id, cat))
+                if st is None or st.state == "未评估":
+                    mastery.transition(db, user_id, q.domain_id, cat, "diagnosed")
         attempt = Attempt(user_id=user_id, question_id=q.id, selected_option=picked or "",
                           is_correct=ok, idempotency_key=f"assess-{user_id}-{q.id}")
         db.add(attempt)
@@ -339,8 +449,8 @@ def list_questions(domain: str | None = None, usage: str = "diagnostic", db: Ses
     if domain:
         stmt = stmt.where(Question.domain_id == domain)
     rows = db.execute(stmt).scalars().all()
-    return [{"id": q.id, "code": q.code, "stem": q.stem, "options": q.options, "type": q.type}
-            for q in rows]
+    return [{"id": q.id, "code": q.code, "stem": q.stem, "options": q.options, "type": q.type,
+             "domain_id": q.domain_id} for q in rows]
 
 
 @router.get("/questions/{question_id}")
