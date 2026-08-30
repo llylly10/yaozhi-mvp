@@ -149,8 +149,13 @@ def current_followup(db: Session, session: DiagnosisSession) -> FollowupNode | N
         nodes = [db.get(FollowupNode, n) for n in node_ids if n not in used]
         nodes = [n for n in nodes if n]
         nodes.sort(key=lambda n: n.code)  # 确定性：追问顺序固定，保证评测可回放
-        return nodes[0] if nodes else None
-    return _fallback_node(db, session)
+        if nodes:
+            return {"kind": "node", "node": nodes[0]}
+    fallback = _fallback_node(db, session)
+    if fallback:
+        return {"kind": "node", "node": fallback}
+    # 对话节点用尽/不存在 → 跨题验证：出一道标注了主要候选错因的定向题（demo 机制）
+    return _verify_question(db, session)
 
 
 def _fallback_node(db: Session, session: DiagnosisSession):
@@ -160,6 +165,28 @@ def _fallback_node(db: Session, session: DiagnosisSession):
         FollowupNode.domain_id == _domain_of(db, session),
         FollowupNode.chain_level == session.chain_focus,
         FollowupNode.review_status == "published")).scalars().first()
+
+
+def _verify_question(db: Session, session: DiagnosisSession):
+    """跨题验证（demo 机制）：按主要候选错因选一道学生未做过的同域题。
+    答对 → 确认主要假设（区别于知识遗忘：遗忘者此题也会错）；答错 → 按干扰项信号切换假设。"""
+    from ..models import Attempt, Question
+    attempt = db.get(Attempt, session.attempt_id)
+    mis = db.get(Misconception, session.hypothesis_id)
+    answered = set(db.execute(select(Attempt.question_id).where(
+        Attempt.user_id == attempt.user_id)).scalars())
+    answered.add(attempt.question_id)
+    pool = db.execute(select(Question).where(
+        Question.domain_id == mis.domain_id, Question.usage == "diagnostic",
+        Question.review_status == "published")).scalars().all()
+    cands = [q for q in pool
+             if q.id not in answered
+             and mis.code in [(s or {}).get("misconception") for s in (q.distractor_signals or {}).values()]]
+    if not cands:  # 无精确标注题时兜底：任何未做过的同域诊断题（同域新题即可作跨题验证）
+        cands = [q for q in pool if q.id not in answered]
+    if not cands:
+        return None
+    return {"kind": "verify", "question": cands[0]}
 
 
 def _domain_of(db: Session, session: DiagnosisSession) -> str:
@@ -173,12 +200,15 @@ def answer_followup(db: Session, session: DiagnosisSession, payload: dict) -> Di
     refining = session.state == "diagnosed" and session.can_refine
     if session.state != "followup_required" and not refining:
         raise ValueError(f"会话状态 {session.state} 不接受追问回答")
-    node = current_followup(db, session)
-    if node is None:  # 无可用追问节点 → 维持当前归因，结束细化
+    fu = current_followup(db, session)
+    if fu is None:  # 无可用追问/验证题 → 维持当前归因，结束细化
         session.can_refine = False
         db.commit()
         return session
+    if fu["kind"] == "verify":
+        return _answer_verify(db, session, fu["question"], payload)
 
+    node = fu["node"]
     session.followup_count += 1
     turn_no = session.followup_count
     if payload.get("skip"):
@@ -227,6 +257,33 @@ def answer_followup(db: Session, session: DiagnosisSession, payload: dict) -> Di
         return session
     db.commit()
     return session
+
+
+def _answer_verify(db: Session, session: DiagnosisSession, question, payload: dict) -> DiagnosisSession:
+    """跨题验证判分：答对 → 确认主要假设（升高）；答错 → 按该题干扰项信号切换/维持。"""
+    import json as _json
+    session.followup_count += 1
+    turn_no = session.followup_count
+    picked = payload.get("option_key") or ""
+    correct = picked == question.answer
+    db.add(FollowupTurn(session_id=session.id, node_id=None, verify_question_id=question.id,
+                        presented_text=question.stem, student_answer=picked,
+                        judge_method="verify", judge_result={"correct": correct}, turn_no=turn_no))
+    audit(db, "student", "diagnosis.verify_answered", session.id, turn_no=turn_no, correct=correct)
+
+    if correct:
+        # 验证题答对：排除知识遗忘类解释，确认主要候选（概念混淆者的变式题往往做对）
+        session.can_refine = False
+        db.commit()
+        return _diagnose(db, session, session.hypothesis_id, "高")
+    # 答错：按该题干扰项信号切换假设；无信号或轮尽 → 维持低证据
+    sig = (question.distractor_signals or {}).get(picked) or {}
+    alt = _mis_by_code(db, sig.get("misconception")) if sig.get("misconception") else None
+    if alt and alt.id != session.hypothesis_id:
+        session.hypothesis_id = alt.id
+    session.can_refine = False
+    db.commit()
+    return _diagnose(db, session, session.hypothesis_id, "低")
 
 
 def time_ms() -> int:

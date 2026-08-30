@@ -222,10 +222,11 @@ class FollowupTurn(Base):
     __tablename__ = "followup_turns"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     session_id: Mapped[str] = mapped_column(ForeignKey("diagnosis_sessions.id"))
-    node_id: Mapped[str] = mapped_column(ForeignKey("followup_nodes.id"))
+    node_id: Mapped[str | None] = mapped_column(ForeignKey("followup_nodes.id"), nullable=True)
+    verify_question_id: Mapped[str | None] = mapped_column(ForeignKey("questions.id"), nullable=True)
     presented_text: Mapped[str] = mapped_column(Text)
     student_answer: Mapped[str] = mapped_column(String(512))
-    judge_method: Mapped[str] = mapped_column(_enum("judge_method", "option_signal", "keyword", "model", "skipped"))
+    judge_method: Mapped[str] = mapped_column(_enum("judge_method", "option_signal", "keyword", "model", "verify", "skipped"))
     judge_result: Mapped[dict] = mapped_column(JSON, default=dict)
     turn_no: Mapped[int] = mapped_column(SmallInteger)  # 1..3
     skipped: Mapped[bool] = mapped_column(Boolean, default=false())

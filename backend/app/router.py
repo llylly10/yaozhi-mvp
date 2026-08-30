@@ -163,16 +163,22 @@ def get_diagnosis(session_id: str, db: Session = Depends(get_db)):
             turns.append({"who": "student", "text": t.student_answer})
 
     followup = dx.current_followup(db, s)
+    followup_out = None
+    if isinstance(followup, dict) and followup["kind"] == "verify":
+        qv = followup["question"]
+        followup_out = {"kind": "verify", "question": {
+            "id": qv.id, "stem": qv.stem, "options": qv.options}, "turn_max": dx.MAX_FOLLOWUP_ROUNDS}
+    elif followup is not None:
+        node = followup["node"]
+        followup_out = {"kind": "node", "node_id": node.id, "question_text": node.question_text,
+                        "options": node.options, "turn_max": dx.MAX_FOLLOWUP_ROUNDS}
     return {
         "turns": turns,
         "session_id": s.id, "state": s.state, "chain_focus": s.chain_focus,
         "followup_count": s.followup_count, "question": {"code": question.code, "stem": question.stem},
         "is_correct": attempt.is_correct, "answer": question.answer,
         "card": card,
-        "followup": None if followup is None else {
-            "node_id": followup.id, "question_text": followup.question_text,
-            "options": followup.options, "turn_max": dx.MAX_FOLLOWUP_ROUNDS,
-        },
+        "followup": followup_out,
     }
 
 

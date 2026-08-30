@@ -82,7 +82,13 @@ export type Diagnosis = {
   },
   turns: { who: 'ai' | 'student'; text: string }[]
   training?: boolean
-  followup: null | { node_id: string; question_text: string; options: { key: string; text: string }[] | null; turn_max: number }
+  followup: null | {
+    kind: 'node' | 'verify'
+    node_id?: string; question_text?: string
+    question?: { id: string; stem: string; options: { key: string; text: string }[] }
+    options: { key: string; text: string }[] | null
+    turn_max: number
+  }
 }
 
 export type Question = { id: string; code: string; stem: string; options: { key: string; text: string }[]; type: string; domain_id: string }
