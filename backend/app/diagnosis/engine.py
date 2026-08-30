@@ -50,7 +50,7 @@ def start_session(db: Session, attempt: Attempt) -> DiagnosisSession:
 
 def _collect_evidence(db: Session, session: DiagnosisSession, attempt: Attempt, question: Question):
     evidences = [
-        ("选项标注", f"question:{question.id}", f"学生选择 {attempt.selected_option}（正确 {question.answer}）"),
+        ("选项标注", f"question:{question.id}", f"学生选择 {attempt.selected_option}，正确答案为 {question.answer}"),
     ]
     if attempt.rationale:
         evidences.append(("作答理由", f"attempt:{attempt.id}", attempt.rationale))
