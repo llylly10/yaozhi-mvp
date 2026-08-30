@@ -18,19 +18,44 @@ router = APIRouter()
 
 # ---------- 演示账号（US-0 同意门） ----------
 
+DEMO_INVITE_CODE = "DEMO2026"
+
+
 class DemoSessionIn(BaseModel):
-    consent: bool = Field(..., description="须为 true：已阅读并同意隐私与使用说明")
+    account: str = Field(default="yaozhi_student01", max_length=32)
+    invite_code: str = Field(..., max_length=32)
 
 
 @router.post("/sessions/demo")
 def create_demo_session(body: DemoSessionIn, db: Session = Depends(get_db)):
-    if not body.consent:
-        raise HTTPException(403, "须先同意隐私与使用说明")
-    user = DemoUser(consented=True)
+    """注册（第 1 步）：演示账号 + 邀请码。同意在第 2 步单独记录。"""
+    if body.invite_code.strip().upper() != DEMO_INVITE_CODE:
+        raise HTTPException(403, "邀请码不正确，请向项目组索取演示邀请码")
+    user = DemoUser(consented=False, display_name=body.account.strip() or "演示学生")
     db.add(user)
     db.commit()
-    audit(db, str(user.id), "consent.granted", f"user:{user.id}")
+    audit(db, str(user.id), "account.registered", f"user:{user.id}", account=body.account)
     return {"user_id": user.id, "display_name": user.display_name}
+
+
+class ConsentIn(BaseModel):
+    user_agreement: bool
+    privacy_policy: bool
+    data_collection: bool
+
+
+@router.post("/users/{user_id}/consent")
+def record_consent(user_id: str, body: ConsentIn, db: Session = Depends(get_db)):
+    """同意（第 2 步）：三份文档须全部同意，个性化功能依赖采集知情同意。"""
+    user = db.get(DemoUser, user_id) or _404()
+    if not (body.user_agreement and body.privacy_policy and body.data_collection):
+        raise HTTPException(403, "三份文档须全部勾选同意")
+    user.consented = True
+    db.commit()
+    audit(db, user_id, "consent.granted", f"user:{user_id}",
+          user_agreement=True, privacy_policy=True, data_collection=True,
+          doc_version="2026-08-30")
+    return {"user_id": user_id, "consented": True}
 
 
 # ---------- 作答提交（幂等） ----------
@@ -43,6 +68,27 @@ class AttemptIn(BaseModel):
     confidence: str | None = None
     time_spent: int | None = None
     idempotency_key: str
+
+
+@router.get("/users/{user_id}/wrong-book")
+def wrong_book(user_id: str, db: Session = Depends(get_db)):
+    """错题本：答错的作答 + 已出具的诊断结论。"""
+    rows = db.execute(select(Attempt).where(
+        Attempt.user_id == user_id, Attempt.is_correct == False)).scalars().all()  # noqa: E712
+    out = []
+    for a in rows:
+        q = db.get(Question, a.question_id)
+        s = db.execute(select(DiagnosisSession).where(
+            DiagnosisSession.attempt_id == a.id)).scalar_one_or_none()
+        mis = db.get(Misconception, s.hypothesis_id) if s and s.hypothesis_id else None
+        out.append({
+            "attempt_id": a.id, "question_code": q.code, "stem": q.stem,
+            "selected": a.selected_option, "answer": q.answer,
+            "misconception": {"name": mis.name, "category": mis.category} if mis else None,
+            "evidence_level": s.evidence_level if s else None,
+            "mastery_state": None,
+        })
+    return out
 
 
 @router.post("/attempts", status_code=202)

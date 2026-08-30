@@ -36,9 +36,13 @@ client = TestClient(app)
 
 
 def fresh_user() -> str:
-    r = client.post("/sessions/demo", json={"consent": True})
-    assert r.status_code == 200
-    return r.json()["user_id"]
+    r = client.post("/sessions/demo", json={"account": "yaozhi_student01", "invite_code": "DEMO2026"})
+    assert r.status_code == 200, r.text
+    uid = r.json()["user_id"]
+    c = client.post(f"/users/{uid}/consent", json={
+        "user_agreement": True, "privacy_policy": True, "data_collection": True})
+    assert c.status_code == 200
+    return uid
 
 
 def q_by_code(code: str) -> dict:
@@ -60,8 +64,16 @@ def attempt(user: str, code: str, option: str, rationale: str | None = None) -> 
     return r.json()
 
 
-def test_consent_gate():
-    assert client.post("/sessions/demo", json={"consent": False}).status_code == 403
+def test_register_gates():
+    # 邀请码错误 → 403；正确 → 创建未同意账号；三份文档不齐 → 拒绝同意
+    assert client.post("/sessions/demo", json={"account": "x", "invite_code": "WRONG"}).status_code == 403
+    r = client.post("/sessions/demo", json={"account": "yaozhi_student01", "invite_code": "DEMO2026"})
+    assert r.status_code == 200
+    uid = r.json()["user_id"]
+    assert client.post(f"/users/{uid}/consent", json={
+        "user_agreement": True, "privacy_policy": True, "data_collection": False}).status_code == 403
+    assert client.post(f"/users/{uid}/consent", json={
+        "user_agreement": True, "privacy_policy": True, "data_collection": True}).status_code == 200
 
 
 def test_wrong_option_concept_confusion_direct_card():

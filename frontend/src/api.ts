@@ -11,8 +11,15 @@ async function handle(res: Response) {
 }
 
 export const api = {
-  demoSession: (consent: boolean) =>
-    fetch('/api/sessions/demo', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ consent }) }).then(handle),
+  demoSession: (account: string, inviteCode: string) =>
+    fetch('/api/sessions/demo', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ account, invite_code: inviteCode }) }).then(handle),
+
+  consent: (userId: string, docs: { user_agreement: boolean; privacy_policy: boolean; data_collection: boolean }) =>
+    fetch(`/api/users/${userId}/consent`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(docs) }).then(handle),
+
+  wrongBook: (userId: string) => fetch(`/api/users/${userId}/wrong-book`).then(handle),
+
+  mastery: (userId: string) => fetch(`/api/mastery/me?user_id=${userId}`).then(handle),
 
   questions: () => fetch('/api/questions?usage=diagnostic').then(handle),
 

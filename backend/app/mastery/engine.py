@@ -14,6 +14,17 @@ def transition(db, user_id: str, domain_id: str, category: str | None, event: st
         st = MasteryState(user_id=user_id, domain_id=domain_id, category=category, state="未评估")
         db.add(st)
 
+    REASONS = {
+        "misdiagnosed": "摸底/诊断发现薄弱项",
+        "diagnosed": "诊断出新错因，进入薄弱项管理",
+        "training_started": "已开始靶向训练",
+        "training_passed": "靶向训练通过",
+        "training_failed": "靶向训练未通过，退回薄弱",
+        "retest_passed": "迁移复测通过",
+        "retest_failed": "迁移复测未通过，退回薄弱",
+        "delayed_passed": "延迟复测通过，进入稳定掌握",
+        "forgot": "间隔复习超时，遗忘回退",
+    }
     table = {
         "misdiagnosed": ("未评估", "薄弱"),
         "diagnosed": ("未评估", "薄弱"),
@@ -28,7 +39,7 @@ def transition(db, user_id: str, domain_id: str, category: str | None, event: st
     if event == "training_started":
         if st.state not in ("薄弱", "未评估"):
             raise IllegalTransition(f"{st.state} -training_started-> ?")
-        st.state, st.reason = "学习中", "已开始靶向训练"
+        st.state, st.reason = "学习中", REASONS[event]
         db.commit()
         audit(db, "system", "mastery.transition", f"{user_id}/{domain_id}", to=st.state, event=event)
         return st
@@ -36,7 +47,7 @@ def transition(db, user_id: str, domain_id: str, category: str | None, event: st
     src, dst = table[event]
     if (src, dst) not in VALID_MASTERY_TRANSITIONS or st.state != src:
         raise IllegalTransition(f"{st.state} -{event}-> ?（合法起点 {src}）")
-    st.state, st.reason = dst, f"事件 {event}"
+    st.state, st.reason = dst, REASONS.get(event, "")
     db.commit()
     audit(db, "system", "mastery.transition", f"{user_id}/{domain_id}", to=dst, event=event)
     return st
