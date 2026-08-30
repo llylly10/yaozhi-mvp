@@ -185,3 +185,19 @@ def test_every_step_has_db_records():
         assert db.execute(select(MasteryState)).scalars().first() is not None
     finally:
         db.close()
+
+
+def test_assessment_then_practice_no_500():
+    """回归：摸底标记薄弱后，练习诊断的重复掌握度转移必须幂等（曾引发 500）。"""
+    user = fresh_user()
+    qs = client.get("/questions?usage=diagnostic").json()
+    answers = {q["id"]: q["options"][0]["key"] for q in qs[:5]}
+    assert client.post(f"/assessment/{user}/submit", json={"answers": answers}).status_code == 200
+    q1 = next(q for q in qs if q["code"] == "Q-ANS-01")
+    out = client.post("/attempts", json={
+        "user_id": user, "question_id": q1["id"], "selected_option": "A",
+        "idempotency_key": f"regress-{user}"}).json()
+    sid = out["session_id"]
+    r = client.post(f"/diagnoses/{sid}/skip-followup")
+    assert r.status_code == 200, r.text
+    assert r.json()["evidence_level"] == "低"

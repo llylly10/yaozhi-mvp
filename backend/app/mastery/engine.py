@@ -37,6 +37,8 @@ def transition(db, user_id: str, domain_id: str, category: str | None, event: st
         "forgot": ("掌握", "薄弱"),
     }
     if event == "training_started":
+        if st.state in ("学习中", "初步掌握", "掌握", "稳定掌握"):
+            return st  # 幂等：重复开始训练不报错
         if st.state not in ("薄弱", "未评估"):
             raise IllegalTransition(f"{st.state} -training_started-> ?")
         st.state, st.reason = "学习中", REASONS[event]
@@ -45,6 +47,8 @@ def transition(db, user_id: str, domain_id: str, category: str | None, event: st
         return st
 
     src, dst = table[event]
+    if st.state == dst:
+        return st  # 幂等：重复事件（如摸底+练习双诊断）不降级不报错
     if (src, dst) not in VALID_MASTERY_TRANSITIONS or st.state != src:
         raise IllegalTransition(f"{st.state} -{event}-> ?（合法起点 {src}）")
     st.state, st.reason = dst, REASONS.get(event, "")
