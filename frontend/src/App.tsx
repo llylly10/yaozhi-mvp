@@ -9,7 +9,7 @@ import { api, type Diagnosis, type Question } from './api'
  * 动效：弹簧物理 + 逐级瀑布入场 + layoutId 选中迁移（reduced-motion 全部降级）
  */
 
-const USER_KEY = 'yaozhi_user_id'
+const USER_KEY = 'yaozhi_user_id_v2'
 type Screen = 'welcome' | 'list' | 'flow'
 const STEPS = ['题库', '作答', '诊断', '训练'] as const
 
@@ -60,7 +60,7 @@ function MolField() {
 
 /* ---------- 顶部悬浮玻璃步骤轨 ---------- */
 
-function StepRail({ step, onHome }: { step: number; onHome: () => void }) {
+function StepRail({ step, onHome, onLogout }: { step: number; onHome: () => void; onLogout: () => void }) {
   return (
     <div className="sticky top-0 z-30">
       <div className="glass border-x-0 border-t-0 !rounded-none px-5 py-2">
@@ -80,6 +80,10 @@ function StepRail({ step, onHome }: { step: number; onHome: () => void }) {
             <span className={`relative z-10 ${i === step ? 'font-semibold' : 'text-ink-3'}`}>{s}</span>
           </button>
         ))}
+        <button onClick={onLogout}
+          className="btn ml-2 rounded-full px-3 py-1.5 text-xs text-ink-3 hover:bg-paper-2 hover:text-ink">
+          退出账号
+        </button>
       </motion.nav>
       </div>
     </div>
@@ -635,7 +639,8 @@ export default function App() {
     <div className="relative min-h-[100dvh]">
       <MolField />
       {screen !== 'welcome' && (
-        <StepRail step={step} onHome={() => { setScreen('list'); setActiveQuestion(null); setStep(0) }} />
+        <StepRail step={step} onHome={() => { setScreen('list'); setActiveQuestion(null); setStep(0) }}
+            onLogout={() => { localStorage.removeItem(USER_KEY); setUserId(null); setScreen('welcome'); setStep(0) }} />
       )}
       <div className="relative z-10 mx-auto w-full max-w-[1140px] px-5 pb-16">
         {error && (
