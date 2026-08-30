@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/*
+ * 设计令牌（Design Read：教育学习工具，信任优先、专注低干扰）
+ * 拨盘：VARIANCE 3 / MOTION 3 / DENSITY 5
+ * 单强调色 Emerald；中性色 Zinc；圆角统一 12px；无装饰性光效
+ */
+@theme {
+  --font-sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+  --color-surface: #fafafa;
+  --color-ink: #18181b;
+  --color-ink-soft: #52525b;
+  --color-line: #e4e4e7;
+  --color-accent: #059669;
+  --color-accent-strong: #047857;
+  --color-accent-soft: #ecfdf5;
+  --color-warn: #b45309;
+  --color-warn-soft: #fffbeb;
+  --radius-card: 12px;
+}
+
+html {
+  font-family: var(--font-sans);
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 统一交互反馈：按压 1px 下沉 */
+.btn {
+  transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1), background-color 120ms;
+}
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 骨架屏（非转圈 spinner） */
+.skeleton {
+  background: linear-gradient(90deg, #e4e4e7 25%, #f4f4f5 50%, #e4e4e7 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 8px;
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+  .btn { transition: none; }
+}
