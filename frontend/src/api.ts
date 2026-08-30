@@ -21,6 +21,16 @@ export const api = {
 
   mastery: (userId: string) => fetch(`/api/mastery/me?user_id=${userId}`).then(handle),
 
+  assessment: (userId: string) => fetch(`/api/assessment/${userId}`).then(handle),
+
+  submitAssessment: (userId: string, answers: Record<string, string>) =>
+    fetch(`/api/assessment/${userId}/submit`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answers }) }).then(handle),
+
+  profileSummary: (userId: string) => fetch(`/api/users/${userId}/profile-summary`).then(handle),
+
+  feedback: (sessionId: string, matches: boolean) =>
+    fetch(`/api/diagnoses/${sessionId}/feedback`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ matches }) }).then(handle),
+
   questions: () => fetch('/api/questions?usage=diagnostic').then(handle),
 
   submitAttempt: (body: {
@@ -54,7 +64,9 @@ export type Diagnosis = {
     misconception: { code: string; name: string; category: string }
     evidence_level: string
     evidences: { type: string; source: string; content: string }[]
-  }
+    alternatives?: { code: string; name: string; primary: boolean }[]
+  },
+  turns: { who: 'ai' | 'student'; text: string }[]
   followup: null | { node_id: string; question_text: string; options: { key: string; text: string }[] | null; turn_max: number }
 }
 

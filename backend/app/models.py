@@ -187,6 +187,8 @@ class DiagnosisSession(Base):
     followup_count: Mapped[int] = mapped_column(SmallInteger, default=0)
     evidence_level: Mapped[str | None] = mapped_column(_enum("evidence_level", "高", "中", "低"), nullable=True)
     claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    feedback: Mapped[str | None] = mapped_column(
+        _enum("diagnosis_feedback", "matches", "not_matches"), nullable=True)  # 学生归因反馈
     processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     version: Mapped[int] = mapped_column(default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

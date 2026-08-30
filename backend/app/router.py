@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from .models import (
-    Attempt, DiagnosticDomain, DiagnosisSession, DemoUser, FollowupNode,
+    Attempt, DiagnosticDomain, DiagnosisCandidate, DiagnosisSession, DemoUser, FollowupNode, FollowupTurn,
     Misconception, Question, TrainingSession, TrainingSessionQuestion, audit,
 )
 from .diagnosis import engine as dx
@@ -130,15 +130,32 @@ def get_diagnosis(session_id: str, db: Session = Depends(get_db)):
         # 用户可见的证据链用可读标签，不暴露内部 ID（v1.1 证据化输出）
         label = {"选项标注": "作答记录", "作答理由": "你的解题思路", "追问回答": "追问回答", "知识库切片": "知识点原文"}
         source_label = {"选项标注": f"题目 {question.code}", "作答理由": "", "追问回答": "", "知识库切片": "教材知识点"}
+        cands = db.execute(select(DiagnosisCandidate).where(
+            DiagnosisCandidate.session_id == s.id).order_by(DiagnosisCandidate.final_rank)).scalars().all()
+        alternatives = []
+        for c in cands:
+            cm = db.get(Misconception, c.misconception_id)
+            alternatives.append({"code": cm.code, "name": cm.name,
+                                 "primary": cm.id == s.hypothesis_id})
         card = {
             "misconception": {"code": m.code, "name": m.name, "category": m.category},
             "evidence_level": s.evidence_level,
             "evidences": [{"type": label.get(e.evidence_type, e.evidence_type),
                            "source": source_label.get(e.evidence_type, ""),
                            "content": e.content} for e in evidences],
+            "alternatives": alternatives,
         }
+    turns_rows = db.execute(select(FollowupTurn).where(
+        FollowupTurn.session_id == s.id).order_by(FollowupTurn.turn_no)).scalars().all()
+    turns = []
+    for t in turns_rows:
+        turns.append({"who": "ai", "text": t.presented_text})
+        if not t.skipped and t.student_answer:
+            turns.append({"who": "student", "text": t.student_answer})
+
     followup = dx.current_followup(db, s)
     return {
+        "turns": turns,
         "session_id": s.id, "state": s.state, "chain_focus": s.chain_focus,
         "followup_count": s.followup_count, "question": {"code": question.code, "stem": question.stem},
         "is_correct": attempt.is_correct, "answer": question.answer,
@@ -169,6 +186,90 @@ def skip_followup(session_id: str, db: Session = Depends(get_db)):
     except ValueError as e:
         raise HTTPException(409, str(e))
     return {"state": s.state, "evidence_level": s.evidence_level}
+
+
+class FeedbackIn(BaseModel):
+    matches: bool
+
+
+@router.post("/diagnoses/{session_id}/feedback")
+def diagnosis_feedback(session_id: str, body: FeedbackIn, db: Session = Depends(get_db)):
+    """学生对归因结论的反馈：进入评测数据（不直接作为训练标签）。"""
+    s = db.get(DiagnosisSession, session_id) or _404()
+    s.feedback = "matches" if body.matches else "not_matches"
+    db.commit()
+    audit(db, "student", "diagnosis.feedback", session_id, feedback=s.feedback)
+    return {"session_id": session_id, "feedback": s.feedback}
+
+
+# ---------- 摸底测试与画像 ----------
+
+@router.get("/assessment/{user_id}")
+def get_assessment(user_id: str, db: Session = Depends(get_db)):
+    """摸底卷：取 5 道诊断题（按 code 排序取前 5）。"""
+    rows = db.execute(select(Question).where(
+        Question.usage == "diagnostic", Question.review_status == "published")
+        .order_by(Question.code)).scalars().all()
+    picked = rows[:5]
+    return {"questions": [{"id": q.id, "code": q.code, "stem": q.stem, "options": q.options} for q in picked]}
+
+
+@router.post("/assessment/{user_id}/submit")
+def submit_assessment(user_id: str, body: dict, db: Session = Depends(get_db)):
+    """判分摸底卷：记录作答、输出域级正确率与薄弱项（画像数据源）。"""
+    answers: dict = body.get("answers", {})
+    qids = list(answers.keys())
+    questions = [db.get(Question, qid) for qid in qids]
+    questions = [q for q in questions if q]
+    domain_stats: dict = {}
+    weak: list = []
+    domain_map = {d.id: d.name for d in db.execute(select(DiagnosticDomain)).scalars()}
+    for q in questions:
+        picked = answers.get(q.id)
+        ok = picked == q.answer
+        key = q.domain_id
+        st = domain_stats.setdefault(key, {"correct": 0, "total": 0})
+        st["total"] += 1
+        st["correct"] += int(ok)
+        if not ok:
+            sig = (q.distractor_signals or {}).get(picked or "") or {}
+            cat = None
+            if sig.get("misconception"):
+                m = db.execute(select(Misconception).where(
+                    Misconception.code == sig["misconception"])).scalar_one_or_none()
+                cat = m.category if m else None
+            weak.append({"question_code": q.code, "stem": q.stem, "domain_id": q.domain_id,
+                         "domain": domain_map.get(q.domain_id, q.domain_id),
+                         "category": cat or "待诊断"})
+        attempt = Attempt(user_id=user_id, question_id=q.id, selected_option=picked or "",
+                          is_correct=ok, idempotency_key=f"assess-{user_id}-{q.id}")
+        db.add(attempt)
+    db.commit()
+    domains_out = [{"domain": domain_map.get(k, k), "correct": v["correct"], "total": v["total"],
+                    "rate": round(v["correct"] / v["total"], 3)} for k, v in domain_stats.items()]
+    return {"total": len(questions), "weak": weak, "domains": domains_out}
+
+
+@router.get("/users/{user_id}/profile-summary")
+def profile_summary(user_id: str, db: Session = Depends(get_db)):
+    """档案页聚合：错题的 域×错因类别 分布（热力图数据）。"""
+    rows = db.execute(select(Attempt).where(
+        Attempt.user_id == user_id, Attempt.is_correct == False)).scalars().all()  # noqa: E712
+    heat: dict = {}
+    weak: list = []
+    for a in rows:
+        q = db.get(Question, a.question_id)
+        if not q:
+            continue
+        s = db.execute(select(DiagnosisSession).where(
+            DiagnosisSession.attempt_id == a.id)).scalar_one_or_none()
+        cat = db.get(Misconception, s.hypothesis_id).category if s and s.hypothesis_id else "待诊断"
+        dname = db.get(DiagnosticDomain, q.domain_id).name if db.get(DiagnosticDomain, q.domain_id) else "未知域"
+        key = (dname, cat)
+        heat[key] = heat.get(key, 0) + 1
+        weak.append({"question_code": q.code, "stem": q.stem, "domain": dname, "category": cat})
+    return {"heatmap": [{"domain": k[0], "category": k[1], "wrong": v} for k, v in heat.items()],
+            "weak": weak}
 
 
 # ---------- 训练与掌握度 ----------
