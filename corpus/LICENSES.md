@@ -3,6 +3,7 @@
 | 目录 | 来源 | 许可证 | 署名/义务 | 抓取日期 |
 |---|---|---|---|---|
 | raw/cmb_val | FreedomIntelligence/CMB (HuggingFace) val 子集 | Apache-2.0 | 保留来源声明；题目源自真实考试，二次分发前复核 | 2026-08-30 |
+| raw/cmb_train | CMB-train-merge.json：269,359 题全量（含答案、无解析），药相关类目 46,703 题（单选 40,593；含执业西药师 7,838）。⚠️ 真题版权溯源待复核，同 val | ✅ |
 | raw/dailymed | NIH NLM DailyMed SPL | 公共领域（美国联邦政府作品） | 保留 setid 溯源 | 2026-08-30 |
 | raw/livertox | NIH NCBI Bookshelf LiverTox | 公共领域（联邦作品，文本部分） | 逐章核验无第三方版权内容 | 2026-08-30 |
 | raw/whoeeml | WHO eEML (list.essentialmeds.org) | CC BY 3.0 IGO | 署名 WHO；译文挂"非官方译文"声明；可用商用 | 2026-08-30 |
