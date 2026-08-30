@@ -1136,6 +1136,21 @@ function DiagnosisPanel({ diagnosis, onRefresh, onStartTraining, onError }: {
   const [answering, setAnswering] = useState(false)
   const [showEvidence, setShowEvidence] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
+  const [retrying, setRetrying] = useState(false)
+
+  // followup 缺失时自动补拉一次（提交后瞬时未就绪的兜底）
+  useEffect(() => {
+    if (diagnosis.state === 'followup_required' && !diagnosis.followup) {
+      const timer = setTimeout(() => onRefresh(diagnosis.session_id), 1000)
+      return () => clearTimeout(timer)
+    }
+  }, [diagnosis])
+
+  function retryFetch() {
+    setRetrying(true)
+    onRefresh(diagnosis.session_id)
+    setTimeout(() => setRetrying(false), 800)
+  }
 
   async function answer(optionKey?: string) {
     if (!diagnosis.followup) return
@@ -1173,7 +1188,12 @@ function DiagnosisPanel({ diagnosis, onRefresh, onStartTraining, onError }: {
         <div className="card p-8">
           <div className="skeleton mb-3 h-6 w-2/3" />
           <div className="skeleton h-14 w-full" />
-          <p className="mt-3 text-xs text-ink-3">正在生成定向追问…</p>
+          <p className="mt-3 text-xs text-ink-3">正在生成定向追问…
+            <button onClick={retryFetch} disabled={retrying}
+              className="btn ml-3 rounded-full border border-line px-3 py-1 text-xs hover:border-primary hover:text-primary">
+              {retrying ? '刷新中…' : '手动刷新'}
+            </button>
+          </p>
         </div>
       )}
 
@@ -1244,6 +1264,14 @@ function DiagnosisPanel({ diagnosis, onRefresh, onStartTraining, onError }: {
             </div>
           </div>
           <div className="p-8">
+            {diagnosis.followup_count > 0 && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={spring}
+                className="mb-5 flex justify-start">
+                <div className="max-w-[85%] rounded-2xl rounded-tl-sm border border-line-2 bg-paper px-4 py-2.5 text-[13px] text-ink-2">
+                  证据已足够，归因收敛为「{diagnosis.card.misconception.category}」，证据等级提升为 {diagnosis.card.evidence_level}。
+                </div>
+              </motion.div>
+            )}
             <div className="flex flex-wrap items-center gap-3">
               <CategoryTag category={diagnosis.card.misconception.category} />
               <p className="text-[15.5px] font-medium">{diagnosis.card.misconception.name}</p>

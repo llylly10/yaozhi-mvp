@@ -202,8 +202,8 @@ def answer_followup(db: Session, session: DiagnosisSession, payload: dict) -> Di
     audit(db, "student", "diagnosis.followup_answered", session.id, turn_no=turn_no, method=method)
 
     if supports and supports == session.hypothesis_id:
-        # 追问坐实原假设：证据等级升为中，收敛
-        return _diagnose(db, session, session.hypothesis_id, "中")
+        # 追问坐实原假设：证据链补全，收敛为高（AC2：追问的目的即达高置信归因）
+        return _diagnose(db, session, session.hypothesis_id, "高")
     if supports and supports != session.hypothesis_id:
         # 追问指向另一错因：切换假设；轮次用尽则低证据收敛
         session.hypothesis_id = supports

@@ -95,14 +95,17 @@ def test_wrong_option_insufficient_goes_followup_and_converges():
     out = attempt(user, "Q-ANS-01", "A")
     s = client.get(f"/diagnoses/{out['session_id']}").json()
     assert s["state"] == "followup_required"
-    assert s["followup"]["options"], "预置追问应带选项"
-
-    r = client.post(f"/diagnoses/{out['session_id']}/followups", json={"option_key": "A"})
+    # 第 1 轮：开放型首问（对齐 PRD 示例「你如何理解…」）
+    r = client.post(f"/diagnoses/{out['session_id']}/followups", json={"text": "阿托品阻断 M 受体导致散瞳，毛果芸香碱激动 M 受体导致缩瞳"})
     assert r.status_code == 200
+    # 第 2 轮：选项型追问坐实
+    s = client.get(f"/diagnoses/{out['session_id']}").json()
+    assert s["state"] == "followup_required"
+    r = client.post(f"/diagnoses/{out['session_id']}/followups", json={"option_key": "A"})
     s = client.get(f"/diagnoses/{out['session_id']}").json()
     assert s["state"] == "diagnosed"
     assert s["card"]["misconception"]["code"] == "MIS-ANS-01"
-    assert s["card"]["evidence_level"] == "中"
+    assert s["card"]["evidence_level"] == "高"
 
 
 def test_followup_swap_hypothesis_then_low_evidence():

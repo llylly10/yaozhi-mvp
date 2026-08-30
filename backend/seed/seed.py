@@ -67,6 +67,10 @@ CONFUSION_PAIRS = [
 
 # 追问树节点：code, chain_level, question, options, option_signals, open_judge
 FOLLOWUPS = [
+    ("FU-ANS-00", 2, "你如何理解阿托品和毛果芸香碱对瞳孔作用的区别？",
+     None, None,
+     {"accept_keywords": ["阻断", "激动", "相反", "散瞳", "缩瞳"], "supports": None,
+      "reject_hint": "MIS-ANS-01"}),
     ("FU-ANS-01", 2, "阿托品作用于瞳孔的哪块肌肉、作用方向是什么？",
      [{"key": "A", "text": "作用于瞳孔括约肌，使其收缩（缩瞳）"},
       {"key": "B", "text": "阻断括约肌上的 M 受体，开大肌占优势（散瞳）"},
@@ -114,7 +118,7 @@ FOLLOWUPS = [
 
 # 追问与错因的挂接
 FOLLOWUP_LINKS = {
-    "MIS-ANS-01": ["FU-ANS-01", "FU-ANS-03", "FU-ANS-04"],
+    "MIS-ANS-01": ["FU-ANS-00", "FU-ANS-01", "FU-ANS-03", "FU-ANS-04"],
     "MIS-ANS-03": ["FU-ANS-02", "FU-ANS-04"],
     "MIS-ANS-06": ["FU-ANS-06"],
     "MIS-ANS-07": ["FU-ANS-05"],
