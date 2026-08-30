@@ -236,7 +236,9 @@ def start_training(db: Session, session: DiagnosisSession):
         Question.domain_id == question.domain_id, Question.usage == "training",
         Question.review_status == "published")).scalars().all()
     picked = [q for q in pool
-              if misconception.code in [ (s or {}).get("misconception") for s in (q.distractor_signals or {}).values() ]][:4]
+              if misconception.code in [(s or {}).get("misconception") for s in (q.distractor_signals or {}).values()]]
+    rest = [q for q in pool if q not in picked]  # 补足至 3 道，保持训练量
+    picked = (picked + rest)[:3]
     if not picked:  # 题池不足：回退同域训练题
         picked = pool[:3]
     ts = TrainingSession(diagnosis_id=session.id,

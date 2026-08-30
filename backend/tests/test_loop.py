@@ -136,8 +136,12 @@ def test_training_and_mastery_transition():
     assert r.status_code == 200
     training = r.json()
     assert training["questions"], "训练题应从审核题池取得"
-    # 服务端判分：随意作答（含空答案），验证分数计算与掌握度转移
-    answers = {q["id"]: "A" for q in training["questions"]}
+    # 服务端判分：按库中正确答案提交（验证转移路径），得分应为 1.0 → 初步掌握
+    db = SessionLocal()
+    try:
+        answers = {q["id"]: db.get(Question, q["id"]).answer for q in training["questions"]}
+    finally:
+        db.close()
     r = client.post(f"/training/{training['training_id']}/submit", json={"answers": answers})
     assert r.status_code == 200
     m = client.get("/mastery/me", params={"user_id": user}).json()
