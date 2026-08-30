@@ -94,31 +94,31 @@ def test_wrong_option_insufficient_goes_followup_and_converges():
     user = fresh_user()
     out = attempt(user, "Q-ANS-01", "A")
     s = client.get(f"/diagnoses/{out['session_id']}").json()
-    assert s["state"] == "followup_required"
+    # 新流程：证据不足也直接出卡（低证据 + 可细化）
+    assert s["state"] == "diagnosed"
+    assert s["card"]["evidence_level"] == "低" and s["card"]["can_refine"] is True
     # 第 1 轮：开放型首问（对齐 PRD 示例「你如何理解…」）
     r = client.post(f"/diagnoses/{out['session_id']}/followups", json={"text": "阿托品阻断 M 受体导致散瞳，毛果芸香碱激动 M 受体导致缩瞳"})
     assert r.status_code == 200
-    # 第 2 轮：选项型追问坐实
-    s = client.get(f"/diagnoses/{out['session_id']}").json()
-    assert s["state"] == "followup_required"
+    # 第 2 轮：选项型追问坐实 → 升为高，细化关闭
     r = client.post(f"/diagnoses/{out['session_id']}/followups", json={"option_key": "A"})
     s = client.get(f"/diagnoses/{out['session_id']}").json()
     assert s["state"] == "diagnosed"
     assert s["card"]["misconception"]["code"] == "MIS-ANS-01"
     assert s["card"]["evidence_level"] == "高"
+    assert s["card"]["can_refine"] is False
 
 
 def test_followup_swap_hypothesis_then_low_evidence():
-    """追问答案指向另一错因 → 假设切换；3 轮不收敛 → 低证据。"""
+    """反复给出不区分的回答：3 轮硬上限后维持低证据，细化关闭。"""
     user = fresh_user()
-    out = attempt(user, "Q-ANS-01", "C")  # C → MIS-ANS-09 (0.7)，候选含同类近似
+    out = attempt(user, "Q-ANS-01", "C")
     s = client.get(f"/diagnoses/{out['session_id']}").json()
-    assert s["state"] == "followup_required"
-    # 反复给出不区分的回答，验证 ≤3 轮硬上限
+    assert s["state"] == "diagnosed" and s["card"]["can_refine"] is True
     for i in range(5):
         r = client.post(f"/diagnoses/{out['session_id']}/followups", json={"text": "不知道"})
-        if r.json()["state"] == "diagnosed":
-            break
+        if not r.json().get("can_refine", True) and r.json()["state"] == "diagnosed":
+            pass
     s = client.get(f"/diagnoses/{out['session_id']}").json()
     assert s["state"] == "diagnosed"
     assert s["followup_count"] <= 3
@@ -128,8 +128,10 @@ def test_followup_swap_hypothesis_then_low_evidence():
 def test_skip_followup_yields_low_evidence():
     user = fresh_user()
     out = attempt(user, "Q-ANS-01", "A")
-    assert client.get(f"/diagnoses/{out['session_id']}").json()["state"] == "followup_required"
-    r = client.post(f"/diagnoses/{out['session_id']}/skip-followup")
+    s = client.get(f"/diagnoses/{out['session_id']}").json()
+    assert s["state"] == "diagnosed" and s["card"]["can_refine"] is True
+    r = client.post(f"/diagnoses/{out['session_id']}/skip-followup", json={})
+    assert r.status_code == 200
     assert r.json()["evidence_level"] == "低"
 
 
@@ -201,6 +203,6 @@ def test_assessment_then_practice_no_500():
         "user_id": user, "question_id": q1["id"], "selected_option": "A",
         "idempotency_key": f"regress-{user}"}).json()
     sid = out["session_id"]
-    r = client.post(f"/diagnoses/{sid}/skip-followup")
+    r = client.post(f"/diagnoses/{sid}/skip-followup", json={})
     assert r.status_code == 200, r.text
     assert r.json()["evidence_level"] == "低"

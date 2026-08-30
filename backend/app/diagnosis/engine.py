@@ -114,10 +114,10 @@ def _sufficiency(db: Session, session: DiagnosisSession):
     if float(top.rerank_score) >= HIGH_SCORE and margin >= SUFFICIENCY_MARGIN and not signal.get("needs_followup"):
         _diagnose(db, session, top.misconception_id, "中")
     else:
-        session.state = "followup_required"
-        session.hypothesis_id = top.misconception_id
-        audit(db, "system", "diagnosis.state", session.id, to="followup_required",
-              hypothesis=top.misconception_id)
+        # 证据不足：仍直接出卡（低证据 + 候选错因），追问降级为卡上的可选细化（产品决策 2026-08-30）
+        session.can_refine = True
+        _diagnose(db, session, top.misconception_id, "低")
+        audit(db, "system", "diagnosis.can_refine", session.id, hypothesis=top.misconception_id)
 
 
 def _diagnose(db: Session, session: DiagnosisSession, misconception_id: str, level: str):
@@ -131,13 +131,15 @@ def _diagnose(db: Session, session: DiagnosisSession, misconception_id: str, lev
     mastery.transition(db, attempt.user_id, question.domain_id,
                        db.get(Misconception, misconception_id).category, "diagnosed")
     route_intervention(db, session)
+    db.commit()  # 显式提交：mastery 幂等分支不 commit，缺此行会导致升级被回滚
     return session
 
 
 # ---------- 追问（FollowupRunner） ----------
 
 def current_followup(db: Session, session: DiagnosisSession) -> FollowupNode | None:
-    if session.state != "followup_required":
+    if not (session.state == "followup_required" or
+            (session.state == "diagnosed" and session.can_refine)):
         return None
     node_ids = db.execute(select(MisconceptionFollowup.followup_node_id).where(
         MisconceptionFollowup.misconception_id == session.hypothesis_id)).scalars().all()
@@ -166,12 +168,16 @@ def _domain_of(db: Session, session: DiagnosisSession) -> str:
 
 
 def answer_followup(db: Session, session: DiagnosisSession, payload: dict) -> DiagnosisSession:
-    """payload: {"option_key": "A"} 或 {"text": "…"}；payload.get("skip") 为跳过。"""
-    if session.state != "followup_required":
+    """payload: {"option_key": "A"} 或 {"text": "…"}；payload.get("skip") 为跳过。
+    追问为诊断后的可选细化：state=diagnosed 且 can_refine 时可用（产品决策 2026-08-30）。"""
+    refining = session.state == "diagnosed" and session.can_refine
+    if session.state != "followup_required" and not refining:
         raise ValueError(f"会话状态 {session.state} 不接受追问回答")
     node = current_followup(db, session)
-    if node is None:  # 无可用追问节点 → 直接低证据收敛
-        return _diagnose(db, session, session.hypothesis_id, "低")
+    if node is None:  # 无可用追问节点 → 维持当前归因，结束细化
+        session.can_refine = False
+        db.commit()
+        return session
 
     session.followup_count += 1
     turn_no = session.followup_count
@@ -179,7 +185,9 @@ def answer_followup(db: Session, session: DiagnosisSession, payload: dict) -> Di
         db.add(FollowupTurn(session_id=session.id, node_id=node.id, presented_text=node.question_text,
                             student_answer="", judge_method="skipped", turn_no=turn_no, skipped=True))
         audit(db, "student", "diagnosis.followup_skipped", session.id, turn_no=turn_no)
-        return _diagnose(db, session, session.hypothesis_id, "低")
+        session.can_refine = False
+        db.commit()
+        return session
 
     if payload.get("option_key") and node.option_signals:
         sig = node.option_signals.get(payload["option_key"])
@@ -202,20 +210,21 @@ def answer_followup(db: Session, session: DiagnosisSession, payload: dict) -> Di
     audit(db, "student", "diagnosis.followup_answered", session.id, turn_no=turn_no, method=method)
 
     if supports and supports == session.hypothesis_id:
-        # 追问坐实原假设：证据链补全，收敛为高（AC2：追问的目的即达高置信归因）
+        # 追问坐实原假设：证据链补全，升级为高并结束细化
+        session.can_refine = False
         return _diagnose(db, session, session.hypothesis_id, "高")
     if supports and supports != session.hypothesis_id:
-        # 追问指向另一错因：切换假设；轮次用尽则低证据收敛
+        # 追问指向另一错因：切换假设；轮次用尽则维持低证据并结束细化
         session.hypothesis_id = supports
         if turn_no >= MAX_FOLLOWUP_ROUNDS:
+            session.can_refine = False
+            db.commit()
             return _diagnose(db, session, supports, "低")
-        session.state = "followup_required"
+    # 未区分：轮次用尽 → 维持低证据，结束细化；否则继续追问
+    if turn_no >= MAX_FOLLOWUP_ROUNDS:
+        session.can_refine = False
         db.commit()
         return session
-    # 未区分：轮次用尽 → 低证据收敛；否则继续追问
-    if turn_no >= MAX_FOLLOWUP_ROUNDS:
-        return _diagnose(db, session, session.hypothesis_id, "低")
-    session.state = "followup_required"
     db.commit()
     return session
 

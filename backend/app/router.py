@@ -140,6 +140,7 @@ def get_diagnosis(session_id: str, db: Session = Depends(get_db)):
         card = {
             "misconception": {"code": m.code, "name": m.name, "category": m.category},
             "evidence_level": s.evidence_level,
+            "can_refine": s.can_refine,
             "evidences": [{"type": label.get(e.evidence_type, e.evidence_type),
                            "source": source_label.get(e.evidence_type, ""),
                            "content": e.content} for e in evidences],
