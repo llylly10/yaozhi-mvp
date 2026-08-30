@@ -98,7 +98,8 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
   const toggle = (i: number) => setReads(reads.map((v, j) => (j === i ? !v : v)))
 
   return (
-    <div className="relative z-10 mx-auto grid min-h-[100dvh] w-full max-w-[1140px] items-center gap-7 px-5 py-10 lg:grid-cols-[1.08fr_0.92fr]">
+    <div className="relative z-10 flex min-h-[100dvh] items-center justify-center px-5 py-10">
+      <div className="grid w-full max-w-[1140px] items-stretch gap-7 lg:grid-cols-[1.08fr_0.92fr]">
       {/* 英雄区 */}
       <motion.div initial={{ opacity: 0, y: 22 }} animate={{ opacity: 1, y: 0 }} transition={spring}
         className="relative flex flex-col overflow-hidden rounded-[28px] p-10 text-white"
@@ -146,7 +147,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
       {/* 同意卡（玻璃） */}
       <motion.div initial={{ opacity: 0, y: 22 }} animate={{ opacity: 1, y: 0 }}
         transition={{ ...spring, delay: 0.1 }}
-        className="glass relative z-10 flex flex-col rounded-[28px] p-9 self-center">
+        className="glass relative z-10 flex flex-col rounded-[28px] p-9">
         <div className="flex items-center gap-3">
           <span className="rx-badge">Rx</span>
           <div>
@@ -184,6 +185,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         </motion.button>
         <p className="mt-4 text-center text-xs text-ink-3">Datawhale 星跃三期 · 药知项目组</p>
       </motion.div>
+      </div>
     </div>
   )
 }
