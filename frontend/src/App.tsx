@@ -782,6 +782,12 @@ function MaterialView({ domainId, onPractice, onError }: {
 
 /* ---------- 聚光边框卡片 ---------- *//* ---------- 聚光边框卡片 ---------- */
 
+type Analysis = {
+  question_code: string; stem: string; answer: string
+  evidence: { ref: string; text: string }[]
+  analysis: { option: string; option_text: string; category: string; misconception: string; note: string }[]
+}
+
 type MasteryRow = { domain: string; category: string | null; state: string; reason: string }
 type WrongRow = {
   attempt_id: string; question_code: string; stem: string
@@ -984,7 +990,8 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
       <AnimatePresence mode="wait">
         {diagnosis && (
           <DiagnosisPanel key={diagnosis.session_id}
-            diagnosis={diagnosis} onRefresh={refresh} onStartTraining={startTraining} onError={setError} />
+            diagnosis={diagnosis} questionId={question.id} onRefresh={refresh}
+            onStartTraining={startTraining} onExit={onExit} onError={setError} />
         )}
       </AnimatePresence>
 
@@ -1130,13 +1137,23 @@ function TrainingResult({ score, onExit }: { score: number; onExit: () => void }
   )
 }
 
-function DiagnosisPanel({ diagnosis, onRefresh, onStartTraining, onError }: {
-  diagnosis: Diagnosis; onRefresh: (id: string) => void; onStartTraining: () => void; onError: (m: string) => void
+function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onExit, onError }: {
+  diagnosis: Diagnosis; questionId: string; onRefresh: (id: string) => void
+  onStartTraining: () => void; onExit: () => void; onError: (m: string) => void
 }) {
   const [answering, setAnswering] = useState(false)
   const [showEvidence, setShowEvidence] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
   const [showFollowup, setShowFollowup] = useState(false)
+  const [openAnalysis, setOpenAnalysis] = useState(false)
+  const [analysis, setAnalysis] = useState<Analysis | null>(null)
+  const [data, setData] = useState<{ question_code: string } | null>(null)
+
+  useEffect(() => {
+    if (diagnosis.is_correct) {
+      api.questionAnalysis(questionId).then((r: Analysis) => { setAnalysis(r); setData({ question_code: r.question_code }) }).catch((e) => onError(String(e)))
+    }
+  }, [diagnosis.is_correct])
 
   async function answer(optionKey?: string) {
     if (!diagnosis.followup) return
@@ -1166,11 +1183,52 @@ function DiagnosisPanel({ diagnosis, onRefresh, onStartTraining, onError }: {
           : <Warning size={26} weight="fill" className="flex-none text-cat-red" />}
         <div>
           <p className="font-semibold">{diagnosis.is_correct ? '回答正确' : '回答错误'}</p>
-          {!diagnosis.is_correct && <p className="text-[13px] text-ink-2">正确答案 {diagnosis.answer} · 系统正在定位你的错因</p>}
+          {!diagnosis.is_correct
+            ? <p className="text-[13px] text-ink-2">正确答案 {diagnosis.answer} · 系统正在定位你的错因</p>
+            : <p className="text-[13px] text-ink-2">这道题的坑你已经避开了 — 可选：看看其他错误选项背后的典型误区</p>}
         </div>
+        {diagnosis.is_correct && (
+          <button onClick={() => setOpenAnalysis(!openAnalysis)}
+            className="btn ml-auto rounded-xl px-4 py-2.5 text-sm font-semibold text-white"
+            style={{ background: 'var(--color-cat-red)' }}>
+            查看错因分析
+          </button>
+        )}
       </motion.div>
+      {diagnosis.is_correct && openAnalysis && (
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="card mt-4 !rounded-[24px] overflow-hidden">
+          <div className="border-b border-line-2 px-8 pb-5 pt-7" style={{ background: 'linear-gradient(150deg, var(--color-paper-2), #fff 70%)' }}>
+            <div className="flex items-center gap-4">
+              <span className="rx-badge">Rx</span>
+              <div>
+                <p className="text-[11px] font-semibold tracking-[0.18em] text-ink-3">错因分析 · 防坑指南</p>
+                <p className="mt-0.5 text-[13px] text-ink-2">答对了也值得看看：每个错误选项背后是什么典型误区</p>
+              </div>
+            </div>
+          </div>
+          <div className="p-8">
+            {analysis?.analysis.map((a: Analysis['analysis'][number]) => (
+              <div key={a.option} className="mb-4 rounded-xl bg-paper px-5 py-4">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <span className="grid size-6 place-items-center rounded-full border border-line text-xs font-bold text-ink-2">{a.option}</span>
+                  <span className="text-sm font-medium">{a.option_text}</span>
+                  <CategoryTag category={a.category} />
+                </div>
+                <p className="mt-2 text-[13px] leading-relaxed text-ink-2">若误选此项，会被归因为：{a.misconception}{a.note ? `（${a.note}）` : ''}</p>
+              </div>
+            ))}
+            {analysis && analysis.evidence.length > 0 && (
+              <div className="rounded-xl bg-paper px-5 py-4 text-[13px]">
+                <p className="mb-1 text-xs text-ink-3">解析（{data?.question_code ?? ''}）</p>
+                <p className="leading-relaxed text-ink-2">{analysis.evidence[0]?.text}</p>
+              </div>
+            )}
+            <button onClick={onExit} className="btn btn-primary mt-6">返回今日待办</button>
+          </div>
+        </motion.div>
+      )}
 
-      {showFollowup && diagnosis.followup && (
+      {!diagnosis.is_correct && showFollowup && diagnosis.followup && (
         <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="card p-8">
           <div className="mb-1 flex items-center justify-between">
             <p className="flex items-center gap-2 text-xs font-semibold text-ink-3">
@@ -1225,7 +1283,7 @@ function DiagnosisPanel({ diagnosis, onRefresh, onStartTraining, onError }: {
         </motion.div>
       )}
 
-      {diagnosis.card?.can_refine && !showFollowup && (
+      {!diagnosis.is_correct && diagnosis.card?.can_refine && !showFollowup && (
         <motion.button initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => setShowFollowup(true)}
           className="btn card w-full items-center gap-3 p-5 text-left hover:shadow-[var(--shadow-lg)]">
           <span className="grid size-9 flex-none place-items-center rounded-xl bg-gold-soft font-serif font-bold text-gold">问</span>
@@ -1237,7 +1295,7 @@ function DiagnosisPanel({ diagnosis, onRefresh, onStartTraining, onError }: {
         </motion.button>
       )}
 
-      {diagnosis.card && (
+      {!diagnosis.is_correct && diagnosis.card && (
         <motion.div initial={{ opacity: 0, y: 16, rotate: -0.4 }} animate={{ opacity: 1, y: 0, rotate: 0 }}
           transition={spring} className="card relative overflow-hidden !rounded-[24px]">
           <div className="border-b border-line-2 px-8 pb-5 pt-7" style={{ background: 'linear-gradient(150deg, var(--color-paper-2), #fff 70%)' }}>

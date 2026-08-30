@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from .db import get_db
 from .models import (
     Attempt, DiagnosticDomain, DiagnosisCandidate, DiagnosisSession, DemoUser, FollowupNode, FollowupTurn,
-    Misconception, Question, TrainingSession, TrainingSessionQuestion, audit,
+    Misconception, Question, QuestionEvidence, TrainingSession, TrainingSessionQuestion, audit,
 )
 from .diagnosis import engine as dx
 from .mastery import engine as mastery
@@ -461,6 +461,33 @@ def list_questions(domain: str | None = None, usage: str = "diagnostic", db: Ses
     rows = db.execute(stmt).scalars().all()
     return [{"id": q.id, "code": q.code, "stem": q.stem, "options": q.options, "type": q.type,
              "domain_id": q.domain_id} for q in rows]
+
+
+@router.get("/questions/{question_id}/analysis")
+def question_analysis(question_id: str, db: Session = Depends(get_db)):
+    """答对后的错因分析（教学预览）：基于出题时的干扰项标注，
+    展示"若误选某项会被归因为什么"。确定性内容，无模型调用。"""
+    q = db.get(Question, question_id) or _404()
+    evidence = db.execute(select(QuestionEvidence).where(
+        QuestionEvidence.question_id == q.id)).scalars().all()
+    analysis = []
+    for opt in q.options:
+        if opt["key"] == q.answer:
+            continue
+        sig = (q.distractor_signals or {}).get(opt["key"]) or {}
+        mis = None
+        if sig.get("misconception"):
+            mis = db.execute(select(Misconception).where(
+                Misconception.code == sig["misconception"])).scalar_one_or_none()
+        analysis.append({
+            "option": opt["key"], "option_text": opt["text"],
+            "category": mis.category if mis else "待归类",
+            "misconception": mis.name if mis else "该选项暂无错因标注（待顾问补充）",
+            "note": sig.get("note", ""),
+        })
+    return {"question_code": q.code, "stem": q.stem, "answer": q.answer,
+            "evidence": [{"ref": e.evidence_chunk_id, "text": e.content_text} for e in evidence],
+            "analysis": analysis}
 
 
 @router.get("/questions/{question_id}")

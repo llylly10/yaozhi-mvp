@@ -33,6 +33,8 @@ export const api = {
 
   learningPlan: (userId: string) => fetch(`/api/learning-plan/${userId}`).then(handle),
 
+  questionAnalysis: (questionId: string) => fetch(`/api/questions/${questionId}/analysis`).then(handle),
+
   materials: (domainId: string) => fetch(`/api/materials/${domainId}`).then(handle),
 
   retest: (trainingId: string) => fetch(`/api/retest/${trainingId}`).then(handle),
