@@ -1,7 +1,9 @@
-"""P0 表模型（v1.1 §4，共 17 张：15 张 P0 + mastery/audit 运行组）。
+"""P0 表模型（v1.1 §4，共 17 张：15 张 P0 + mastery/audit 运行组）+ 课程资产 3 张。
 
 约定：uuid 主键存 String(36)；枚举用 native_enum=False（VARCHAR+CHECK，SQLite/PG 可移植）；
 多值关系一律关联表；金额/分数用 Numeric。字段语义见《实施方案设计 v1.1》第 4 章。
+新增资产表（tiku_papers/tiku_questions/syllabus_chapters）为外部语料导入，
+与诊断业务表隔离：题库原文/大纲树未经错因标注与顾问审校，不得进入 questions 业务表。
 """
 import uuid
 from datetime import datetime, timezone
@@ -303,3 +305,77 @@ class AuditLog(Base):
 
 def audit(db, actor: str, action: str, target: str, **detail):
     db.add(AuditLog(actor=actor, action=action, target=target, detail=detail))
+
+
+# ---------- 内容资产组：外部语料导入（题库原文 / 大纲树，隔离于诊断业务表） ----------
+
+class TikuPaper(Base):
+    """题库卷元信息（corpus/course-materials 导入，审校前不入 questions 业务表）。"""
+    __tablename__ = "tiku_papers"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    paper_no: Mapped[str] = mapped_column(String(8), unique=True)  # "01"/"02"/"03"
+    file: Mapped[str] = mapped_column(String(256), default="")
+    total: Mapped[int] = mapped_column(default=0)
+    count_a1: Mapped[int] = mapped_column(default=0)  # 题面题型 A1
+    count_a2: Mapped[int] = mapped_column(default=0)  # 答案区段 A2（A1 变体）
+    count_b1: Mapped[int] = mapped_column(default=0)
+    answer_count: Mapped[int] = mapped_column(default=0)
+    stats: Mapped[dict] = mapped_column(JSON, default=dict)  # 解析器统计原样留存
+    review_status: Mapped[str] = mapped_column(
+        _enum("asset_status", "draft", "in_review", "published", "deprecated"), default="draft")
+
+
+class TikuQuestion(Base):
+    """题库题目原文（A1 单选 / A2 病例单选 / B1 配伍）。
+
+    错因/干扰项/知识点标注留空，待药理顾问审校；chapter_ref 待启发式章节映射。
+    """
+    __tablename__ = "tiku_questions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    paper_no: Mapped[str] = mapped_column(String(8), index=True)
+    qid: Mapped[int] = mapped_column(SmallInteger)  # 卷内题号
+    type: Mapped[str] = mapped_column(_enum("tiku_type", "A1", "A2", "B1"))
+    stem: Mapped[str] = mapped_column(Text)
+    options: Mapped[list] = mapped_column(JSON)  # [{"key","text"}]
+    answer: Mapped[str] = mapped_column(String(8))
+    ans_section_type: Mapped[str] = mapped_column(String(16), default="")  # 答案区所属题型段
+    chapter_ref: Mapped[str] = mapped_column(String(128), default="")  # 启发式章节映射占位
+    kp_ref: Mapped[str] = mapped_column(String(128), default="")       # 知识点映射占位
+    review_status: Mapped[str] = mapped_column(
+        _enum("asset_status", "draft", "in_review", "published", "deprecated"), default="draft")
+    __table_args__ = (UniqueConstraint("paper_no", "qid", name="uq_tiku_paper_qid"),)
+
+
+class SyllabusChapter(Base):
+    """教学大纲章节树（31 章结构化导入；节/知识点/实验为嵌套只读资产，JSON 存储）。
+
+    hours_practice = 挂在该章行上的实践学时（实验 1–8）；实验 9/10 为独立实践课，
+    存于 syllabus_experiments。章节 25 + 独立实验 7 = 全部实验 32 学时。
+    """
+    __tablename__ = "syllabus_chapters"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    book_chapter_no: Mapped[int] = mapped_column(SmallInteger, unique=True)  # 教材章号
+    title: Mapped[str] = mapped_column(String(128))
+    teach_seqs: Mapped[list] = mapped_column(JSON, default=list)   # 授课序次数组
+    hours_theory: Mapped[int] = mapped_column(SmallInteger, default=0)
+    hours_practice: Mapped[int] = mapped_column(SmallInteger, default=0)
+    objectives: Mapped[dict] = mapped_column(JSON, default=dict)   # {master,familiar,understand}
+    key_points: Mapped[list] = mapped_column(JSON, default=list)
+    difficulties: Mapped[list] = mapped_column(JSON, default=list)
+    sections: Mapped[list] = mapped_column(JSON, default=list)     # [{title, points[]}]
+    experiments: Mapped[list] = mapped_column(JSON, default=list)
+    notes: Mapped[list] = mapped_column(JSON, default=list)
+    review_status: Mapped[str] = mapped_column(
+        _enum("asset_status", "draft", "in_review", "published", "deprecated"), default="draft")
+
+
+class SyllabusExperiment(Base):
+    """教学大纲实验明细（10 个实验，共 32 学时；实验 9/10 为独立实践课，不挂章节）。"""
+    __tablename__ = "syllabus_experiments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    seq_no: Mapped[int] = mapped_column(SmallInteger, unique=True)  # 1..10
+    name: Mapped[str] = mapped_column(String(128))
+    hours: Mapped[int] = mapped_column(SmallInteger, default=3)
+    desc: Mapped[list] = mapped_column(JSON, default=list)
+    review_status: Mapped[str] = mapped_column(
+        _enum("asset_status", "draft", "in_review", "published", "deprecated"), default="draft")
