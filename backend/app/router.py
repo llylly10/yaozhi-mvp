@@ -402,23 +402,56 @@ def profile_summary(user_id: str, db: Session = Depends(get_db)):
 
 @router.get("/training/{session_id}")
 def get_training(session_id: str, db: Session = Depends(get_db)):
+    """按错因×干预路由返回训练载荷（v1.1 §5.3）：四种干预形态。"""
+    from .models import ChainNode, ConfusionPair, Misconception
     s = db.get(DiagnosisSession, session_id) or _404()
     ts = db.execute(select(TrainingSession).where(TrainingSession.diagnosis_id == s.id)).scalar_one_or_none()
     if ts is None:
         if s.state != "diagnosed":
             raise HTTPException(409, f"会话状态 {s.state} 不能开始训练")
         ts = dx.start_training(db, s)
+    m = db.get(Misconception, s.hypothesis_id)
+    mode = m.remediation_type
+    note = {
+        "记忆卡": "知识遗忘类：先用记忆卡巩固要点，暂不刷题",
+        "混淆对变式": "概念混淆类：围绕易混药物对做双向变式",
+        "断环重讲": "机制理解类：先重讲断环环节，再做条件变化型变式",
+        "情境拆解": "审题应用类：练习含特殊人群/联合用药情境的题目",
+    }.get(mode, "")
     rows = db.execute(select(TrainingSessionQuestion).where(
         TrainingSessionQuestion.training_session_id == ts.id).order_by(
         TrainingSessionQuestion.sequence_no)).scalars().all()
-    return {"training_id": ts.id, "status": ts.status,
-            "questions": [{"id": r.question_id, "stem": db.get(Question, r.question_id).stem,
-                           "options": db.get(Question, r.question_id).options} for r in rows]}
+    questions = [{"id": r.question_id, "stem": db.get(Question, r.question_id).stem,
+                  "options": db.get(Question, r.question_id).options} for r in rows]
+
+    out = {"training_id": ts.id, "status": ts.status, "mode": mode, "note": note, "questions": questions}
+
+    # 记忆卡形态：推理链要点卡 + 混淆对辨析卡
+    if mode == "记忆卡":
+        chain = db.execute(select(ChainNode).where(ChainNode.domain_id == m.domain_id)
+                           .order_by(ChainNode.level)).scalars().all()
+        pairs = db.execute(select(ConfusionPair).where(ConfusionPair.domain_id == m.domain_id)).scalars().all()
+        out["cards"] = [{"front": f"{c.title}（L{c.level}）", "back": c.summary} for c in chain] +                        [{"front": f"{p.drug_a} 与 {p.drug_b} 的区别？", "back": p.distinction_text} for p in pairs]
+    # 断环重讲形态：断环环节的讲解
+    if mode == "断环重讲":
+        node = db.execute(select(ChainNode).where(
+            ChainNode.domain_id == m.domain_id,
+            ChainNode.level == (s.chain_focus or 2))).scalars().first()
+        if node:
+            out["reteach"] = {"level": node.level, "title": node.title, "summary": node.summary}
+    # 情境拆解：优先情境条件题
+    if mode == "情境拆解":
+        ctx = [x for x in questions if (db.get(Question, x["id"]).condition_type != "normal")]
+        if ctx:
+            out["questions"] = ctx
+        out["note"] = (out["note"] + " · 本组均为情境题" if ctx else out["note"])
+    return out
 
 
 class TrainingSubmitIn(BaseModel):
-    """answers: {question_id: option_key}，服务端判分（后端为唯一事实来源）。"""
-    answers: dict[str, str]
+    """answers: {question_id: option_key}，服务端判分（后端为唯一事实来源）。
+    记忆卡形态无答题：空 answers = 自评完成。"""
+    answers: dict[str, str] = {}
 
 
 @router.post("/training/{training_id}/submit")
@@ -426,10 +459,13 @@ def submit_training(training_id: str, body: TrainingSubmitIn, db: Session = Depe
     ts = db.get(TrainingSession, training_id) or _404()
     rows = db.execute(select(TrainingSessionQuestion).where(
         TrainingSessionQuestion.training_session_id == ts.id)).scalars().all()
-    correct = sum(
-        1 for r in rows
-        if body.answers.get(r.question_id) == db.get(Question, r.question_id).answer)
-    ts.score = round(correct / max(len(rows), 1), 3)
+    if rows:
+        correct = sum(
+            1 for r in rows
+            if body.answers.get(r.question_id) == db.get(Question, r.question_id).answer)
+        ts.score = round(correct / max(len(rows), 1), 3)
+    else:
+        ts.score = 1.0  # 记忆卡形态：自评完成即通过
     ts.status = "completed"
     s = db.get(DiagnosisSession, ts.diagnosis_id)
     s.state = "retesting" if ts.score >= 0.6 else "diagnosed"
