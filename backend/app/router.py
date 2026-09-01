@@ -426,12 +426,14 @@ def get_training(session_id: str, db: Session = Depends(get_db)):
 
     out = {"training_id": ts.id, "status": ts.status, "mode": mode, "note": note, "questions": questions}
 
-    # 记忆卡形态：推理链要点卡 + 混淆对辨析卡
+    # 记忆卡形态：推理链要点卡 + 混淆对辨析卡；不返回刷题题目（v1.1：知识遗忘类不推刷题）
     if mode == "记忆卡":
         chain = db.execute(select(ChainNode).where(ChainNode.domain_id == m.domain_id)
                            .order_by(ChainNode.level)).scalars().all()
         pairs = db.execute(select(ConfusionPair).where(ConfusionPair.domain_id == m.domain_id)).scalars().all()
-        out["cards"] = [{"front": f"{c.title}（L{c.level}）", "back": c.summary} for c in chain] +                        [{"front": f"{p.drug_a} 与 {p.drug_b} 的区别？", "back": p.distinction_text} for p in pairs]
+        out["cards"] = [{"front": f"{c.title}（L{c.level}）", "back": c.summary} for c in chain] + \
+                       [{"front": f"{p.drug_a} 与 {p.drug_b} 的区别？", "back": p.distinction_text} for p in pairs]
+        out["questions"] = []
     # 断环重讲形态：断环环节的讲解
     if mode == "断环重讲":
         node = db.execute(select(ChainNode).where(
@@ -439,12 +441,10 @@ def get_training(session_id: str, db: Session = Depends(get_db)):
             ChainNode.level == (s.chain_focus or 2))).scalars().first()
         if node:
             out["reteach"] = {"level": node.level, "title": node.title, "summary": node.summary}
-    # 情境拆解：优先情境条件题
-    if mode == "情境拆解":
-        ctx = [x for x in questions if (db.get(Question, x["id"]).condition_type != "normal")]
-        if ctx:
-            out["questions"] = ctx
-        out["note"] = (out["note"] + " · 本组均为情境题" if ctx else out["note"])
+    # 情境拆解：题目已由 start_training 按 condition_type 优先选取，这里只补充标注
+    if mode == "情境拆解" and questions:
+        if all(db.get(Question, x["id"]).condition_type != "normal" for x in questions):
+            out["note"] = out["note"] + " · 本组均为情境题"
     return out
 
 

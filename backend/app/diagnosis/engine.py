@@ -292,7 +292,12 @@ def time_ms() -> int:
 
 
 def start_training(db: Session, session: DiagnosisSession):
-    """按错因×干预路由取训练题（W1 从审核题池选同域同错因标注题）。"""
+    """按错因×干预路由取训练题（v1.1 §5.3）。
+
+    记忆卡：不推刷题，训练载荷只有卡片（picked 为空，提交时自评通过，见 router.submit_training）。
+    情境拆解：先按 condition_type 筛情境题再补足 3 道——先取 3 道再筛会只剩 1 道。
+    其余：同错因标注题优先，补足 3 道。
+    """
     if session.state != "diagnosed":
         raise ValueError(f"会话状态 {session.state} 不能开始训练")
     misconception = db.get(Misconception, session.hypothesis_id)
@@ -301,14 +306,23 @@ def start_training(db: Session, session: DiagnosisSession):
     pool = db.execute(select(Question).where(
         Question.domain_id == question.domain_id, Question.usage == "training",
         Question.review_status == "published")).scalars().all()
-    picked = [q for q in pool
-              if misconception.code in [(s or {}).get("misconception") for s in (q.distractor_signals or {}).values()]]
-    rest = [q for q in pool if q not in picked]  # 补足至 3 道，保持训练量
-    picked = (picked + rest)[:3]
-    if not picked:  # 题池不足：回退同域训练题
-        picked = pool[:3]
-    ts = TrainingSession(diagnosis_id=session.id,
-                         source="审核题池", status="in_progress" if picked else "pending")
+    mode = misconception.remediation_type
+    if mode == "记忆卡":
+        picked = []
+    else:
+        sig = [q for q in pool
+               if misconception.code in [(s or {}).get("misconception") for s in (q.distractor_signals or {}).values()]]
+        if mode == "情境拆解":
+            ctx = [q for q in pool if q.condition_type != "normal"]
+            ordered = ([q for q in sig if q in ctx]
+                       + [q for q in ctx if q not in sig]
+                       + [q for q in sig if q not in ctx])
+        else:
+            ordered = sig
+        rest = [q for q in pool if q not in ordered]  # 补足至 3 道，保持训练量
+        picked = (ordered + rest)[:3]
+    ts = TrainingSession(diagnosis_id=session.id, source="审核题池",
+                         status="in_progress" if (picked or mode == "记忆卡") else "pending")
     db.add(ts)
     db.flush()
     for i, q in enumerate(picked):
