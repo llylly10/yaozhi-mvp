@@ -1,19 +1,64 @@
 import time
+import uuid
+from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .db import get_db
 from .models import (
-    Attempt, DiagnosticDomain, DiagnosisCandidate, DiagnosisSession, DemoUser, FollowupNode, FollowupTurn,
-    Misconception, Question, QuestionEvidence, TrainingSession, TrainingSessionQuestion, audit,
+    Attempt, DiagnosticDomain, DiagnosisCandidate, DiagnosisEvidence, DiagnosisSession, DemoUser,
+    FollowupNode, FollowupTurn, MasteryState, Misconception, Question, QuestionEvidence,
+    TrainingSession, TrainingSessionQuestion, audit, now,
 )
 from .diagnosis import engine as dx
 from .mastery import engine as mastery
 
 router = APIRouter()
+
+# US-0 AC4：撤回同意后 24h 内逻辑删除、30 天内物理删除
+PURGE_AFTER_DAYS = 30
+
+
+def _active_user(user_id: str, db: Session) -> DemoUser:
+    """US-0 AC5：已撤回同意的用户，其数据不得以任何形式留存或复用。
+
+    所有读写用户学习数据的入口都先过这一关；例外是同意接口本身，
+    因为需求允许「撤回后如需继续使用，须重新勾选同意」。
+    """
+    user = db.get(DemoUser, user_id) or _404()
+    if user.withdrawn_at is not None:
+        raise HTTPException(403, "该账号已撤回同意，学习数据已停止使用并进入删除流程")
+    return user
+
+
+def _purge_user_data(db: Session, user_id: str) -> int:
+    """物理删除用户全部学习数据，返回被删除的作答条数。
+
+    审计日志（audit_logs）保留：删除回执需要留痕，且它记录的是操作本身而非学习内容。
+    """
+    attempt_ids = list(db.execute(
+        select(Attempt.id).where(Attempt.user_id == user_id)).scalars())
+    n = len(attempt_ids)
+    if attempt_ids:
+        sess_ids = list(db.execute(
+            select(DiagnosisSession.id).where(DiagnosisSession.attempt_id.in_(attempt_ids))).scalars())
+        if sess_ids:
+            ts_ids = list(db.execute(
+                select(TrainingSession.id).where(TrainingSession.diagnosis_id.in_(sess_ids))).scalars())
+            if ts_ids:
+                db.execute(delete(TrainingSessionQuestion).where(
+                    TrainingSessionQuestion.training_session_id.in_(ts_ids)))
+                db.execute(delete(TrainingSession).where(TrainingSession.id.in_(ts_ids)))
+            db.execute(delete(DiagnosisCandidate).where(DiagnosisCandidate.session_id.in_(sess_ids)))
+            db.execute(delete(DiagnosisEvidence).where(DiagnosisEvidence.session_id.in_(sess_ids)))
+            db.execute(delete(FollowupTurn).where(FollowupTurn.session_id.in_(sess_ids)))
+            db.execute(delete(DiagnosisSession).where(DiagnosisSession.id.in_(sess_ids)))
+        db.execute(delete(Attempt).where(Attempt.user_id == user_id))
+    db.execute(delete(MasteryState).where(MasteryState.user_id == user_id))
+    return n
 
 
 # ---------- 演示账号（US-0 同意门） ----------
@@ -46,16 +91,100 @@ class ConsentIn(BaseModel):
 
 @router.post("/users/{user_id}/consent")
 def record_consent(user_id: str, body: ConsentIn, db: Session = Depends(get_db)):
-    """同意（第 2 步）：三份文档须全部同意，个性化功能依赖采集知情同意。"""
+    """同意（第 2 步）：三份文档须全部同意，个性化功能依赖采集知情同意。
+
+    已撤回过的账号重新勾选 → 先清空旧数据再重新开始（US-0 AC5：撤回后不得复用）。
+    """
     user = db.get(DemoUser, user_id) or _404()
     if not (body.user_agreement and body.privacy_policy and body.data_collection):
         raise HTTPException(403, "三份文档须全部勾选同意")
+    purged = 0
+    if user.withdrawn_at is not None:
+        purged = _purge_user_data(db, user_id)
+        user.withdrawn_at = None
+        user.purged_at = None
+        user.deletion_receipt = None
     user.consented = True
+    user.consented_at = now()
     db.commit()
     audit(db, user_id, "consent.granted", f"user:{user_id}",
           user_agreement=True, privacy_policy=True, data_collection=True,
-          doc_version="2026-08-30")
-    return {"user_id": user_id, "consented": True}
+          doc_version="2026-08-30", reconsent_purged_attempts=purged)
+    return {"user_id": user_id, "consented": True, "purged_previous_attempts": purged}
+
+
+class WithdrawIn(BaseModel):
+    confirm: bool = False
+
+
+@router.post("/users/{user_id}/consent/withdraw")
+def withdraw_consent(user_id: str, body: WithdrawIn, db: Session = Depends(get_db)):
+    """US-0 AC4：撤回同意并删除学习数据。二次确认后即时逻辑删除，出具带流水号的回执。"""
+    user = db.get(DemoUser, user_id) or _404()
+    if not body.confirm:
+        raise HTTPException(400, "撤回需二次确认：请传 confirm=true")
+    if user.withdrawn_at is not None:
+        return {"user_id": user_id, "receipt": user.deletion_receipt, "already_withdrawn": True,
+                "logical_deleted_at": user.withdrawn_at.isoformat()}
+    user.consented = False
+    user.withdrawn_at = now()
+    user.deletion_receipt = f"DEL-{uuid.uuid4().hex[:12].upper()}"
+    audit(db, user_id, "consent.withdrawn", f"user:{user_id}",
+          receipt=user.deletion_receipt, logical_deleted_at=user.withdrawn_at.isoformat(),
+          physical_delete_due_days=PURGE_AFTER_DAYS)
+    db.commit()
+    return {"user_id": user_id, "receipt": user.deletion_receipt,
+            "logical_deleted_at": user.withdrawn_at.isoformat(),
+            "physical_delete_after_days": PURGE_AFTER_DAYS,
+            "note": "学习记录已即时停止使用（逻辑删除），30 天内完成物理删除"}
+
+
+@router.get("/users/{user_id}/deletion-receipt")
+def get_deletion_receipt(user_id: str, db: Session = Depends(get_db)):
+    """US-0 AC4：删除完成回执，带操作流水号，供用户留存核对。"""
+    user = db.get(DemoUser, user_id) or _404()
+    if user.withdrawn_at is None:
+        raise HTTPException(404, "该账号未发起撤回，暂无删除回执")
+    return {"user_id": user_id, "receipt": user.deletion_receipt,
+            "logical_deleted_at": user.withdrawn_at.isoformat(),
+            "purged_at": user.purged_at.isoformat() if user.purged_at else None,
+            "physical_delete_after_days": PURGE_AFTER_DAYS}
+
+
+@router.post("/admin/purge-withdrawn")
+def purge_withdrawn(days: int = Query(PURGE_AFTER_DAYS), db: Session = Depends(get_db)):
+    """US-0 AC4 的 30 天物理删除清理。生产环境由定时任务调用，Demo 开放便于演示数据生命周期闭环。
+
+    审计日志保留 —— 它是删除完成的凭证，记录的也是操作本身而非学习内容。
+    """
+    # SQLite 不保留时区，datetime 列的 SQL 比较不可靠；改为取出后在 Python 层比较
+    cutoff = now().replace(tzinfo=None) - timedelta(days=days)
+    candidates = db.execute(select(DemoUser).where(
+        DemoUser.withdrawn_at.isnot(None), DemoUser.purged_at.is_(None))).scalars().all()
+    rows = [u for u in candidates if u.withdrawn_at is not None and u.withdrawn_at <= cutoff]
+    purged = []
+    for u in rows:
+        n = _purge_user_data(db, u.id)
+        u.purged_at = now()
+        audit(db, "system", "user.purged", f"user:{u.id}", receipt=u.deletion_receipt, attempts=n)
+        purged.append({"user_id": u.id, "receipt": u.deletion_receipt, "attempts_deleted": n})
+    db.commit()
+    return {"purged": purged, "count": len(purged), "threshold_days": days}
+
+
+@router.post("/admin/reset-demo")
+def reset_demo(db: Session = Depends(get_db)):
+    """演示数据复位：清空全部业务数据并重新种子化，保证演示可重现。
+
+    审计日志一并清空（演示数据无留存价值）。 SQLite 下 drop_all→create_all 重建表。
+    """
+    from app.db import Base, engine
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    from seed.seed import seed as run_seed
+    run_seed(db)
+    db.commit()
+    return {"ok": True, "note": "演示数据已复位为初始种子状态"}
 
 
 # ---------- 作答提交（幂等） ----------
@@ -73,6 +202,7 @@ class AttemptIn(BaseModel):
 @router.get("/users/{user_id}/wrong-book")
 def wrong_book(user_id: str, db: Session = Depends(get_db)):
     """错题本：答错的作答 + 已出具的诊断结论。"""
+    _active_user(user_id, db)
     rows = db.execute(select(Attempt).where(
         Attempt.user_id == user_id, Attempt.is_correct == False)).scalars().all()  # noqa: E712
     out = []
@@ -93,6 +223,7 @@ def wrong_book(user_id: str, db: Session = Depends(get_db)):
 
 @router.post("/attempts", status_code=202)
 def submit_attempt(body: AttemptIn, db: Session = Depends(get_db)):
+    _active_user(body.user_id, db)
     dup = db.execute(select(Attempt).where(Attempt.idempotency_key == body.idempotency_key)).scalar_one_or_none()
     if dup:
         session = db.execute(select(DiagnosisSession).where(
@@ -223,6 +354,7 @@ def diagnosis_feedback(session_id: str, body: FeedbackIn, db: Session = Depends(
 @router.get("/learning-plan/{user_id}")
 def learning_plan(user_id: str, db: Session = Depends(get_db)):
     """规则生成的学习路径（v1.1 §12.2）：按掌握状态排序薄弱项，每项生成【学材料 → 练习】任务对。"""
+    _active_user(user_id, db)
     from .models import MasteryState
     order = {"薄弱": 0, "学习中": 1, "初步掌握": 2}
     rows = db.execute(select(MasteryState).where(MasteryState.user_id == user_id)).scalars().all()
@@ -327,6 +459,7 @@ def submit_retest(training_id: str, body: RetestSubmitIn, db: Session = Depends(
 @router.get("/assessment/{user_id}")
 def get_assessment(user_id: str, db: Session = Depends(get_db)):
     """摸底卷：取 5 道诊断题（按 code 排序取前 5）。"""
+    _active_user(user_id, db)
     rows = db.execute(select(Question).where(
         Question.usage == "diagnostic", Question.review_status == "published")
         .order_by(Question.code)).scalars().all()
@@ -337,6 +470,7 @@ def get_assessment(user_id: str, db: Session = Depends(get_db)):
 @router.post("/assessment/{user_id}/submit")
 def submit_assessment(user_id: str, body: dict, db: Session = Depends(get_db)):
     """判分摸底卷：记录作答、输出域级正确率与薄弱项（画像数据源）。"""
+    _active_user(user_id, db)
     answers: dict = body.get("answers", {})
     qids = list(answers.keys())
     questions = [db.get(Question, qid) for qid in qids]
@@ -379,6 +513,7 @@ def submit_assessment(user_id: str, body: dict, db: Session = Depends(get_db)):
 @router.get("/users/{user_id}/profile-summary")
 def profile_summary(user_id: str, db: Session = Depends(get_db)):
     """档案页聚合：错题的 域×错因类别 分布（热力图数据）。"""
+    _active_user(user_id, db)
     rows = db.execute(select(Attempt).where(
         Attempt.user_id == user_id, Attempt.is_correct == False)).scalars().all()  # noqa: E712
     heat: dict = {}
@@ -481,6 +616,7 @@ def submit_training(training_id: str, body: TrainingSubmitIn, db: Session = Depe
 @router.get("/mastery/me")
 def my_mastery(user_id: str, db: Session = Depends(get_db)):
     from .models import MasteryState
+    _active_user(user_id, db)
     rows = db.execute(select(MasteryState).where(MasteryState.user_id == user_id)).scalars().all()
     return [{"domain": r.domain_id, "category": r.category, "state": r.state, "reason": r.reason}
             for r in rows]

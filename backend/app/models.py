@@ -158,6 +158,12 @@ class DemoUser(Base):
     display_name: Mapped[str] = mapped_column(String(64), default="演示学生")
     consented: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    # US-0 AC4/AC5：撤回同意与数据删除。逻辑删除即时生效（停止一切读写），
+    # 物理删除由 purge_withdrawn_users 按 PURGE_AFTER_DAYS（30 天）清理。
+    consented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deletion_receipt: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 class Attempt(Base):

@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))  # 保证 `app`/`seed` 可导入
 
 from app.config import settings  # noqa: E402
-from app.db import Base, SessionLocal, engine  # noqa: E402
+from app.db import Base, SessionLocal, engine, migrate  # noqa: E402
 from app.router import router  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
@@ -18,6 +18,7 @@ app.include_router(router)
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(engine)
+    migrate()  # 补齐增量列（SQLite 不自动加列）
     if settings.seed_on_startup:
         from seed.seed import seed
         db = SessionLocal()

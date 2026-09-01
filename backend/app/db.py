@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from .config import settings
@@ -21,3 +21,22 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def migrate():
+    """W1 增量迁移：为新加的可空列补齐 SQLite 表结构。
+
+    SQLite 的 create_all 不会给已存在的表加列，导致旧的 yaozhi_w1.db
+    缺 consented_at 等列而崩溃。迁移幂等：列已存在则跳过。
+    """
+    needed = {
+        "consented_at": "DATETIME",
+        "withdrawn_at": "DATETIME",
+        "purged_at": "DATETIME",
+        "deletion_receipt": "VARCHAR(32)",
+    }
+    existing = {c["name"] for c in inspect(engine).get_columns("users")}
+    for col, dtype in needed.items():
+        if col not in existing:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {dtype}"))
