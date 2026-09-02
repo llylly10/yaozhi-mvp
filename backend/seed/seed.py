@@ -220,6 +220,7 @@ DIAG_POOL = [q for q in QUESTIONS if q[4] == "diagnostic"]
 
 def seed(db):
     """幂等：以 code 判重。全部内容 review_status=draft（待药理顾问审校）。"""
+    _restore_course_assets(db)  # 课程资产（题库/大纲/章节映射）幂等恢复，reset-demo 后自动还原
     if db.execute(select(DiagnosticDomain).where(DiagnosticDomain.code == DOMAIN["code"])).scalar_one_or_none():
         return
     domain = DiagnosticDomain(**DOMAIN, status="published")  # 域本身已定稿
@@ -272,3 +273,26 @@ def seed(db):
     audit(db, "seed", "content.seeded", domain.code, questions=len(QUESTIONS),
           followups=len(FOLLOWUPS), misconceptions=len(MISCONCEPTIONS))
     db.commit()
+
+
+
+def _restore_course_assets(db):
+    """幂等恢复课程资产：题库 786 题原文 + 大纲 31 章 + 章节映射 chapter_ref。
+
+    reset-demo 会 drop 全部表再重建，若无此恢复则课程资产（c54255a/c990685 的成果）
+    会丢失。import_course_assets 按 (paper_no,qid) 查重、map_tiku_chapters 重算
+    chapter_ref，均可重放。文件缺失或异常时跳过，不影响 10 题诊断域种子。
+    """
+    try:
+        from seed.import_course_assets import import_syllabus, import_tiku
+        from seed.map_tiku_chapters import map_question
+        import_tiku(db)
+        import_syllabus(db)
+        from app.models import TikuQuestion
+        for q in db.query(TikuQuestion).all():
+            ref, _, _ = map_question(q)
+            if ref and q.chapter_ref != ref:
+                q.chapter_ref = ref
+        db.commit()
+    except Exception as e:  # noqa: BLE001
+        print(f"[seed] 课程资产恢复跳过（不影响演示种子）: {e}")

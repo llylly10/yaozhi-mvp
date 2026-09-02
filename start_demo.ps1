@@ -1,16 +1,17 @@
 ﻿# 药知 MVP 一键演示启动脚本（Windows）
 # 用法：在 PowerShell 中运行  .\start_demo.ps1
 # 说明：
-#  - 后端用 uvicorn 起在 127.0.0.1:8000（系统 Python，已装 fastapi/uvicorn/sqlalchemy）
+#  - 后端用 uvicorn 起在 127.0.0.1:8000（项目本地 venv .venv，依赖自包含，无需管理员装包）
 #  - 前端用 vite dev 起在 127.0.0.1:5173（始终编译最新源码，规避旧的 dist 构建）
 #  - 启动后自动调用 /admin/reset-demo 复位为初始种子数据，保证演示可重现
 #  - 两个服务各自开独立窗口，关闭窗口即停止
+# 环境准备（首次）：python -m venv .venv && .venv\Scripts\pip install -r backend\requirements.txt
 
 $ErrorActionPreference = "Continue"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $Backend = Join-Path $Root "backend"
 $Frontend = Join-Path $Root "frontend"
-$Py = "D:\Program Files\Python314\python.exe"
+$Py = Join-Path $Root ".venv\Scripts\python.exe"
 $Npm = "C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2-2\npm.cmd"
 
 function Test-Port($port) {
