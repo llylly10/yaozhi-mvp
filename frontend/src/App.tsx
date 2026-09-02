@@ -790,7 +790,7 @@ type Analysis = {
   followups?: { question_text: string; options: { key: string; text: string }[] | null }[]
 }
 
-type MasteryRow = { domain: string; category: string | null; state: string; reason: string }
+type MasteryRow = { domain_id: string; domain?: string; category: string | null; state: string; reason: string }
 type WrongRow = {
   attempt_id: string; question_code: string; stem: string
   selected: string; answer: string

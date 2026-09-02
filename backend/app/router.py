@@ -404,8 +404,7 @@ def get_retest(training_id: str, db: Session = Depends(get_db)):
     ts = db.get(TrainingSession, training_id) or _404()
     s = db.get(DiagnosisSession, ts.diagnosis_id)
     attempt = db.get(Attempt, s.attempt_id)
-    first = db.get(Attempt, s.attempt_id)
-    user_id, domain_id = first.user_id, db.get(Question, first.question_id).domain_id
+    user_id, domain_id = attempt.user_id, db.get(Question, attempt.question_id).domain_id
     answered = set(db.execute(select(Attempt.question_id).where(Attempt.user_id == user_id)).scalars())
     trained = set(db.execute(select(TrainingSessionQuestion.question_id).where(
         TrainingSessionQuestion.training_session_id == ts.id)).scalars())
@@ -505,8 +504,8 @@ def submit_assessment(user_id: str, body: dict, db: Session = Depends(get_db)):
                           is_correct=ok, idempotency_key=f"assess-{user_id}-{q.id}")
         db.add(attempt)
     db.commit()
-    domains_out = [{"domain": domain_map.get(k, k), "correct": v["correct"], "total": v["total"],
-                    "rate": round(v["correct"] / v["total"], 3)} for k, v in domain_stats.items()]
+    domains_out = [{"domain_id": k, "domain": domain_map.get(k, k), "correct": v["correct"],
+                    "total": v["total"], "rate": round(v["correct"] / v["total"], 3)} for k, v in domain_stats.items()]
     return {"total": len(questions), "weak": weak, "domains": domains_out}
 
 
@@ -526,10 +525,12 @@ def profile_summary(user_id: str, db: Session = Depends(get_db)):
             DiagnosisSession.attempt_id == a.id)).scalar_one_or_none()
         cat = db.get(Misconception, s.hypothesis_id).category if s and s.hypothesis_id else "待诊断"
         dname = db.get(DiagnosticDomain, q.domain_id).name if db.get(DiagnosticDomain, q.domain_id) else "未知域"
-        key = (dname, cat)
+        key = (q.domain_id, dname, cat)
         heat[key] = heat.get(key, 0) + 1
-        weak.append({"question_code": q.code, "stem": q.stem, "domain": dname, "category": cat})
-    return {"heatmap": [{"domain": k[0], "category": k[1], "wrong": v} for k, v in heat.items()],
+        weak.append({"question_code": q.code, "stem": q.stem, "domain_id": q.domain_id,
+                    "domain": dname, "category": cat})
+    return {"heatmap": [{"domain_id": k[0], "domain": k[1], "category": k[2], "wrong": v}
+                        for k, v in heat.items()],
             "weak": weak}
 
 
@@ -618,8 +619,9 @@ def my_mastery(user_id: str, db: Session = Depends(get_db)):
     from .models import MasteryState
     _active_user(user_id, db)
     rows = db.execute(select(MasteryState).where(MasteryState.user_id == user_id)).scalars().all()
-    return [{"domain": r.domain_id, "category": r.category, "state": r.state, "reason": r.reason}
-            for r in rows]
+    dmap = {d.id: d.name for d in db.execute(select(DiagnosticDomain)).scalars()}
+    return [{"domain_id": r.domain_id, "domain": dmap.get(r.domain_id, r.domain_id),
+             "category": r.category, "state": r.state, "reason": r.reason} for r in rows]
 
 
 @router.get("/domains")
