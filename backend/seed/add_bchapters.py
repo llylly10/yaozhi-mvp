@@ -10,7 +10,10 @@ B 类补章落库脚本：新增 CH8 局麻 / CH13 抗癫痫 / CH18 抗组胺 / 
   python add_bchapters.py --apply    # 写库
 """
 import sqlite3, io, sys, json, uuid, os, datetime, hashlib
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+if __name__ == "__main__":
+    # 仅命令行入口重包装 stdout；被 seed._restore_course_assets import 时不包装，
+    # 避免与 pytest 的 capture 冲突（I/O operation on closed file）。
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 DB = r"D:\ceshi\yaozhi-mvp\backend\yaozhi_w1.db"
 BAK_DIR = r"C:\Users\Administrator\AppData\Local\DoubaoWork\User Data\Default\.doubaowork\agent_mode\workspace\.sessions\38439826045569538\agents\m_0cwExU1vFef"
@@ -151,6 +154,39 @@ Q_MOVES = {
 def split_pid(pid):
     p, q = pid.split("-")
     return p, int(q)
+
+
+def apply_bchapters(session):
+    """SQLAlchemy 版写库：新增 4 章（book_chapter_no 查重跳过）+ 36 题归位（幂等）。
+
+    供 seed._restore_course_assets 在 map_question 重算后调用，保证 reset-demo
+    恢复时补章成果（CH8/13/18/39 + 36 题归位）不丢失。返回 (新章数, 题更新数)。
+    """
+    from app.models import SyllabusChapter, TikuQuestion
+    n_ch = 0
+    for ch in NEW_CHAPTERS:
+        no = ch["book_chapter_no"]
+        if session.query(SyllabusChapter).filter_by(book_chapter_no=no).first():
+            continue
+        session.add(SyllabusChapter(
+            id=uuid.uuid4().hex, book_chapter_no=no, title=ch["title"],
+            teach_seqs=ch["teach_seqs"], hours_theory=ch["hours_theory"],
+            hours_practice=ch["hours_practice"], objectives=ch["objectives"],
+            key_points=ch["key_points"], difficulties=ch["difficulties"],
+            sections=ch["sections"], experiments=ch["experiments"],
+            notes=ch["notes"], review_status="draft"))
+        n_ch += 1
+    n_q = 0
+    for ch, pids in Q_MOVES.items():
+        for pid in pids:
+            p, q = split_pid(pid)
+            row = session.query(TikuQuestion).filter_by(paper_no=p, qid=q).first()
+            if row is None or row.chapter_ref == ch:
+                continue
+            row.chapter_ref = ch
+            n_q += 1
+    return n_ch, n_q
+
 
 def main():
     apply = "--apply" in sys.argv

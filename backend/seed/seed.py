@@ -293,6 +293,12 @@ def _restore_course_assets(db):
             ref, _, _ = map_question(q)
             if ref and q.chapter_ref != ref:
                 q.chapter_ref = ref
+        # 补章成果（CH8/13/18/39 + 36 题归位）不随 reset-demo 丢失：map_question
+        # 基于 31 章词表重算后，apply_bchapters 幂等补回新章与题映射。
+        from seed.add_bchapters import apply_bchapters
+        n_ch, n_q = apply_bchapters(db)
+        if n_ch or n_q:
+            print(f"[seed] 补章恢复: 新增章节 {n_ch}，题归位 {n_q}")
         db.commit()
     except Exception as e:  # noqa: BLE001
         print(f"[seed] 课程资产恢复跳过（不影响演示种子）: {e}")
