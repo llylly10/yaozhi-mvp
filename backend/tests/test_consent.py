@@ -49,7 +49,7 @@ def consent(uid: str) -> None:
 
 
 def first_question_id(uid: str) -> str:
-    qs = client.get(f"/assessment/{uid}").json()["questions"]
+    qs = client.get(f"/users/{uid}/assessment").json()["questions"]
     return qs[0]["id"]
 
 
@@ -92,9 +92,9 @@ def test_access_blocked_after_withdraw():
     assert client.post("/attempts", json={
         "user_id": uid, "question_id": qid, "selected_option": "A",
         "idempotency_key": f"ivk2-{uuid.uuid4().hex[:8]}"}).status_code == 403
-    assert client.get(f"/learning-plan/{uid}").status_code == 403
+    assert client.get(f"/users/{uid}/learning-plan").status_code == 403
     assert client.get(f"/users/{uid}/profile-summary").status_code == 403
-    assert client.get(f"/mastery/me?user_id={uid}").status_code == 403
+    assert client.get(f"/users/{uid}/mastery").status_code == 403
 
 
 def test_reconsent_purges_old_data():

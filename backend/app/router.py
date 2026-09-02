@@ -351,7 +351,7 @@ def diagnosis_feedback(session_id: str, body: FeedbackIn, db: Session = Depends(
 
 # ---------- 学习路径 / 学习材料 / 迁移复测 ----------
 
-@router.get("/learning-plan/{user_id}")
+@router.get("/users/{user_id}/learning-plan")
 def learning_plan(user_id: str, db: Session = Depends(get_db)):
     """规则生成的学习路径（v1.1 §12.2）：按掌握状态排序薄弱项，每项生成【学材料 → 练习】任务对。"""
     _active_user(user_id, db)
@@ -418,7 +418,7 @@ def get_retest(training_id: str, db: Session = Depends(get_db)):
             if q.id not in answered]
     pool = [q for q in pool if q.id not in answered and q.id not in trained]
     picked = pool[:2]
-    return {"retest_id": f"rt-{ts.id}", "questions": [
+    return {"training_id": ts.id, "questions": [
         {"id": q.id, "stem": q.stem, "options": q.options} for q in picked]}
 
 
@@ -450,13 +450,13 @@ def submit_retest(training_id: str, body: RetestSubmitIn, db: Session = Depends(
                        "retest_passed" if passed else "retest_failed")
     db.commit()
     audit(db, "system", "retest.completed", ts.id, passed=passed, correct=correct, total=total)
-    return {"retest_id": f"rt-{ts.id}", "passed": passed,
-            "correct": correct, "total": total, "mastery_state": None}
+    return {"training_id": ts.id, "passed": passed,
+            "correct": correct, "total": total}
 
 
 # ---------- 摸底测试与画像 ----------
 
-@router.get("/assessment/{user_id}")
+@router.get("/users/{user_id}/assessment")
 def get_assessment(user_id: str, db: Session = Depends(get_db)):
     """摸底卷：取 5 道诊断题（按 code 排序取前 5）。"""
     _active_user(user_id, db)
@@ -467,7 +467,7 @@ def get_assessment(user_id: str, db: Session = Depends(get_db)):
     return {"questions": [{"id": q.id, "code": q.code, "stem": q.stem, "options": q.options} for q in picked]}
 
 
-@router.post("/assessment/{user_id}/submit")
+@router.post("/users/{user_id}/assessment/submit")
 def submit_assessment(user_id: str, body: dict, db: Session = Depends(get_db)):
     """判分摸底卷：记录作答、输出域级正确率与薄弱项（画像数据源）。"""
     _active_user(user_id, db)
@@ -610,10 +610,10 @@ def submit_training(training_id: str, body: TrainingSubmitIn, db: Session = Depe
     mastery.transition(db, attempt.user_id, question.domain_id, m.category,
                        "training_passed" if ts.score >= 0.6 else "training_failed")
     db.commit()
-    return {"training_id": ts.id, "score": ts.score, "session_state": s.state}
+    return {"training_id": ts.id, "score": ts.score, "state": s.state}
 
 
-@router.get("/mastery/me")
+@router.get("/users/{user_id}/mastery")
 def my_mastery(user_id: str, db: Session = Depends(get_db)):
     from .models import MasteryState
     _active_user(user_id, db)

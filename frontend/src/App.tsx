@@ -885,7 +885,7 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
   onStep: (n: number) => void
 }) {
   const [selected, setSelected] = useState<string | null>(null)
-  const [retest, setRetest] = useState<{ retest_id: string; questions: { id: string; stem: string; options: { key: string; text: string }[] }[] } | null>(null)
+  const [retest, setRetest] = useState<{ training_id: string; questions: { id: string; stem: string; options: { key: string; text: string }[] }[] } | null>(null)
   const [retestPicks, setRetestPicks] = useState<Record<string, string>>({})
   const [retestResult, setRetestResult] = useState<{ passed: boolean; correct: number; total: number } | null>(null)
   const [rationale, setRationale] = useState('')
@@ -945,7 +945,7 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
   async function finishRetest() {
     if (!retest) return
     try {
-      const r = await api.submitRetest(retest.retest_id, retestPicks)
+      const r = await api.submitRetest(retest.training_id, retestPicks)
       setRetestResult({ passed: r.passed, correct: r.correct, total: r.total })
     } catch (e) { onError(String(e)) }
   }

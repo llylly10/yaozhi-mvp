@@ -79,7 +79,7 @@ def test_memory_card_submit_is_self_assessed_pass():
     r = client.post(f"/training/{t['training_id']}/submit", json={"answers": {}})
     assert r.status_code == 200, r.text
     assert r.json()["score"] == 1.0
-    assert r.json()["session_state"] == "retesting"
+    assert r.json()["state"] == "retesting"
 
 
 def test_confusion_pair_variant_mode_returns_three_questions():

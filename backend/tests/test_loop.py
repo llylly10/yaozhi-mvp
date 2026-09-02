@@ -143,7 +143,7 @@ def test_correct_answer_skips_diagnosis():
     assert s["is_correct"] is True
     assert s["state"] == "completed"
     assert s["card"] is None and s["followup"] is None
-    m = client.get("/mastery/me", params={"user_id": user}).json()
+    m = client.get(f"/users/{user}/mastery").json()
     assert all(x["state"] != "薄弱" for x in m), "答对不得标记薄弱"
 
 
@@ -162,9 +162,29 @@ def test_training_and_mastery_transition():
         db.close()
     r = client.post(f"/training/{training['training_id']}/submit", json={"answers": answers})
     assert r.status_code == 200
-    m = client.get("/mastery/me", params={"user_id": user}).json()
+    m = client.get(f"/users/{user}/mastery").json()
     states = {(x["category"], x["state"]) for x in m}
     assert ("概念混淆", "学习中") in states or ("概念混淆", "初步掌握") in states
+
+
+def test_retest_submit_uses_training_id():
+    """P0 回归：复测获取/提交统一用裸 UUID training_id（rt- 前缀已删），提交不得 404。"""
+    user = fresh_user()
+    out = attempt(user, "Q-ANS-02", "B")
+    training = client.get(f"/training/{out['session_id']}").json()
+    db = SessionLocal()
+    try:
+        answers = {q["id"]: db.get(Question, q["id"]).answer for q in training["questions"]}
+    finally:
+        db.close()
+    r = client.post(f"/training/{training['training_id']}/submit", json={"answers": answers})
+    assert r.status_code == 200 and r.json()["score"] >= 0.6
+    rt = client.get(f"/retest/{training['training_id']}").json()
+    assert rt["training_id"] == training["training_id"], "get_retest 应返回裸 UUID training_id"
+    assert not rt["training_id"].startswith("rt-"), "不得再返回 rt- 前缀"
+    rr = client.post(f"/retest/{rt['training_id']}/submit", json={"answers": {}}).json()
+    assert "passed" in rr and "correct" in rr and "total" in rr
+    assert "mastery_state" not in rr, "已删除 mastery_state 占位"
 
 
 def test_idempotent_replay():
@@ -198,7 +218,7 @@ def test_assessment_then_practice_no_500():
     user = fresh_user()
     qs = client.get("/questions?usage=diagnostic").json()
     answers = {q["id"]: q["options"][0]["key"] for q in qs[:5]}
-    assert client.post(f"/assessment/{user}/submit", json={"answers": answers}).status_code == 200
+    assert client.post(f"/users/{user}/assessment/submit", json={"answers": answers}).status_code == 200
     q1 = next(q for q in qs if q["code"] == "Q-ANS-01")
     out = client.post("/attempts", json={
         "user_id": user, "question_id": q1["id"], "selected_option": "A",

@@ -21,19 +21,19 @@ export const api = {
 
   wrongBook: (userId: string) => fetch(`/api/users/${userId}/wrong-book`).then(handle),
 
-  mastery: (userId: string) => fetch(`/api/mastery/me?user_id=${userId}`).then(handle),
+  mastery: (userId: string) => fetch(`/api/users/${userId}/mastery`).then(handle),
 
-  assessment: (userId: string) => fetch(`/api/assessment/${userId}`).then(handle),
+  assessment: (userId: string) => fetch(`/api/users/${userId}/assessment`).then(handle),
 
   submitAssessment: (userId: string, answers: Record<string, string>) =>
-    fetch(`/api/assessment/${userId}/submit`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answers }) }).then(handle),
+    fetch(`/api/users/${userId}/assessment/submit`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answers }) }).then(handle),
 
   profileSummary: (userId: string) => fetch(`/api/users/${userId}/profile-summary`).then(handle),
 
   feedback: (sessionId: string, matches: boolean) =>
     fetch(`/api/diagnoses/${sessionId}/feedback`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ matches }) }).then(handle),
 
-  learningPlan: (userId: string) => fetch(`/api/learning-plan/${userId}`).then(handle),
+  learningPlan: (userId: string) => fetch(`/api/users/${userId}/learning-plan`).then(handle),
 
   questionAnalysis: (questionId: string) => fetch(`/api/questions/${questionId}/analysis`).then(handle),
 
