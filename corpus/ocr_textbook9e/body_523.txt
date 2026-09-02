@@ -1,0 +1,116 @@
+capacity-limited rate process
+canagliflozin 309
+carbidopa  151
+candesartan 181
+calcium channel blocker  177
+calcineurin inhibitor 273
+butorphanol  131
+budesonide
+breast cancer resistance protein
+brain/blood distribution coefficient
+brain natriuretic peptide  210
+blood-eye barrier
+blood/gas distribution coefficient
+bleomycin  469
+carbamazepine 118
+calcitonin gene related peptide
+butylcholinesterase
+butenafine 441
+buprenorphine 130
+bupivacaine
+bumetanide
+bucinnazine
+bradykinin 285
+bortezomib 477
+blood-brain barrier 14,98
+bismuth potassium citrate
+biochemical antagonism
+carbocisteine
+carbimazole 313
+carbenicillin  399
+carbapenem  402
+canrenone
+calcitonin 341
+bromocriptine
+bromhexine
+brivudine
+bosentan
+captopril
+buspirone
+bivalirudin
+bipolar disorder  100,138
+biotransformation 14
+carbachol
+bioavailability 25
+179
+157
+190,287
+113,147,285
+253
+450
+1 374
+133
+：93
+246
+352
+354
+354
+151
+14
+143
+363
+176
+158
+158
+cefozopran 401
+cefoperazone 401
+cefonicid 400
+cefminox  401
+cefmenoxime 401
+cefetamet pivoxil  401
+cefditoren pivoxil  401
+cefbuperazone 401
+cefathiamidine 400
+catechol-O-methyltransferase
+caspofungin 435,441
+ceftobiprole 401
+ceftibuten 401
+cefteram pivoxil 401
+cefpodoxime proxetil  401
+cefpimizole 401
+cefoxitin 402
+cefotiam 400
+cefotaxime 401
+cefmetazole 402
+cefepime 401
+cefazolin
+cefamandole 400
+cefadroxil  400
+cefaclor 400
+carvedilol  86,185
+carumonan  403
+carrier-mediated transport
+carboplatin  468
+ceftezole 400
+cefroxadine 400
+cefprozil  400
+cefpirome 401
+cefotiam hexetil
+cefoselis  401
+cefodizime  401
+cefixime 401
+cefdinir 401
+cefuzonam 401
+ceftizoxime 401
+ceftazidime 401
+ceftaroline 401
+cefuroxime 400
+ceftriaxone 401
+cefuroxime axetil
+carbonic anhydrase 246
+1400
+1400
+400
+51,152
+英文名词索引
+507

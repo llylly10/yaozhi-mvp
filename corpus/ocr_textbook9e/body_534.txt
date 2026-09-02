@@ -1,0 +1,125 @@
+tissue type plasminogen activator,t-PA 377
+323
+317
+thyrotropin releasing hormone
+thyroid stimulating hormone
+transmembrane transport 7
+trapping mechanism 396
+351
+triamcinolone 294,352
+415,416
+therapeutic effect  30
+311
+415,417
+379
+tiotropium bromide
+tocolytic drug  332
+246,255
+261
+theophylline 350
+therapeutic index
+thyroid hormone3
+433
+tranexamic acid 
+266
+trastuzumab 476
+thiamazole 313
+413
+376
+torasemide 246
+topiramate  120
+480
+tofacitinib  267
+triamterene  246
+thiouracil  313
+topotecan 469
+toxic effect  30
+146
+tinidazole 460
+376
+toxic reaction  2
+399
+378
+thromboxane
+trazodone 145
+thiourea 313
+tibolone 340
+tirofiban 377
+tolazoline 81
+thalidomide 
+tetracycline 
+tocilizumab 2
+tramadol  133
+tobramycin
+tigecycline
+ticlopidine
+tianeptine 1
+toremifene 
+ticagrelor 
+ticarcillin 3
+thrombin
+tolerance
+tolvaptan
+toxicology
+timolol  
+149
+steady-state plasma concentration
+substantia nigra pars compacta
+target-controlled infusion 160
+413,415,431
+425
+subarachnoid anesthesia  
+343
+sulfamethoxazole  424
+sulfasalazine 265,425
+英文名词索引
+symptomatic treatment
+sulfacetamide sodium
+synaptic transmission
+329,479
+temozolomide  467 -
+terbinafine 435,440
+69
+strontium ranelate
+sympathetic nerve
+telithromycin 410
+77,349
+streptokinase  377
+sulfadiazine 424
+succinylcholine 
+sulfonamide : 421
+surface anesthesia
+sumatriptan 284
+273
+teicoplanin  403
+403
+telmisartan  181
+sulfotransferase
+342
+403
+363
+streptomycin
+temocillin  400
+sunitinib 476
+tenofovir 447
+sulpiride 140
+43
+363
+terazosin  184
+tacrolimus6
+teriparatide 3
+tetracaine 93
+stroke 168
+synergism
+tazobactam
+symport 9
+sucralfate 
+sulbactam
+terbutaline 
+tamoxifen
+teprenone
+synapse $
+29
+target 2
+518
+tabun

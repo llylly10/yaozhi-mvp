@@ -1,0 +1,106 @@
+ozagrel 375
+ovastatin 238
+oxytocin 319,331
+oxacephem 403
+oxytetracycline  415
+oxyphencyclimine 63
+oxymetazoline 76
+oxybutynin 63
+oxcarbazepine
+oxaliplatin 468
+oxacillin 398
+otamixaban 374
+oseltamivir 443
+oxyphenonium bromide
+oxycodone130
+osmotic diuretics
+orlistat  344
+organic anion transporter  9
+off-target toxicity
+organophosphate 66
+orciprenaline 77
+opioid receptor  124
+open one compartment model
+omapatrilat 190
+ofloxacin 422
+nystatin 435,437
+nuclear factor of activated T, NFAT 273
+organic anion transporting polypeptide
+open two compartment model
+nucleoside reverse transcriptase inhibitor  445
+noscapine  353
+norvancomycin 403
+norgestrel 330
+omeprazole
+norepinephrine 75
+noradrenergic nerve
+norethisterone
+noradrenaline 48,75
+noradrenaline reuptake inhibitor  142
+nonsteroidal anti-inflammatory drug, NSAID  258
+ondansetron
+non-nucleoside reverse transcriptase inhibitor  445
+nonlinear kinetics  20
+nondepolarizing muscular relaxant
+1285,367
+359
+119
+330
+246
+29
+46
+22
+.70
+10
+P-glycoprotein
+penicillin binding protein 395
+pharmacokinetic parameter 24
+peripheral compartment  22
+penicillin resistant Streptococcus pneumoniae  404
+phase II reaction 14
+pharmacology
+pharmacological effect  30
+pharmacological antagonism
+pharmacokinetics 2,7
+pharmacokinetic model  22
+perampanel  121
+peptic ulcer 358
+pentoxyverine  353
+pentazocine 134
+penicillin 397
+penicillin V 398
+pemetrexed disodium 472
+passive transport  8
+partial agonist  39
+paroxetine 144,285
+paromomycin 460
+parasympathetic nerve 46
+phase I reaction 14
+pharmacokinetic-pharmacodynamic model
+pethidine 131
+permissive action
+peripheral nervous system
+peramivir  444
+penehyclidine 63
+penciclovir  449
+pembrolizumab 479
+Parkinsonism
+Parkinson's disease, PD 99
+parathyroid hormone  248,342
+paralysis agitans  149
+para-aminosalicylic acid
+phenolphthalein  365
+partial fatty acid oxidation
+pharmacodynamics
+panipenem  402
+palonosetron 367
+phenobarbital 119
+paclitaxel  473
+149
+298
+431
+45
+43
+233
+英文名词索引
+515

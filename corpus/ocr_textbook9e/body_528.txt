@@ -1,0 +1,122 @@
+L-amino acid decarboxylase  150
+63,351
+229
+301,435,439
+isosorbide mononitrate2
+isavuconazole 435,439
+229
+391
+iron supplement  379
+itraconazole 435,439
+isoprenaline 76,348
+ivabradine 223,234
+lamivudine 446,450
+ipratropium bromide
+isosorbide dinitrate
+lactulose 365,368
+lateral gene transfer 
+379
+iron sucrose  379
+267
+379
+135
+407
+352
+215
+lacosamide  120
+ipriflavone 341
+kanamycin 413
+118
+irinotecan 470
+josamycin 407
+irbesartan 181
+159
+190
+lacidipine 183
+160
+iron sorbitex 
+427
+ketoconazole
+ion trapping 8
+Janus kinase 2
+latamoxef 403
+iron dextran
+185
+lanatoside K
+lamotrigine 1
+lappaconitine
+285
+kitasamycin
+iodine 314
+iodide 314
+ketanserin
+isoflurane
+isoniazid 
+ketamine 
+labetalolj
+labetolol  
+kallidin 
+ketotifen
+321
+immunomodulating drug 271,276
+immunoproliferative disease  272
+hypothalamic releasing hormone
+272
+immunosuppressive drug  271
+hypothermic anesthesia 162
+317
+induction of anesthesia  162
+158
+immunodeficiency disease
+158
+infiltration anesthesia  92
+187
+hypophyseal hormone 3
+inhalational anesthetic 1
+interleukin-2,IL-2 277
+idiosyncratic reaction  3
+42
+intravenous anesthetic
+390
+英文名词索引
+inositol triphosphate 
+individual variation 
+304
+interleukin-11 382
+intrinsic resistance3
+374
+176
+inverse agonist  39
+interleukin-1 265
+interleukin-6 265
+339
+intrinsic activity  3
+idraparinux  373
+246
+insulin receptor
+355
+interferon- 273
+idarucizumab  3
+313
+402
+infliximab  266
+hypertension J
+indinavir 448
+insomnia 107
+interferon 450
+286
+idazoxan 83
+icotinib 476
+imatinib 475
+indapamide 2
+indacaterol
+ibandronate
+382
+imipenem
+imidazole  
+insulin 303
+icatibant 
+inocybe
+in vivo
+inosine
+512
