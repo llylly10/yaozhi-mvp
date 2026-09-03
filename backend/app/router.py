@@ -278,10 +278,15 @@ def submit_attempt(body: AttemptIn, db: Session = Depends(get_db)):
     db.add(attempt)
     db.commit()
     if _is_tiku_bridged(question):
-        # 题库物化题（131 题 A1）：无错因标注 → 不做五级漏斗归因，答对/答错都给
+        # 题库物化题：无错因标注 → 不做五级漏斗归因，答对/答错都给
         # 解析型反馈（即时讲解）。不进 DiagnosisSession，避免空错因卡。
+        # 2026-09-03 章级闭环补口：日常练习答对/答错推进章级掌握度
+        # （practice_passed：薄弱→学习中→初步掌握；practice_failed：未评估/学习中→薄弱）。
+        # 此前该分支不写掌握度，摸底错题库题建出的章级薄弱永远卡在今日待办。
         audit(db, "system", "attempt.tiku_feedback", f"question:{question.id}",
               is_correct=attempt.is_correct)
+        mastery.transition(db, body.user_id, question.domain_id, None,
+                           "practice_passed" if attempt.is_correct else "practice_failed")
         db.commit()
         return {"attempt_id": attempt.id, "session_id": None, "state": "answered",
                 "is_correct": attempt.is_correct, "feedback": _tiku_feedback(db, question)}

@@ -240,3 +240,65 @@ def test_wrong_tiku_marks_chapter_level_weak():
                and x["category"] == q_rows[0]["category"]]
     types = {x["type"] for x in q_tasks}
     assert types == {"material", "practice"}, f"错因薄弱应发 学+练 任务对，实际 {types}"
+
+
+def test_chapter_weak_practice_loop_closes():
+    """章级薄弱闭环（2026-09-03 引擎补口）：摸底错题库题建章级薄弱后，
+    今日待办「练习」不再无出口卡死——
+      答对推进：薄弱→学习中→初步掌握；答错回退：学习中→薄弱；
+      未评估（未摸底直接练）答对→学习中、答错→薄弱；
+      已初步掌握以上不因练习继续推进、不因单次答错降级。
+    学习路径任务 state 徽标随之更新（薄弱红 / 学习中金 / 初步掌握绿）。
+    """
+    _rebuild()
+    uid = _fresh_user("bridge_loop01")
+    v = client.get(f"/users/{uid}/assessment").json()["questions"]
+    t_qs = [q for q in v if q["code"].startswith("T")]
+    assert len(t_qs) == 3
+    wrong_t = t_qs[0]
+    # 只答错 1 道题库题，其余全对 → 仅 1 个章级薄弱行，断言干净
+    answers = {}
+    for q in v:
+        ans = _answer_of(q["id"])
+        if q["id"] == wrong_t["id"]:
+            answers[q["id"]] = next(o["key"] for o in q["options"] if o["key"] != ans)
+        else:
+            answers[q["id"]] = ans
+    assert client.post(f"/users/{uid}/assessment/submit",
+                       json={"answers": answers}).status_code == 200
+    dom = wrong_t["domain_id"]
+
+    def state_of():
+        m = client.get(f"/users/{uid}/mastery").json()
+        return next(x["state"] for x in m if x["category"] is None and x["domain_id"] == dom)
+
+    def attempt(want_correct: bool, tag: str) -> None:
+        ans = _answer_of(wrong_t["id"])
+        picked = ans if want_correct else next(
+            o["key"] for o in wrong_t["options"] if o["key"] != ans)
+        r = client.post("/attempts", json={"user_id": uid, "question_id": wrong_t["id"],
+                        "selected_option": picked, "idempotency_key": f"chp-loop-{tag}"})
+        assert r.status_code == 202, r.text
+        body = r.json()
+        assert body["session_id"] is None and body["feedback"]["kind"] == "tiku", \
+            "题库题日常练习仍走解析反馈（无诊断会话）"
+
+    assert state_of() == "薄弱", "摸底答错题库题应先建章级薄弱"
+    plan = client.get(f"/users/{uid}/learning-plan").json()["tasks"]
+    assert any(x["domain_id"] == dom and x["type"] == "practice" for x in plan), \
+        "章级薄弱应在今日待办有练习任务"
+    attempt(True, "p1")     # 薄弱 → 学习中
+    assert state_of() == "学习中"
+    attempt(False, "f1")    # 学习中 → 薄弱（回退）
+    assert state_of() == "薄弱"
+    attempt(True, "p2")     # 薄弱 → 学习中
+    assert state_of() == "学习中"
+    attempt(True, "p3")     # 学习中 → 初步掌握
+    assert state_of() == "初步掌握"
+    attempt(False, "f2")    # 初步掌握不因单次答错降级（保守）
+    assert state_of() == "初步掌握"
+    plan2 = client.get(f"/users/{uid}/learning-plan").json()["tasks"]
+    t_tasks = [x for x in plan2 if x["domain_id"] == dom]
+    assert t_tasks and all(x["state"] == "初步掌握" for x in t_tasks), \
+        f"学习路径任务 state 应随推进更新为初步掌握，实际 {t_tasks}"
+
