@@ -132,8 +132,11 @@ export default function App() {
                 onStep={() => {}}
                 onExit={() => { setScreen('list'); setActiveQuestion(null); setDiagnosis(null); setView('todo') }} />
             )}
-            {screen === 'profile' && userId && (view === 'wrongbook' || view === 'profile') && (
-              <Profile key={view} userId={userId} />
+            {screen === 'profile' && userId && view === 'profile' && (
+              <Profile key="profile" userId={userId} />
+            )}
+            {screen === 'profile' && userId && view === 'wrongbook' && (
+              <WrongBook key="wrongbook" userId={userId} />
             )}
 
           </AnimatePresence>
@@ -805,18 +808,16 @@ type WrongRow = {
 
 function Profile({ userId }: { userId: string }) {
   const [mastery, setMastery] = useState<MasteryRow[] | null>(null)
-  const [wrong, setWrong] = useState<WrongRow[] | null>(null)
 
   useEffect(() => { window.scrollTo(0, 0) }, [])
   useEffect(() => {
     api.mastery(userId).then(setMastery).catch(() => setMastery([]))
-    api.wrongBook(userId).then(setWrong).catch(() => setWrong([]))
   }, [userId])
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <p className="text-xs font-semibold tracking-[0.18em] text-gold">学习档案</p>
-      <h2 className="display mt-2 text-[26px]">你的错因画像与错题本</h2>
+      <h2 className="display mt-2 text-[26px]">你的错因画像</h2>
       <p className="mt-2 text-sm text-ink-2">演示账号 {userId.slice(0, 8)} · 数据仅存于校内演示环境</p>
 
       <div className="mt-6 space-y-8">
@@ -836,7 +837,26 @@ function Profile({ userId }: { userId: string }) {
             </div>
           )}
         </section>
+      </div>
+    </motion.div>
+  )
+}
 
+function WrongBook({ userId }: { userId: string }) {
+  const [wrong, setWrong] = useState<WrongRow[] | null>(null)
+
+  useEffect(() => { window.scrollTo(0, 0) }, [])
+  useEffect(() => {
+    api.wrongBook(userId).then(setWrong).catch(() => setWrong([]))
+  }, [userId])
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <p className="text-xs font-semibold tracking-[0.18em] text-gold">错题本</p>
+      <h2 className="display mt-2 text-[26px]">按错因归档的错题</h2>
+      <p className="mt-2 text-sm text-ink-2">演示账号 {userId.slice(0, 8)} · 数据仅存于校内演示环境</p>
+
+      <div className="mt-6 space-y-8">
         <section>
           <h3 className="mb-3.5 flex items-center gap-2 text-sm font-semibold"><span className="capsule gold" />错题本 · 按错因归档</h3>
           {!wrong && <div className="skeleton h-20" />}
