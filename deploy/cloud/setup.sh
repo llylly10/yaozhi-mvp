@@ -61,10 +61,19 @@ npm config set registry https://registry.npmjs.org
 npm config set fund false
 npm config set audit false
 
-echo "==> [3/4] 构建前端静态站"
+echo "==> [3/4] 构建前端静态站（dist/ 已存在则跳过，避免服务器上 rolldown native binding 问题）"
 cd "$REPO_ROOT/frontend"
-npm install
-npm run build
+if [ -f dist/index.html ]; then
+  echo "    ✅ dist/index.html 已存在, 跳过构建（前端在本机构建, 服务器只起 nginx 提供静态）"
+else
+  echo "    ⚠ dist/ 不存在, 尝试本地构建..."
+  npm install
+  npm run build || {
+    echo "    ❌ 本地构建失败（rolldown native binding 等问题）";
+    echo "    解决: 在本机构建后, 将 frontend/dist/ 加入 tarball 重传";
+    exit 1;
+  }
+fi
 cd "$REPO_ROOT"
 
 echo "==> [4/4] 启动后端 + nginx（sudo docker）"
