@@ -27,13 +27,15 @@ const Cconst = 2 * Math.PI * Rconst
 function stepIndex(screen: Screen, diagnosis: Diagnosis | null): number {
   const map: Record<Screen, number> = {
     register: 0, consent: 1, goal: 2, assessment: 3, portrait: 4,
-    list: 5, flow: 6, profile: 10,
+    list: 5, flow: 7, profile: 12,
     material: 6,
   }
   if (screen !== 'flow') return map[screen]
-  if (!diagnosis) return 6
-  if (diagnosis.state === 'followup_required') return 8
-  if (diagnosis.state === 'training' || diagnosis.state === 'retesting') return 9
+  if (!diagnosis) return 7
+  if (diagnosis.state === 'diagnosed') return 8
+  if (diagnosis.state === 'followup_required') return 9
+  if (diagnosis.state === 'training') return 10
+  if (diagnosis.state === 'retesting') return 11
   return 7
 }
 
@@ -943,14 +945,14 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
   }
 
   async function finishTraining() {
-    if (!training) return
+    if (!training || !diagnosis) return
     try {
       const r = await api.submitTraining(training.training_id, trainingPicks)
       setTrainingResult({ score: r.score })
       if (r.score >= 0.6) {
         const rt = await api.retest(training.training_id)
         setRetest(rt)
-        onStep(11)
+        pushDiagnosis(await api.diagnosis(diagnosis.session_id))
       }
     } catch (e) { onError(String(e)) }
   }
