@@ -27,23 +27,24 @@ fi
 if ! sudo docker compose version >/dev/null 2>&1; then
   echo "    需要 docker compose 插件，请先安装 docker-ce 完整版"; exit 1
 fi
-# 配 registry-mirrors: 让 dockerd 拉镜像走阿里云加速器 (避免 IPv6 失败)
-if [ ! -f /etc/docker/daemon.json ]; then
-  sudo mkdir -p /etc/docker
-  sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
+# 配 registry-mirrors: 让 dockerd 拉镜像走 https 代理 (避免 IPv6 失败)
+# 注: 之前用 docker.mirrors.ustc.edu.cn 因 DNS 解析不到挂了, 改用 dockerproxy.com 公开代理
+# 强制覆盖 (脚本可重跑)
+sudo mkdir -p /etc/docker
+sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
 {
   "registry-mirrors": [
-    "https://docker.mirrors.ustc.edu.cn",
-    "https://mirror.ccs.tencentyun.com",
-    "https://registry.docker-cn.com"
+    "https://dockerproxy.com",
+    "https://docker.m.daocloud.io"
   ],
   "ip-forward": true,
-  "iptables": false
+  "iptables": false,
+  "dns": ["223.5.5.5", "8.8.8.8"]
 }
 JSON
-  sudo systemctl restart docker || sudo service docker restart || true
-  sleep 2
-fi
+sudo systemctl restart docker || sudo service docker restart || true
+sleep 3
+echo "    daemon.json:" && sudo cat /etc/docker/daemon.json
 
 echo "==> [2/4] 安装 Node.js 22（构建前端用；新服务器通常没有）"
 if ! command -v node >/dev/null 2>&1 || [ "$(node -v 2>/dev/null | cut -d. -f1 | tr -d v)" -lt 18 ]; then
