@@ -12,7 +12,8 @@
 说明：脚本只读 SQLite 题库（取正确答案），用于构造"确定性的演示路径"
       （摸底答错 2 题 → 练习答错种子标注题 → 出诊断卡 → 训练 → 复测通过），不写业务库。
       2026-09-03 题库桥接后：练习主链路挑 Q- 标注题（答错进错因诊断）；
-      另新增 T 题库原题"解析反馈"步（无错因标注 → 不建会话不硬归因，诚实口径）。
+      另新增 T 题库原题"答错建诊断会话"步（无 distractor_signals 标注 → 答错走通用四分类
+      归因轻量诊断会话：一级错因 + 证据等级低 + 可细化，绝不捏造具体错点；答对只给解析反馈）。
 """
 from __future__ import annotations
 
@@ -159,7 +160,8 @@ def main() -> int:
     if not check(9, "提交作答→诊断会话", bool(sid), str(r)[:160]):
         return 1
 
-    # 10 题库原题（T-，无错因标注）→ 解析型反馈：不建会话不硬归因（诚实口径红线）
+    # 10 题库原题（T-，无错因标注）答错 → 解析型反馈 + 轻量诊断会话（通用四分类归因，
+    #    证据等级低、可细化）：闭合 练→诊断→训练→复测。答对仍只给解析反馈。
     tiku_pool = [q for q in qlist if q["code"].startswith("T")]
     tb = tiku_pool[0]["id"] if tiku_pool else None
     if tb:
@@ -168,12 +170,12 @@ def main() -> int:
             "user_id": uid, "question_id": tb, "selected_option": twmap[tb],
             "idempotency_key": f"smoke-tiku-{int(time.time())}"})
         fb = r.get("feedback") or {}
-        ok10 = st == 202 and r.get("session_id") is None \
-            and r.get("state") == "answered" and fb.get("kind") == "tiku"
-        check(10, "题库原题→解析反馈", ok10,
-              f"无诊断会话，解析 {len(fb.get('analysis') or '')} 字 / 来源 {fb.get('source', '?')[:40]}")
+        ok10 = st == 202 and r.get("session_id") is not None \
+            and r.get("state") == "diagnosed" and fb.get("kind") == "tiku"
+        check(10, "题库原题→答错建诊断会话", ok10,
+              f"会话已建(state=diagnosed)，解析 {len(fb.get('analysis') or '')} 字 / 来源 {fb.get('source', '?')[:40]}")
     else:
-        print("  ⏭  10 题库原题→解析反馈（无 T 题库题，跳过）")
+        print("  ⏭  10 题库原题→答错建诊断会话（无 T 题库题，跳过）")
         PASS += 1
 
     # 11 诊断卡
