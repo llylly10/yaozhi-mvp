@@ -65,6 +65,11 @@ def test_contentize_survives_rebuild():
         assert ch6_pub == 46, f"CH6 published 应 46，实际 {ch6_pub}"
         assert tagged == total, f"规则初标应覆盖全部 {total} 题，实际 {tagged}"
         assert chs >= 35, f"章节应 >=35（含补章），实际 {chs}"
+        # P2a: CH3 内容化批(19题) 重放后保留
+        ch3_pub = db.query(TikuQuestion).filter(
+            TikuQuestion.chapter_ref == "CH3",
+            TikuQuestion.review_status == "published").count()
+        assert ch3_pub == 19, f"CH3 published 应 19，实际 {ch3_pub}"
         # 4 内容化列必须存在于表
         cols = {c["name"] for c in inspect(engine).get_columns("tiku_questions")}
         for need in ("analysis", "cognitive_level", "difficulty", "source_ref"):
@@ -91,5 +96,23 @@ def test_contentize_idempotent_reseed():
         assert total == 786
         assert ch6_an == 46 and ch6_pub == 46, "幂等重放后 CH6 内容不得丢失"
         assert tagged == 786, "幂等重放不得重复计数/清空初标"
+    finally:
+        db.close()
+
+
+def test_a_fixes_survive_rebuild():
+    """A 类人工修正 4 题不随 reset-demo 丢失（词表启发优先级 < 人工判定）。"""
+    _rebuild()
+    db = SessionLocal()
+    try:
+        from seed.apply_amapping import FIXES
+        bad = []
+        for (p, q), target in FIXES.items():
+            row = db.query(TikuQuestion).filter_by(paper_no=p, qid=q).first()
+            if row is None:
+                bad.append(f"{p}-{q:03d}: 题不存在")
+            elif row.chapter_ref != target:
+                bad.append(f"{p}-{q:03d}: 应为 {target}，实际 {row.chapter_ref}")
+        assert not bad, "A 类修正被恢复链覆盖: " + "; ".join(bad)
     finally:
         db.close()

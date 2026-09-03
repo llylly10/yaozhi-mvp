@@ -28,6 +28,7 @@ MAT_DIR = r"D:\ceshi\corpus\course-materials"
 # 批注稿清单：后续 P2/P3 批在此追加 (chapter_ref, json文件名)
 BATCH_FILES = [
     ("CH6", "P1-CH6解析批注稿-20260903.json"),
+    ("CH3", "P2a-CH3解析批注稿-20260903.json"),
 ]
 
 COG_ANALYSIS_WORDS = re.compile(r"机制|为什么|药理基础|理由是|原因是")

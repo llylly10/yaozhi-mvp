@@ -299,6 +299,12 @@ def _restore_course_assets(db):
         n_ch, n_q = apply_bchapters(db)
         if n_ch or n_q:
             print(f"[seed] 补章恢复: 新增章节 {n_ch}，题归位 {n_q}")
+        # A 类人工修正 4 题不随 reset-demo 丢失：词表启发优先级低于人工判定，
+        # map_question 重算会把修正覆盖回错值（如 01-154 尼莫地平→CH3），此步强制回写。
+        from seed.apply_amapping import apply_a_fixes
+        n_a = apply_a_fixes(db)
+        if n_a:
+            print(f"[seed] A类修正恢复: {n_a} 题映射强制回写（人工判定优先级>词表）")
         db.commit()
         # 内容化成果（解析/认知层级/难度/来源）不随 reset-demo 丢失：重放批注稿。
         # 注：先 commit 章节映射，再跑 contentize（批注稿按 chapter_ref 定位）。
