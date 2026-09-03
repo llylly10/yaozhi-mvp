@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   CheckCircle, Warning, MagnifyingGlass, SkipForward, ArrowRight, Pill,
@@ -607,18 +607,25 @@ function Portrait({ result, onEnter }: { result: PortraitResult; onEnter: () => 
 /* ---------- 学习路径（今日待办） ---------- */
 
 type PlanTask = { type: 'material' | 'practice'; domain_id: string; domain: string; category: string | null; state: string; title: string }
+type DoneTask = { domain_id: string; domain: string; category: string | null; state: string; title: string }
 
 function LearningPathHome({ userId, onPick, onMaterial }: {
   userId: string; onPick: (q: Question) => void; onMaterial: (domainId: string) => void
 }) {
-  const [plan, setPlan] = useState<{ tasks: PlanTask[]; note: string } | null>(null)
+  const [plan, setPlan] = useState<{ tasks: PlanTask[]; done_tasks?: DoneTask[]; note: string } | null>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
 
-  useEffect(() => {
-    api.learningPlan(userId).then(setPlan).catch((e) => setError(String(e)))
-    api.questions().then(setQuestions).catch(() => {})
+  const load = useCallback(() => {
+    setRefreshing(true)
+    return Promise.all([
+      api.learningPlan(userId).then(setPlan).catch((e) => setError(String(e))),
+      api.questions().then(setQuestions).catch(() => {}),
+    ]).finally(() => setRefreshing(false))
   }, [userId])
+
+  useEffect(() => { load() }, [load])
 
   if (error) return <ErrorPanel message={error} />
   if (!plan) {
@@ -626,13 +633,26 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
   }
 
   const hasTasks = plan.tasks.length > 0
+  const doneTasks = plan.done_tasks ?? []
   return (
     <motion.div key="plan" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <p className="text-xs font-semibold tracking-[0.18em] text-gold">STEP 6 · 学习路径</p>
       <h2 className="display mt-2 text-[26px]">今日待办</h2>
-      <p className="mt-2 text-sm text-ink-2">{plan.note}</p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <p className="text-sm text-ink-2">{plan.note}</p>
+        <button onClick={() => load()} disabled={refreshing}
+          className="btn ml-auto items-center gap-1 rounded-full border border-line px-3 py-1 text-xs text-ink-3 hover:border-primary hover:text-primary">
+          <ClockCounterClockwise size={12} weight="bold" />{refreshing ? '刷新中…' : '刷新'}
+        </button>
+      </div>
+      {hasTasks || doneTasks.length > 0 ? (
+        <p className="mt-1 text-xs text-ink-3">
+          待完成 <span className="font-semibold text-cat-red">{plan.tasks.length}</span> 项 · 已完成{' '}
+          <span className="font-semibold text-ok">{doneTasks.length}</span> 项
+        </p>
+      ) : null}
 
-      {!hasTasks && (
+      {!hasTasks && doneTasks.length === 0 && (
         <div className="card mt-6 p-8 text-center">
           <p className="text-sm text-ink-2">当前没有薄弱项待办。</p>
           <p className="mt-1 text-xs text-ink-3">完成一次「作答 → 诊断 → 训练」后，路径会按你的错因画像自动生成。</p>
@@ -677,6 +697,25 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
               </div>
             </motion.div>
           ))}
+        </div>
+      )}
+
+      {doneTasks.length > 0 && (
+        <div className="mt-6">
+          <p className="mb-3 flex items-center gap-2 text-xs font-semibold text-ink-3">
+            <CheckCircle size={14} weight="fill" className="text-ok" />已完成
+          </p>
+          <div className="space-y-2.5">
+            {doneTasks.map((t, i) => (
+              <div key={t.domain_id + i} className="card flex items-center gap-3 p-4 opacity-75">
+                <span className="grid size-7 flex-none place-items-center rounded-full text-ok" style={{ background: 'var(--color-ok-soft)' }}>
+                  <CheckCircle size={15} weight="fill" />
+                </span>
+                <p className="text-sm text-ink-2 line-through">{t.title}</p>
+                <span className="ml-auto rounded-full px-2.5 py-0.5 text-[11px] font-medium text-ok" style={{ background: 'var(--color-ok-soft)' }}>掌握</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
       <p className="mt-6 text-xs text-ink-3">演示账号 {userId.slice(0, 8)} · 路径按「先学后练」规则生成 · 本系统不提供用药建议</p>
@@ -1392,21 +1431,13 @@ function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onE
         </motion.div>
       )}
 
-      {!diagnosis.is_correct && showFollowup && diagnosis.followup && (
+      {/* 追问对话记录：始终展示，提交后不随 followup 清空而整体消失 */}
+      {!diagnosis.is_correct && diagnosis.followup_count > 0 && (
         <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="card p-8">
-          <div className="mb-1 flex items-center justify-between">
-            <p className="flex items-center gap-2 text-xs font-semibold text-ink-3">
-              <span className="size-2 rounded-full bg-primary breath" />
-              定向追问 · 正在定位你的理解缺口
-            </p>
-            <div className="flex items-center gap-1.5">
-              {Array.from({ length: diagnosis.followup.turn_max }).map((_, i) => (
-                <span key={i} className={`size-1.5 rounded-full ${i < diagnosis.followup_count + 1 ? 'bg-primary' : 'bg-line'}`} />
-              ))}
-              <span className="ml-1 text-xs text-ink-3">第 {diagnosis.followup_count + 1} / {diagnosis.followup.turn_max} 轮</span>
-            </div>
-          </div>
-          <div className="mb-6 space-y-3">
+          <p className="mb-4 flex items-center gap-2 text-xs font-semibold text-ink-3">
+            <span className="size-2 rounded-full bg-primary" />定向追问记录 · 定位你的理解缺口
+          </p>
+          <div className="space-y-3">
             {diagnosis.turns.map((t, i) => (
               <div key={i} className={`flex ${t.who === 'student' ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[80%] rounded-2xl px-4.5 py-3 text-sm leading-relaxed
@@ -1417,10 +1448,35 @@ function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onE
                 </div>
               </div>
             ))}
-            <div className="flex justify-start">
-              <div className="max-w-[85%] rounded-2xl rounded-tl-sm border border-primary/40 bg-primary-soft px-4.5 py-3">
-                <p className="display text-[15px] leading-relaxed">{diagnosis.followup.question_text}</p>
-              </div>
+          </div>
+          {/* 追问已结束：明确给出 AI 结论，而不是让整段对话消失 */}
+          {!diagnosis.followup && diagnosis.card && (
+            <div className="mt-4 rounded-2xl rounded-tl-sm border border-line-2 bg-paper px-4 py-3 text-[13px] leading-relaxed text-ink-2">
+              {diagnosis.card.evidence_level === '高'
+                ? `追问已坐实归因「${diagnosis.card.misconception.category}」，证据等级提升为 高，可据此开具靶向训练。`
+                : `已根据你前 ${diagnosis.followup_count} 轮回答完成追问，当前归因维持为「${diagnosis.card.misconception.category}」，证据等级：低。可据此开具靶向训练，或稍后再细化。`}
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* 进行中的追问问题 + 作答 */}
+      {!diagnosis.is_correct && showFollowup && diagnosis.followup && (
+        <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="card p-8">
+          <div className="mb-4 flex items-center justify-between">
+            <p className="flex items-center gap-2 text-xs font-semibold text-ink-3">
+              <span className="size-2 rounded-full bg-primary breath" />药知向你提问
+            </p>
+            <div className="flex items-center gap-1.5">
+              {Array.from({ length: diagnosis.followup.turn_max }).map((_, i) => (
+                <span key={i} className={`size-1.5 rounded-full ${i < diagnosis.followup_count + 1 ? 'bg-primary' : 'bg-line'}`} />
+              ))}
+              <span className="ml-1 text-xs text-ink-3">第 {diagnosis.followup_count + 1} / {diagnosis.followup.turn_max} 轮</span>
+            </div>
+          </div>
+          <div className="mb-6 flex justify-start">
+            <div className="max-w-[85%] rounded-2xl rounded-tl-sm border border-primary/40 bg-primary-soft px-4.5 py-3">
+              <p className="display text-[15px] leading-relaxed">{diagnosis.followup.question_text}</p>
             </div>
           </div>
           {diagnosis.followup.options ? (
@@ -1442,7 +1498,7 @@ function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onE
               <SkipForward size={13} />跳过追问，维持低证据归因
             </button>
             <button onClick={() => setShowFollowup(false)}
-              className="btn text-[13px] text-ink-3 hover:text-ink">返回诊断卡</button>
+              className="btn text-[13px] text-ink-3 hover:text-ink">收起追问</button>
           </div>
         </motion.div>
       )}

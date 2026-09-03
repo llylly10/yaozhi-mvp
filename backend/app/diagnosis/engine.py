@@ -398,6 +398,9 @@ def start_training(db: Session, session: DiagnosisSession):
         db.add(TrainingSessionQuestion(training_session_id=ts.id, question_id=q.id, sequence_no=i))
     session.state = "training"
     audit(db, "system", "diagnosis.state", session.id, to="training", training_id=ts.id)
-    mastery.transition(db, attempt.user_id, question.domain_id, misconception.category, "training_started")
+    # 题库物化题（无干扰项标注）只维护章级掌握度（category=None）；
+    # 种子域诊断题维护错因级掌握度，让「今日待办」任务状态与闭环同步更新。
+    mastery_category = misconception.category if question.distractor_signals else None
+    mastery.transition(db, attempt.user_id, question.domain_id, mastery_category, "training_started")
     db.commit()
     return ts

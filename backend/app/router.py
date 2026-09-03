@@ -422,6 +422,7 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
     order = {"薄弱": 0, "学习中": 1, "初步掌握": 2}
     rows = db.execute(select(MasteryState).where(MasteryState.user_id == user_id)).scalars().all()
     weak = sorted([r for r in rows if r.state in order], key=lambda r: order[r.state])
+    done = [r for r in rows if r.state in ("掌握", "稳定掌握")]
     tasks = []
     for r in weak:
         domain = db.get(DiagnosticDomain, r.domain_id)
@@ -434,7 +435,17 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
         tasks.append({"type": "practice", "domain_id": r.domain_id, "domain": domain.name,
                       "category": r.category, "state": r.state,
                       "title": f"练习：{domain.name}" + (f"（{r.category}）" if r.category else "")})
-    return {"tasks": tasks, "note": "路径按「先学后练」规则生成，可跳过；AI 个性化排序为 Post-MVP"}
+    # 已完成项：明确返回「已完成」，前端打勾展示，避免掌握态被静默过滤造成"学习后无反馈"（用户反馈）
+    done_tasks = []
+    for r in done:
+        domain = db.get(DiagnosticDomain, r.domain_id)
+        if not domain:
+            continue
+        done_tasks.append({"domain_id": r.domain_id, "domain": domain.name, "category": r.category,
+                           "state": r.state,
+                           "title": f"已完成：{domain.name}" + (f"（{r.category}）" if r.category else "")})
+    return {"tasks": tasks, "done_tasks": done_tasks,
+            "note": "路径按「先学后练」规则生成，可跳过；AI 个性化排序为 Post-MVP"}
 
 
 @router.get("/materials/{domain_id}")
@@ -508,7 +519,9 @@ def submit_retest(training_id: str, body: RetestSubmitIn, db: Session = Depends(
     attempt2_user = attempt.user_id
     m = db.get(Misconception, s.hypothesis_id)
     s.state = "completed"
-    mastery.transition(db, attempt2_user, question.domain_id, m.category,
+    # 题库物化题复测事件同步到章级掌握度（category=None），与训练事件一致。
+    mastery_category = m.category if question.distractor_signals else None
+    mastery.transition(db, attempt2_user, question.domain_id, mastery_category,
                        "retest_passed" if passed else "retest_failed")
     db.commit()
     audit(db, "system", "retest.completed", ts.id, passed=passed, correct=correct, total=total)
@@ -703,7 +716,10 @@ def submit_training(training_id: str, body: TrainingSubmitIn, db: Session = Depe
     attempt = db.get(Attempt, s.attempt_id)
     question = db.get(Question, attempt.question_id)
     m = db.get(Misconception, s.hypothesis_id)
-    mastery.transition(db, attempt.user_id, question.domain_id, m.category,
+    # 题库物化题只写章级掌握度（category=None），与 router.submitAttempt 的 practice_failed 同维度，
+    # 避免复测通过后「今日待办」的章节任务仍卡在薄弱。
+    mastery_category = m.category if question.distractor_signals else None
+    mastery.transition(db, attempt.user_id, question.domain_id, mastery_category,
                        "training_passed" if ts.score >= 0.6 else "training_failed")
     db.commit()
     return {"training_id": ts.id, "score": ts.score, "state": s.state}
