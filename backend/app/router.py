@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from typing import Literal
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -194,7 +195,10 @@ class AttemptIn(BaseModel):
     question_id: str
     selected_option: str
     rationale: str | None = None
-    confidence: str | None = None
+    # 学生自评置信度：与 Attempt.confidence 枚举（高/中/低）同域。
+    # 必须在此收口——否则非法值会写库成功，之后任何读取该行作答的请求都会
+    # 触发 SQLAlchemy LookupError → 500，诊断卡将永久不可用（演示事故）。
+    confidence: Literal["高", "中", "低"] | None = None
     time_spent: int | None = None
     idempotency_key: str
 
