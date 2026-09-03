@@ -1,3 +1,4 @@
+import random
 import time
 import uuid
 from datetime import timedelta
@@ -21,6 +22,33 @@ router = APIRouter()
 
 # US-0 AC4：撤回同意后 24h 内逻辑删除、30 天内物理删除
 PURGE_AFTER_DAYS = 30
+
+
+def _is_tiku_bridged(q: Question | None) -> bool:
+    """题库物化题判定：code 统一 T<paper>-<qid>（seed_tiku_bridge 物化，无错因标注）。"""
+    return q is not None and (q.code or "").startswith("T")
+
+
+def _q_public(db: Session, q: Question) -> dict:
+    """题目公共序列化：统一补章信息（前端题头/摸底展示用）。"""
+    d = db.get(DiagnosticDomain, q.domain_id) if q.domain_id else None
+    return {"id": q.id, "code": q.code, "stem": q.stem, "options": q.options,
+            "type": q.type, "domain_id": q.domain_id,
+            "chapter": d.chapter_ref if d else "",
+            "chapter_name": d.name if d else ""}
+
+
+def _tiku_feedback(db: Session, q: Question) -> dict:
+    """题库物化题的解析型反馈（题目绑定证据，ADR-02 / 9/5 冻结口径）：
+    答错不归因到错因（无标注不硬猜），给解析 + 教材锚点来源 + 章信息。"""
+    ev = db.execute(select(QuestionEvidence).where(
+        QuestionEvidence.question_id == q.id,
+        QuestionEvidence.support_type == "解析")).scalar_one_or_none()
+    d = db.get(DiagnosticDomain, q.domain_id) if q.domain_id else None
+    return {"kind": "tiku", "analysis": ev.content_text if ev else "",
+            "source": ev.evidence_chunk_id if ev else "",
+            "chapter_ref": d.chapter_ref if d else "",
+            "chapter_name": d.name if d else ""}
 
 
 def _active_user(user_id: str, db: Session) -> DemoUser:
@@ -232,6 +260,11 @@ def submit_attempt(body: AttemptIn, db: Session = Depends(get_db)):
     if dup:
         session = db.execute(select(DiagnosisSession).where(
             DiagnosisSession.attempt_id == dup.id)).scalar_one_or_none()
+        dq = db.get(Question, dup.question_id)
+        if _is_tiku_bridged(dq):  # 幂等重放：题库题无会话，补反馈
+            return {"attempt_id": dup.id, "session_id": None, "state": "answered",
+                    "is_correct": dup.is_correct, "feedback": _tiku_feedback(db, dq),
+                    "idempotent_replay": True}
         return {"attempt_id": dup.id, "session_id": session.id if session else None,
                 "state": session.state if session else None, "idempotent_replay": True}
     question = db.get(Question, body.question_id)
@@ -244,6 +277,14 @@ def submit_attempt(body: AttemptIn, db: Session = Depends(get_db)):
                       time_spent=body.time_spent, idempotency_key=body.idempotency_key)
     db.add(attempt)
     db.commit()
+    if _is_tiku_bridged(question):
+        # 题库物化题（131 题 A1）：无错因标注 → 不做五级漏斗归因，答对/答错都给
+        # 解析型反馈（即时讲解）。不进 DiagnosisSession，避免空错因卡。
+        audit(db, "system", "attempt.tiku_feedback", f"question:{question.id}",
+              is_correct=attempt.is_correct)
+        db.commit()
+        return {"attempt_id": attempt.id, "session_id": None, "state": "answered",
+                "is_correct": attempt.is_correct, "feedback": _tiku_feedback(db, question)}
     # 答对不进诊断（US-2 前提是"做错"）：直接完成会话，不产出错因卡、不写薄弱
     if attempt.is_correct:
         session = DiagnosisSession(attempt_id=attempt.id, state="completed", evidence_level=None)
@@ -357,7 +398,11 @@ def diagnosis_feedback(session_id: str, body: FeedbackIn, db: Session = Depends(
 
 @router.get("/users/{user_id}/learning-plan")
 def learning_plan(user_id: str, db: Session = Depends(get_db)):
-    """规则生成的学习路径（v1.1 §12.2）：按掌握状态排序薄弱项，每项生成【学材料 → 练习】任务对。"""
+    """规则生成的学习路径（v1.1 §12.2）：按掌握状态排序薄弱项，每项生成【学材料 → 练习】任务对。
+
+    2026-09-03 题库接入：章级薄弱（category=None，题库题答错产生）只发练习任务——
+    章级诊断域暂无整理的学习材料（chain/混淆对资产在种子域），不发空材料任务。
+    """
     _active_user(user_id, db)
     from .models import MasteryState
     order = {"薄弱": 0, "学习中": 1, "初步掌握": 2}
@@ -368,7 +413,7 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
         domain = db.get(DiagnosticDomain, r.domain_id)
         if not domain:
             continue
-        if r.state == "薄弱":
+        if r.state == "薄弱" and r.category:
             tasks.append({"type": "material", "domain_id": r.domain_id, "domain": domain.name,
                           "category": r.category, "state": r.state,
                           "title": f"学习：{domain.name}" + (f"（{r.category}）" if r.category else "")})
@@ -459,20 +504,49 @@ def submit_retest(training_id: str, body: RetestSubmitIn, db: Session = Depends(
 
 # ---------- 摸底测试与画像 ----------
 
+ASSESS_TIKU_CHAPTERS = 3   # 题库题覆盖章数
+ASSESS_SEED_DIAG = 2       # 种子域诊断题数（有错因标注，答错可出完整诊断卡）
+
+
 @router.get("/users/{user_id}/assessment")
 def get_assessment(user_id: str, db: Session = Depends(get_db)):
-    """摸底卷：取 5 道诊断题（按 code 排序取前 5）。"""
+    """摸底卷（MVP 内容底座版）：真实题库 + 诊断域混卷。
+
+    配比：题库 published A1 物化题按章配额抽 3 题（每章 1 题，覆盖多个章节），
+    种子诊断域抽 2 题（该域带错因标注，答错进入完整错因诊断示范）。
+    同 user 同卷（random 以 user_id 为种子），不同用户不同卷；可复跑可回放。
+    """
     _active_user(user_id, db)
-    rows = db.execute(select(Question).where(
-        Question.usage == "diagnostic", Question.review_status == "published")
-        .order_by(Question.code)).scalars().all()
-    picked = rows[:5]
-    return {"questions": [{"id": q.id, "code": q.code, "stem": q.stem, "options": q.options} for q in picked]}
+    rng = random.Random(f"assess:{user_id}")
+    # 题库物化题（usage=diagnostic 且 code 以 T 开头）
+    tiku_qs = db.execute(select(Question).where(
+        Question.usage == "diagnostic", Question.review_status == "published",
+        Question.code.like("T%"))).scalars().all()
+    by_ch: dict = {}
+    for q in tiku_qs:
+        by_ch.setdefault(q.domain_id, []).append(q)
+    picked = []
+    chapters = list(by_ch.keys())
+    rng.shuffle(chapters)
+    for c in chapters[:ASSESS_TIKU_CHAPTERS]:
+        picked.append(rng.choice(by_ch[c]))
+    # 种子域诊断题（Q- 前缀 = 错因标注域）
+    seed_qs = db.execute(select(Question).where(
+        Question.usage == "diagnostic", Question.review_status == "published",
+        Question.code.like("Q-%"))).scalars().all()
+    picked += rng.sample(seed_qs, min(ASSESS_SEED_DIAG, len(seed_qs)))
+    rng.shuffle(picked)
+    return {"questions": [_q_public(db, q) for q in picked]}
 
 
 @router.post("/users/{user_id}/assessment/submit")
 def submit_assessment(user_id: str, body: dict, db: Session = Depends(get_db)):
-    """判分摸底卷：记录作答、输出域级正确率与薄弱项（画像数据源）。"""
+    """判分摸底卷：记录作答、输出域级正确率与薄弱项（画像数据源）。
+
+    薄弱语义（2026-09-03 题库接入后）：
+      - 种子诊断域题答错 → 按干扰项信号归因到错因类别（域级薄弱，驱动错因路径）
+      - 题库物化题答错 → 无错因标注，标**章级薄弱**（category=None，驱动章级练习）
+    """
     _active_user(user_id, db)
     answers: dict = body.get("answers", {})
     qids = list(answers.keys())
@@ -499,11 +573,14 @@ def submit_assessment(user_id: str, body: dict, db: Session = Depends(get_db)):
             weak.append({"question_code": q.code, "stem": q.stem, "domain_id": q.domain_id,
                          "domain": domain_map.get(q.domain_id, q.domain_id),
                          "category": cat or "待诊断"})
-            if cat:  # 摸底答错 → 该错因类别标记薄弱（驱动学习路径）；已薄弱则幂等跳过
+            if _is_tiku_bridged(q) and not sig:
+                # 题库物化题答错 → 章级薄弱（无错因标注不硬归因；category=None 驱动章级练习）
+                mastery.transition(db, user_id, q.domain_id, None, "misdiagnosed")
+            elif cat:  # 域题答错 → 该错因类别标记薄弱（驱动错因路径）；已薄弱则幂等跳过
                 from .models import MasteryState
                 st = db.get(MasteryState, (user_id, q.domain_id, cat))
                 if st is None or st.state == "未评估":
-                    mastery.transition(db, user_id, q.domain_id, cat, "diagnosed")
+                    mastery.transition(db, user_id, q.domain_id, cat, "misdiagnosed")
         attempt = Attempt(user_id=user_id, question_id=q.id, selected_option=picked or "",
                           is_correct=ok, idempotency_key=f"assess-{user_id}-{q.id}")
         db.add(attempt)

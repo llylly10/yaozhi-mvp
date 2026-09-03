@@ -91,4 +91,12 @@ export type Diagnosis = {
   }
 }
 
-export type Question = { id: string; code: string; stem: string; options: { key: string; text: string }[]; type: string; domain_id: string }
+export type Question = { id: string; code: string; stem: string; options: { key: string; text: string }[]; type: string; domain_id: string; chapter?: string; chapter_name?: string }
+
+export type TikuFeedback = {
+  kind: 'tiku'
+  analysis: string
+  source: string
+  chapter_ref: string
+  chapter_name: string
+}

@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   CheckCircle, Warning, MagnifyingGlass, SkipForward, ArrowRight, Pill,
-  CalendarBlank, BookOpen, ClockCounterClockwise, SquaresFour, Gear,
+  CalendarBlank, BookOpen, ClockCounterClockwise, SquaresFour, Gear, BookOpenText,
 } from '@phosphor-icons/react'
 import * as echarts from 'echarts'
-import { api, type Diagnosis, type Question } from './api'
+import { api, type Diagnosis, type Question, type TikuFeedback } from './api'
 
 /*
  * 药知 · 「现代药房 × 分子美学」
@@ -458,7 +458,10 @@ function Assessment({ userId, onDone, onError }: {
             <div key={q.id} className="card p-6">
               <div className="mb-3 flex items-center gap-2 text-xs text-ink-3">
                 <span className="grid size-6 place-items-center rounded-full bg-primary-soft font-serif font-bold text-primary">{i + 1}</span>
-                {q.code}
+                <span className="font-semibold">{q.code}</span>
+                {q.chapter_name && (
+                  <span className="rounded-full border border-line-2 px-2.5 py-0.5 text-[11px]">{q.chapter_name}</span>
+                )}
               </div>
               <p className="mb-4 text-[15px] font-medium leading-relaxed">{q.stem}</p>
               <div className="space-y-2.5">
@@ -891,6 +894,8 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
   const [rationale, setRationale] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null)
+  // 题库物化题（无错因标注）：答完即给解析型反馈，不进五级漏斗诊断
+  const [tikuFeedback, setTikuFeedback] = useState<{ feedback: TikuFeedback; is_correct: boolean } | null>(null)
   const [training, setTraining] = useState<{
     training_id: string; mode: string; note: string
     questions: { id: string; stem: string; options: { key: string; text: string }[] }[]
@@ -912,7 +917,14 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
         user_id: userId, question_id: question.id, selected_option: selected,
         rationale: rationale || undefined, idempotency_key: crypto.randomUUID(),
       })
-      pushDiagnosis(await api.diagnosis(r.session_id))
+      if (r.session_id) {
+        setTikuFeedback(null)
+        pushDiagnosis(await api.diagnosis(r.session_id))
+      } else {
+        // 题库题：session 不会创建，直接展示解析型反馈
+        pushDiagnosis(null)
+        setTikuFeedback({ feedback: r.feedback as TikuFeedback, is_correct: !!r.is_correct })
+      }
       onStep(8)
     } catch (e) { setError(String(e)) } finally { setSubmitting(false) }
   }
@@ -958,7 +970,7 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
         <div className="absolute right-6 top-5 opacity-[0.06]"><Hex size={92} className="text-ink" /></div>
         <div className="border-b border-line-2 px-8 pb-6 pt-7">
           <div className="flex items-center gap-2 text-xs text-ink-3">
-            <span className="capsule" />{question.code} · 单选题 · 药理学 / M 受体药
+            <span className="capsule" />{question.code} · 单选题 · 药理学 / {question.chapter_name || 'M 受体药'}
           </div>
           <p className="display mt-4 text-[19px] leading-relaxed">{question.stem}</p>
         </div>
@@ -996,6 +1008,10 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
       </div>
 
       <AnimatePresence mode="wait">
+        {tikuFeedback && (
+          <TikuFeedbackCard key={`tiku-${question.id}`} feedback={tikuFeedback.feedback}
+            isCorrect={tikuFeedback.is_correct} onExit={onExit} />
+        )}
         {diagnosis && (
           <DiagnosisPanel key={diagnosis.session_id}
             diagnosis={diagnosis} questionId={question.id} onRefresh={refresh}
@@ -1178,6 +1194,58 @@ function TrainingResult({ score, onExit }: { score: number; onExit: () => void }
       </p>
       <p className="mt-2 text-xs text-ink-3">错题已归档到「错题本」，可从左侧栏查看</p>
       <button onClick={onExit} className="btn btn-primary mt-7">返回今日待办</button>
+    </motion.div>
+  )
+}
+
+/* 题库物化题（无错因标注）的解析型反馈卡：答对/答错均即时展示教材解析。
+   区别于种子域的错因诊断卡——不硬归因到四分类错因（诚实口径，见演示手册）。 */
+function TikuFeedbackCard({ feedback, isCorrect, onExit }: {
+  feedback: TikuFeedback; isCorrect: boolean; onExit: () => void
+}) {
+  return (
+    <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="mt-5 space-y-5">
+      <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={spring}
+        className="card flex items-center gap-4 p-5"
+        style={{ background: isCorrect ? 'var(--color-ok-soft)' : 'var(--color-cat-red-soft)',
+                 borderColor: isCorrect ? 'var(--color-ok-soft)' : 'var(--color-cat-red-soft)' }}>
+        {isCorrect
+          ? <CheckCircle size={26} weight="fill" className="flex-none text-ok" />
+          : <Warning size={26} weight="fill" className="flex-none text-cat-red" />}
+        <div>
+          <p className="font-semibold">{isCorrect ? '回答正确' : '回答错误'}</p>
+          <p className="text-[13px] text-ink-2">
+            {feedback.chapter_name ? `${feedback.chapter_name} · ` : ''}题库原题解析已展示
+            {!isCorrect && '，可对照下方解析自查错点'}
+          </p>
+        </div>
+      </motion.div>
+
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={spring}
+        className="card !rounded-[24px] overflow-hidden">
+        <div className="border-b border-line-2 px-8 pb-5 pt-7"
+          style={{ background: 'linear-gradient(150deg, var(--color-paper-2), #fff 70%)' }}>
+          <div className="flex items-center gap-4">
+            <span className="rx-badge">Rx</span>
+            <div>
+              <p className="text-[11px] font-semibold tracking-[0.18em] text-ink-3">答案解析 · 考点与机制</p>
+              <p className="mt-0.5 text-[13px] text-ink-2">
+                四分类错因诊断在标注域题目上提供完整流程；本题展示教材锚点解析供自查
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="p-8">
+          <p className="whitespace-pre-line text-[15px] leading-relaxed text-ink">{feedback.analysis || '（该题暂无解析文本）'}</p>
+          {feedback.source && (
+            <p className="mt-5 flex items-center gap-1.5 rounded-xl border border-line-2 bg-paper px-4 py-3 text-xs text-ink-3">
+              <BookOpenText size={15} className="flex-none text-primary" />
+              解析来源：{feedback.source}
+            </p>
+          )}
+          <button onClick={onExit} className="btn btn-primary mt-7">返回今日待办</button>
+        </div>
+      </motion.div>
     </motion.div>
   )
 }

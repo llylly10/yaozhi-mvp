@@ -312,6 +312,11 @@ def _restore_course_assets(db):
         r = restore_content(db)
         print(f"[seed] 内容化恢复: 规则初标新填 {r['tagged']} 题, "
               f"批注稿 {r['batches']}")
+        # 题库→业务桥接（2026-09-03）：published A1 物化进 questions，闭环消费真实题库。
+        from seed.seed_tiku_bridge import bridge_tiku_questions
+        b = bridge_tiku_questions(db)
+        print(f"[seed] 题库桥接: 物化 {b['bridged']} 题, 解析重绑定 {b['rebound']} 题, "
+              f"B1 暂隔 {b['skipped_b1']} 题, 章域 {b['domain_codes']}")
     except Exception as e:  # noqa: BLE001
         # 醒目提示：异常会导致补章(4章)与内容化(published)静默缺失，reset-demo
         # 接口仍返回 ok，演示方不易察觉。打印类型便于定位（如枚举非法值拦截）。
