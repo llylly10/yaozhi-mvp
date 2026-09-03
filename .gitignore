@@ -6,3 +6,4 @@ dist/
 corpus/raw/
 corpus/ocr_textbook9e/_tmp/
 corpus/ocr_textbook9e/chapter_index.json
+session/*.log
