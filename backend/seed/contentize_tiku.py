@@ -29,6 +29,8 @@ MAT_DIR = r"D:\ceshi\corpus\course-materials"
 BATCH_FILES = [
     ("CH6", "P1-CH6解析批注稿-20260903.json"),
     ("CH3", "P2a-CH3解析批注稿-20260903.json"),
+    ("CH2", "P2b1-CH2解析批注稿-20260903.json"),
+    ("CH2", "P2b2-CH2解析批注稿-20260903.json"),
 ]
 
 COG_ANALYSIS_WORDS = re.compile(r"机制|为什么|药理基础|理由是|原因是")
@@ -109,14 +111,18 @@ def _import_batch(db, chapter_ref: str, json_path: Path) -> int:
 
 
 def restore_content(db) -> dict:
-    """seed 恢复链挂接：reset-demo 后重放内容化，保证不丢。"""
+    """seed 恢复链挂接：reset-demo 后重放内容化，保证不丢。
+
+    batches 按 chapter_ref 累加（同一章可登记多个批注稿文件，避免同 key 覆盖）。
+    """
     result = {"tagged": rule_tag_all(db), "batches": {}}
     for chapter_ref, fname in BATCH_FILES:
         p = Path(MAT_DIR) / fname
         if not p.exists():
             print(f"  ⚠ 缺批注稿 {p}，跳过 {chapter_ref}")
             continue
-        result["batches"][chapter_ref] = _import_batch(db, chapter_ref, p)
+        n = _import_batch(db, chapter_ref, p)
+        result["batches"][chapter_ref] = result["batches"].get(chapter_ref, 0) + n
     return result
 
 

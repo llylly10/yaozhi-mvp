@@ -65,11 +65,15 @@ def test_contentize_survives_rebuild():
         assert ch6_pub == 46, f"CH6 published 应 46，实际 {ch6_pub}"
         assert tagged == total, f"规则初标应覆盖全部 {total} 题，实际 {tagged}"
         assert chs >= 35, f"章节应 >=35（含补章），实际 {chs}"
-        # P2a: CH3 内容化批(19题) 重放后保留
+        # P2a: CH3 内容化批(19题) 重放后保留；P2b: CH2 两文件共 45 题累加保留
         ch3_pub = db.query(TikuQuestion).filter(
             TikuQuestion.chapter_ref == "CH3",
             TikuQuestion.review_status == "published").count()
         assert ch3_pub == 19, f"CH3 published 应 19，实际 {ch3_pub}"
+        ch2_pub = db.query(TikuQuestion).filter(
+            TikuQuestion.chapter_ref == "CH2",
+            TikuQuestion.review_status == "published").count()
+        assert ch2_pub == 45, f"CH2 published 应 45（两批注稿文件累加），实际 {ch2_pub}"
         # 4 内容化列必须存在于表
         cols = {c["name"] for c in inspect(engine).get_columns("tiku_questions")}
         for need in ("analysis", "cognitive_level", "difficulty", "source_ref"):
