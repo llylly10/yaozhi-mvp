@@ -300,5 +300,16 @@ def _restore_course_assets(db):
         if n_ch or n_q:
             print(f"[seed] 补章恢复: 新增章节 {n_ch}，题归位 {n_q}")
         db.commit()
+        # 内容化成果（解析/认知层级/难度/来源）不随 reset-demo 丢失：重放批注稿。
+        # 注：先 commit 章节映射，再跑 contentize（批注稿按 chapter_ref 定位）。
+        from seed.contentize_tiku import restore_content
+        r = restore_content(db)
+        print(f"[seed] 内容化恢复: 规则初标新填 {r['tagged']} 题, "
+              f"批注稿 {r['batches']}")
     except Exception as e:  # noqa: BLE001
-        print(f"[seed] 课程资产恢复跳过（不影响演示种子）: {e}")
+        # 醒目提示：异常会导致补章(4章)与内容化(published)静默缺失，reset-demo
+        # 接口仍返回 ok，演示方不易察觉。打印类型便于定位（如枚举非法值拦截）。
+        print(f"[seed][WARN] 课程资产恢复跳过（不影响演示种子）: "
+              f"{type(e).__name__}: {e}")
+        print("[seed][WARN] 注意：补章(CH8/13/18/39)或内容化(published)可能未恢复，"
+              "请检查 tiku_questions.review_status 是否有枚举外值")

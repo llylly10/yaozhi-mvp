@@ -343,6 +343,12 @@ class TikuQuestion(Base):
     kp_ref: Mapped[str] = mapped_column(String(128), default="")       # 知识点映射占位
     review_status: Mapped[str] = mapped_column(
         _enum("asset_status", "draft", "in_review", "published", "deprecated"), default="draft")
+    # 内容化字段（MVP 内容补全 2026-09-03）：published = 题目经 AI 自审通过，可进闭环。
+    # reset-demo 会 drop_all→create_all 重建表，故这些列必须同时体现在模型与 db.migrate 中。
+    analysis: Mapped[str] = mapped_column(Text, default="")           # AI 解析（锚定教材/卷内考点）
+    cognitive_level: Mapped[str] = mapped_column(String(8), default="")   # 识记/理解/应用/分析（规则初标+复核）
+    difficulty: Mapped[str] = mapped_column(String(4), default="")        # 易/中/难
+    source_ref: Mapped[str] = mapped_column(String(256), default="")      # 来源：题库卷号 Q编号 + 教材锚点
     __table_args__ = (UniqueConstraint("paper_no", "qid", name="uq_tiku_paper_qid"),)
 
 

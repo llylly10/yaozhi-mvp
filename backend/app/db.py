@@ -29,6 +29,7 @@ def migrate():
     SQLite 的 create_all 不会给已存在的表加列，导致旧的 yaozhi_w1.db
     缺 consented_at 等列而崩溃。迁移幂等：列已存在则跳过。
     """
+    # users 表（隐私合规增量列）
     needed = {
         "consented_at": "DATETIME",
         "withdrawn_at": "DATETIME",
@@ -40,3 +41,15 @@ def migrate():
         if col not in existing:
             with engine.begin() as conn:
                 conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {dtype}"))
+    # tiku_questions 内容化列（MVP 内容补全 2026-09-03，旧库补列，reset 后由 create_all 带出）
+    tiku_needed = {
+        "analysis": "TEXT",
+        "cognitive_level": "VARCHAR(8)",
+        "difficulty": "VARCHAR(4)",
+        "source_ref": "VARCHAR(256)",
+    }
+    existing_t = {c["name"] for c in inspect(engine).get_columns("tiku_questions")}
+    for col, dtype in tiku_needed.items():
+        if col not in existing_t:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE tiku_questions ADD COLUMN {col} {dtype}"))
