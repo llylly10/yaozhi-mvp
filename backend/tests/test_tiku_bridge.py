@@ -5,8 +5,9 @@
    （type=single / usage=diagnostic / published），绑定解析型证据；B1 配伍组摊平存储，
    物化与题库逐字一致（P4 实证隔离假设作废）。
 2. 幂等：reset-demo / startup 重复 seed 不重复物化。
-3. 诚实归因：物化题无错因标注 → 作答走解析型反馈（state=answered / 无 DiagnosisSession），
-   绝不产出空错因卡；幂等重放同样补反馈。
+3. 诚实归因：物化题无 distractor_signals 标注 → 答错走"通用四分类归因"轻量诊断会话
+   （一级错因 + 证据等级低 + 可细化，绝不捏造具体错点）；答对只给解析反馈（无会话）；
+   幂等重放同样补反馈并回放原会话 id。
 4. 摸底混卷：真实题库(按章配额 3) + 种子诊断域(2) 混卷；同 user 同卷可回放；题带章信息。
 5. 薄弱语义分层：题库题答错 → 章级薄弱（category=None，只发练习任务）；种子域题答错 → 错因薄弱。
 6. 种子题来源锚点：10 题解析绑定教材第5章真实锚点（EV-PENDING-W3 占位作废）。
@@ -27,7 +28,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.db import Base, SessionLocal, engine, migrate  # noqa: E402
 from app.models import (  # noqa: E402
-    DiagnosisSession, Question, QuestionEvidence, TikuQuestion,
+    DiagnosisSession, Misconception, Question, QuestionEvidence, TikuQuestion,
 )
 from app.main import app  # noqa: E402
 
@@ -152,35 +153,41 @@ def test_bridge_idempotent_reseed():
         db.close()
 
 
-def test_tiku_attempt_returns_feedback_no_session():
-    """题库题作答：答对/答错都给解析型反馈，不建 DiagnosisSession（诚实归因红线）。"""
+def test_tiku_correct_no_session_wrong_creates_diagnosis():
+    """题库题作答：答对只给解析反馈且无会话；答错给解析反馈且建轻量诊断会话
+    （通用四分类归因 + 证据等级低 + 可细化），闭合 练→诊断→训练→复测。"""
     _rebuild()
     uid = _fresh_user()
     tq = _first_tiku_question()
     answer = _answer_of(tq["id"])
     wrong = next(o["key"] for o in tq["options"] if o["key"] != answer)
-    # 答错：解析型反馈，不归因不建会话
-    r = client.post("/attempts", json={
-        "user_id": uid, "question_id": tq["id"], "selected_option": wrong,
-        "idempotency_key": "bridge-wrong-1"})
-    assert r.status_code == 202, r.text
-    body = r.json()
-    assert body["state"] == "answered" and body["session_id"] is None
-    assert body["is_correct"] is False
-    assert body["feedback"]["kind"] == "tiku"
-    assert body["feedback"]["analysis"], "物化题必须带解析文本"
-    assert body["feedback"]["chapter_ref"].startswith("CH"), f"应带章锚点: {body['feedback']}"
-    # 答对同样只给反馈，不进诊断
+    # 答对：解析反馈，不进诊断
     r2 = client.post("/attempts", json={
         "user_id": uid, "question_id": tq["id"], "selected_option": answer,
         "idempotency_key": "bridge-right-1"})
     assert r2.status_code == 202 and r2.json()["is_correct"] is True
     assert r2.json()["session_id"] is None
-    # 全程不得产生诊断会话（避免空错因卡）
+    assert r2.json()["feedback"]["kind"] == "tiku"
+    # 答错：解析反馈 + 轻量诊断会话（通用归因，可细化）
+    r = client.post("/attempts", json={
+        "user_id": uid, "question_id": tq["id"], "selected_option": wrong,
+        "idempotency_key": "bridge-wrong-1"})
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["state"] == "diagnosed" and body["session_id"] is not None
+    assert body["is_correct"] is False
+    assert body["feedback"]["kind"] == "tiku"
+    assert body["feedback"]["analysis"], "物化题必须带解析文本"
+    assert body["feedback"]["chapter_ref"].startswith("CH"), f"应带章锚点: {body['feedback']}"
+    # 会话应归因到本域章级通用错因（一级四分类），证据等级低、可细化
     db = SessionLocal()
     try:
-        assert db.execute(select(DiagnosisSession)).scalars().first() is None, \
-            "题库题作答不得创建诊断会话"
+        s = db.get(DiagnosisSession, body["session_id"])
+        assert s is not None and s.state == "diagnosed"
+        mis = db.get(Misconception, s.hypothesis_id)
+        assert mis.domain_id == tq["domain_id"], "归因应落在本题章级域"
+        assert mis.category in ("审题与应用失误", "机制理解不足", "知识遗忘", "概念混淆")
+        assert s.evidence_level == "低" and s.can_refine is True
     finally:
         db.close()
 
@@ -196,7 +203,8 @@ def test_tiku_idempotent_replay_refunds_feedback():
     r1 = client.post("/attempts", json=body).json()
     r2 = client.post("/attempts", json=body).json()
     assert r2["idempotent_replay"] is True
-    assert r2["session_id"] is None
+    # 答错幂等重放：首次已建轻量诊断会话 → 重放返回同一会话 id，并补同样反馈
+    assert r2["session_id"] == r1["session_id"] and r2["session_id"] is not None
     assert r2["feedback"]["kind"] == "tiku", "题库题幂等重放必须同样补反馈"
     assert r1["feedback"]["analysis"] == r2["feedback"]["analysis"]
 
@@ -280,8 +288,15 @@ def test_chapter_weak_practice_loop_closes():
                         "selected_option": picked, "idempotency_key": f"chp-loop-{tag}"})
         assert r.status_code == 202, r.text
         body = r.json()
-        assert body["session_id"] is None and body["feedback"]["kind"] == "tiku", \
-            "题库题日常练习仍走解析反馈（无诊断会话）"
+        if want_correct:
+            # 答对：解析反馈，不进诊断
+            assert body["session_id"] is None and body["feedback"]["kind"] == "tiku", \
+                "题库题答对仍走解析反馈（无诊断会话）"
+        else:
+            # 答错：建轻量诊断会话（通用四分类归因，证据等级低，可细化）
+            assert body["session_id"] is not None and body["state"] == "diagnosed", \
+                "题库题日常练习答错建轻量诊断会话"
+            assert body["feedback"]["kind"] == "tiku"
 
     assert state_of() == "薄弱", "摸底答错题库题应先建章级薄弱"
     plan = client.get(f"/users/{uid}/learning-plan").json()["tasks"]

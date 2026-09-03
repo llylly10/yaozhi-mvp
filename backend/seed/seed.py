@@ -322,6 +322,13 @@ def _restore_course_assets(db):
         b = bridge_tiku_questions(db)
         print(f"[seed] 题库桥接: 物化 {b['bridged']} 题, 解析重绑定 {b['rebound']} 题, "
               f"题型 {b['by_type']}, 章域 {b['domain_codes']}")
+        # 章级通用错因目录（四分类 × 34 章，2026-09-03）：723 道题库题没有任何
+        # 错因标注，缺此目录则题库题答错不出错因卡、不进靶向训练、不进复测。
+        # 依赖 domains（由 import_syllabus 建），故放在桥接之后。
+        from seed.add_chapter_misconceptions import apply_chapter_misconceptions
+        n_mis = apply_chapter_misconceptions(db)
+        if n_mis:
+            print(f"[seed] 章级错因目录恢复: 新增 {n_mis} 条")
     except Exception as e:  # noqa: BLE001
         # 醒目提示：异常会导致补章(4章)与内容化(published)静默缺失，reset-demo
         # 接口仍返回 ok，演示方不易察觉。打印类型便于定位（如枚举非法值拦截）。

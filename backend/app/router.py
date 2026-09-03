@@ -261,7 +261,11 @@ def submit_attempt(body: AttemptIn, db: Session = Depends(get_db)):
         session = db.execute(select(DiagnosisSession).where(
             DiagnosisSession.attempt_id == dup.id)).scalar_one_or_none()
         dq = db.get(Question, dup.question_id)
-        if _is_tiku_bridged(dq):  # 幂等重放：题库题无会话，补反馈
+        if _is_tiku_bridged(dq):  # 幂等重放：题库题答错已建会话则回放会话 + 补同样反馈
+            if session:
+                return {"attempt_id": dup.id, "session_id": session.id,
+                        "state": session.state, "is_correct": dup.is_correct,
+                        "feedback": _tiku_feedback(db, dq), "idempotent_replay": True}
             return {"attempt_id": dup.id, "session_id": None, "state": "answered",
                     "is_correct": dup.is_correct, "feedback": _tiku_feedback(db, dq),
                     "idempotent_replay": True}
@@ -278,16 +282,21 @@ def submit_attempt(body: AttemptIn, db: Session = Depends(get_db)):
     db.add(attempt)
     db.commit()
     if _is_tiku_bridged(question):
-        # 题库物化题：无错因标注 → 不做五级漏斗归因，答对/答错都给
-        # 解析型反馈（即时讲解）。不进 DiagnosisSession，避免空错因卡。
-        # 2026-09-03 章级闭环补口：日常练习答对/答错推进章级掌握度
+        # 题库物化题：答对/答错都给解析型反馈（即时讲解），并推进章级掌握度
         # （practice_passed：薄弱→学习中→初步掌握；practice_failed：未评估/学习中→薄弱）。
-        # 此前该分支不写掌握度，摸底错题库题建出的章级薄弱永远卡在今日待办。
+        # 答错时额外创建轻量诊断会话（通用四分类归因 + 低证据 + 可细化），
+        # 闭合 练→诊断→训练→复测 链路——此前该分支不进诊断，错因/训练/复测在 723 题上全失效。
         audit(db, "system", "attempt.tiku_feedback", f"question:{question.id}",
               is_correct=attempt.is_correct)
         mastery.transition(db, body.user_id, question.domain_id, None,
                            "practice_passed" if attempt.is_correct else "practice_failed")
         db.commit()
+        if not attempt.is_correct:
+            session = dx.start_session_tiku(db, attempt)
+            if session:
+                return {"attempt_id": attempt.id, "session_id": session.id,
+                        "state": session.state, "is_correct": attempt.is_correct,
+                        "feedback": _tiku_feedback(db, question)}
         return {"attempt_id": attempt.id, "session_id": None, "state": "answered",
                 "is_correct": attempt.is_correct, "feedback": _tiku_feedback(db, question)}
     # 答对不进诊断（US-2 前提是"做错"）：直接完成会话，不产出错因卡、不写薄弱

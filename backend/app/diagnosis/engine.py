@@ -4,6 +4,7 @@ W1 简化：引擎在请求内同步执行（Mock 模型零延迟）；W2 换真
 APScheduler 领取（SKIP LOCKED）+ 逐步落库，引擎接口不变。
 追问判定优先级：option_signal（精确）> keyword > model 三分类。
 """
+import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -44,6 +45,70 @@ def start_session(db: Session, attempt: Attempt) -> DiagnosisSession:
     session.state = "candidates_retrieved"
     audit(db, "system", "diagnosis.state", session.id, to="candidates_retrieved")
     _sufficiency(db, session)
+    db.commit()
+    return session
+
+
+# 章级通用错因四分类（与 seed.add_chapter_misconceptions.TEMPLATES 对应）。
+# 题库物化题无 distractor_signals 标注，答错时按题干规则信号做"一级分类通用归因"，
+# 证据等级=低，可追问细化（产品决策：通用归因 + 低证据 + 可细化，不捏造具体错点）。
+GENERIC_CATS = ["审题与应用失误", "机制理解不足", "知识遗忘", "概念混淆"]
+# 归因优先级：审题 > 机制 > 知识 > 概念混淆（兜底）
+_PICK_ORDER = ["审题与应用失误", "机制理解不足", "知识遗忘", "概念混淆"]
+_REVERSE = re.compile(r"不属于|除外|错误的?是|不是|不宜|禁用|慎用|禁忌|避免")
+_MECH = re.compile(r"机制|原理|为什么|由于|通过|阻断|抑制|激动|导致|作用方式|怎样")
+_RECALL = re.compile(r"属于|分类|首选|主要|特点|代表药|包括|哪些|是什么")
+
+
+def _pick_generic_mis(db: Session, question: Question) -> Misconception | None:
+    """按题干规则信号在章级四分类里挑一条通用错因。"""
+    mis_list = db.execute(select(Misconception).where(
+        Misconception.domain_id == question.domain_id,
+        Misconception.status == "published",
+        Misconception.category.in_(GENERIC_CATS))).scalars().all()
+    if not mis_list:
+        return None
+    by_cat = {m.category: m for m in mis_list}
+    stem = question.stem or ""
+    for cat in _PICK_ORDER:
+        if cat not in by_cat:
+            continue
+        if cat == "审题与应用失误" and _REVERSE.search(stem):
+            return by_cat[cat]
+        if cat == "机制理解不足" and _MECH.search(stem):
+            return by_cat[cat]
+        if cat == "知识遗忘" and _RECALL.search(stem):
+            return by_cat[cat]
+    # 都没命中 → 兜底概念混淆
+    return by_cat.get("概念混淆") or mis_list[0]
+
+
+def start_session_tiku(db: Session, attempt: Attempt) -> DiagnosisSession | None:
+    """题库物化题答错时的轻量诊断会话：通用四分类归因 + 低证据 + 可细化。
+
+    不跑五级漏斗（无 distractor_signals，跑全漏斗会误导），直接出一级错因卡，
+    让 练→诊断→训练→复测 在 723 道题库题上闭合。
+    """
+    question = db.get(Question, attempt.question_id)
+    chosen = _pick_generic_mis(db, question)
+    if not chosen:
+        return None
+    session = DiagnosisSession(
+        attempt_id=attempt.id, state="diagnosed",
+        chain_focus=(question.chain_levels or [None])[0],
+        hypothesis_id=chosen.id, evidence_level="低", can_refine=True)
+    db.add(session)
+    db.flush()
+    db.add(DiagnosisEvidence(
+        session_id=session.id, evidence_type="选项标注",
+        source_ref=f"question:{question.id}",
+        content=f"学生选择 {attempt.selected_option}，正确答案为 {question.answer}"
+                f"（通用四分类归因，证据等级低，可追问细化）"))
+    # 注意：通用四分类归因不写错因级掌握度薄弱——那是种子域「真错因」才有的。
+    # 章级薄弱由 router.practice_failed 负责；本会话仅用于出卡片 + 接训练，
+    # 避免同一道错题在 domain 内既建章级薄弱又建错因级薄弱导致双重计数。
+    audit(db, "system", "diagnosis.state", session.id, to="diagnosed",
+          misconception=chosen.id, evidence_level="低", note="tiku_generic")
     db.commit()
     return session
 
@@ -303,9 +368,13 @@ def start_training(db: Session, session: DiagnosisSession):
     misconception = db.get(Misconception, session.hypothesis_id)
     attempt = db.get(Attempt, session.attempt_id)
     question = db.get(Question, attempt.question_id)
+    # 题库物化题（T）usage 全为 diagnostic，无 training 标注题；
+    # 故训练池放宽为 同域 training∨diagnostic，并排除刚做错的原题（变式训练）。
     pool = db.execute(select(Question).where(
-        Question.domain_id == question.domain_id, Question.usage == "training",
-        Question.review_status == "published")).scalars().all()
+        Question.domain_id == question.domain_id,
+        Question.usage.in_(["training", "diagnostic"]),
+        Question.review_status == "published",
+        Question.id != question.id)).scalars().all()
     mode = misconception.remediation_type
     if mode == "记忆卡":
         picked = []
