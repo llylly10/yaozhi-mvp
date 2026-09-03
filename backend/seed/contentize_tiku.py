@@ -46,6 +46,26 @@ BATCH_FILES = [
     ("CH22", "P4c-CH22解析批注稿-20260903.json"),
     ("CH23", "P4c-CH23解析批注稿-20260903.json"),
     ("CH24", "P4c-CH24解析批注稿-20260903.json"),
+    # P4d 批（2026-09-03，17 章 302 题）
+    ("CH33", "P4d-CH33解析批注稿-20260903.json"),
+    ("CH34", "P4d-CH34解析批注稿-20260903.json"),
+    ("CH35", "P4d-CH35解析批注稿-20260903.json"),
+    ("CH36", "P4d-CH36解析批注稿-20260903.json"),
+    ("CH37", "P4d-CH37解析批注稿-20260903.json"),
+    ("CH38", "P4d-CH38解析批注稿-20260903.json"),
+    ("CH29", "P4d-CH29解析批注稿-20260903.json"),
+    ("CH30", "P4d-CH30解析批注稿-20260903.json"),
+    ("CH31", "P4d-CH31解析批注稿-20260903.json"),
+    ("CH27", "P4d-CH27解析批注稿-20260903.json"),
+    ("CH17", "P4d-CH17解析批注稿-20260903.json"),
+    ("CH5", "P4d-CH5解析批注稿-20260903.json"),
+    ("CH16", "P4d-CH16解析批注稿-20260903.json"),
+    ("CH25", "P4d-CH25解析批注稿-20260903.json"),
+    ("CH26", "P4d-CH26解析批注稿-20260903.json"),
+    ("CH40", "P4d-CH40解析批注稿-20260903.json"),
+    ("CH42", "P4d-CH42解析批注稿-20260903.json"),
+    # P4e 批：CH3 单章剩余 3 题（钙拮抗药，章映射偏差已标注待裁决）
+    ("CH3", "P4e-CH3钙拮抗药3题解析批注稿-20260903.json"),
 ]
 
 COG_ANALYSIS_WORDS = re.compile(r"机制|为什么|药理基础|理由是|原因是")
@@ -116,8 +136,18 @@ def _import_batch(db, chapter_ref: str, json_path: Path) -> int:
         if not q:
             print(f"  ⚠ 未找到 {chapter_ref}-{key}，跳过")
             continue
-        analysis = item.get("analysis", "")
-        if analysis and analysis != q.analysis:
+        # 兼容两种批注稿写法：{"key": {"analysis": "..."}} 与 {"key": "解析文本"}
+        if isinstance(item, dict):
+            analysis = (item.get("analysis") or "").strip()
+        elif isinstance(item, str):
+            analysis = item.strip()
+        else:
+            print(f"  ⚠ 批注稿 {chapter_ref}-{key} 值类型异常({type(item).__name__})，跳过")
+            continue
+        if not analysis:
+            print(f"  ⚠ 批注稿 {chapter_ref}-{key} 解析为空，跳过")
+            continue
+        if analysis != q.analysis:
             q.analysis = analysis
         q.review_status = "published"   # published = 内容化 + AI 自审通过（演示口径）
         n += 1
