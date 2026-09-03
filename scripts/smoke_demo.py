@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """药知 MVP 演示全链路冒烟（9/5 演示保命用）
 
-用途：在演示前 5 分钟跑一遍，确认 16 步链路每一步都按预期返回。
+用途：在演示前 5 分钟跑一遍，确认 18 步链路每一步都按预期返回。
       任何一步失败 → 打印实际响应并退出码 1，禁止带病上台。
 
 用法：
@@ -10,7 +10,9 @@
        python scripts/smoke_demo.py --base http://127.0.0.1:8000 --no-reset
 
 说明：脚本只读 SQLite 题库（取正确答案），用于构造"确定性的演示路径"
-      （摸底答错 2 题 → 练习答错 → 出诊断卡 → 训练 → 复测通过），不写业务库。
+      （摸底答错 2 题 → 练习答错种子标注题 → 出诊断卡 → 训练 → 复测通过），不写业务库。
+      2026-09-03 题库桥接后：练习主链路挑 Q- 标注题（答错进错因诊断）；
+      另新增 T 题库原题"解析反馈"步（无错因标注 → 不建会话不硬归因，诚实口径）。
 """
 from __future__ import annotations
 
@@ -78,6 +80,7 @@ def answers_from_db(qids: list[str]) -> tuple[dict, dict]:
 
 
 def main() -> int:
+    global PASS, FAIL
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8000")
     ap.add_argument("--no-reset", action="store_true", help="跳过数据复位（演示中途复跑用）")
@@ -137,13 +140,13 @@ def main() -> int:
     st, r = req("GET", f"{B}/users/{uid}/learning-plan")
     check(7, "学习路径推荐", st == 200, str(r)[:100])
 
-    # 8 练习：挑一道摸底没答过的题，故意答错
+    # 8 练习：挑一道摸底没答过的【种子标注题】(Q-，答错可走完整错因诊断主链路)
     st, r = req("GET", f"{B}/questions?usage=diagnostic")
     qlist = r if isinstance(r, list) else r.get("questions", [])
-    pool = [q for q in qlist if q["id"] not in set(qids)]
-    if not check(8, "练习题库", st == 200 and pool, f"{len(pool)} 题可用"):
+    marked = [q for q in qlist if q["code"].startswith("Q-") and q["id"] not in set(qids)]
+    if not check(8, "练习题库(标注题)", st == 200 and marked, f"{len(marked)} 道标注题可用"):
         return 1
-    tq = pool[0]["id"]
+    tq = marked[0]["id"]
     _, wmap = answers_from_db([tq])
 
     st, r = req("POST", f"{B}/attempts", {
@@ -156,52 +159,69 @@ def main() -> int:
     if not check(9, "提交作答→诊断会话", bool(sid), str(r)[:160]):
         return 1
 
-    # 10 诊断卡
+    # 10 题库原题（T-，无错因标注）→ 解析型反馈：不建会话不硬归因（诚实口径红线）
+    tiku_pool = [q for q in qlist if q["code"].startswith("T")]
+    tb = tiku_pool[0]["id"] if tiku_pool else None
+    if tb:
+        _, twmap = answers_from_db([tb])
+        st, r = req("POST", f"{B}/attempts", {
+            "user_id": uid, "question_id": tb, "selected_option": twmap[tb],
+            "idempotency_key": f"smoke-tiku-{int(time.time())}"})
+        fb = r.get("feedback") or {}
+        ok10 = st == 202 and r.get("session_id") is None \
+            and r.get("state") == "answered" and fb.get("kind") == "tiku"
+        check(10, "题库原题→解析反馈", ok10,
+              f"无诊断会话，解析 {len(fb.get('analysis') or '')} 字 / 来源 {fb.get('source', '?')[:40]}")
+    else:
+        print("  ⏭  10 题库原题→解析反馈（无 T 题库题，跳过）")
+        PASS += 1
+
+    # 11 诊断卡
     st, r = req("GET", f"{B}/diagnoses/{sid}")
     card = r.get("card")
-    ok10 = st == 200 and r.get("state") == "diagnosed" and card
-    check(10, "错因诊断卡", ok10,
+    ok11 = st == 200 and r.get("state") == "diagnosed" and card
+    check(11, "错因诊断卡", ok11,
           f"{card.get('misconception', {}).get('name', '?')} "
           f"/ 证据 {len(card.get('evidences', []))} 条 / 等级 {card.get('evidence_level')}"
           if card else str(r)[:160])
-    if not ok10:
+    if not ok11:
         return 1
 
-    # 11 靶向训练
+    # 12 靶向训练
     st, r = req("GET", f"{B}/training/{sid}")
     tid, mode = r.get("training_id"), r.get("mode")
-    if not check(11, "靶向训练载荷", bool(tid), f"形态={mode}，题目 {len(r.get('questions', []))} 道"):
+    if not check(12, "靶向训练载荷", bool(tid), f"形态={mode}，题目 {len(r.get('questions', []))} 道"):
         return 1
 
-    # 12 训练提交（记忆卡形态不答题，空提交=自评完成）
+    # 13 训练提交（记忆卡形态不答题，空提交=自评完成）
     tqids = [q["id"] for q in r.get("questions", [])]
     tright, _ = answers_from_db(tqids)
     st, r = req("POST", f"{B}/training/{tid}/submit", {"answers": tright})
-    check(12, "训练提交判分", st == 200 and r.get("state") in ("retesting", "diagnosed"),
+    check(13, "训练提交判分", st == 200 and r.get("state") in ("retesting", "diagnosed"),
           f"得分 {r.get('score')}，状态={r.get('state')}（≥0.6 才进复测）")
 
-    # 13 迁移复测
+    # 14 迁移复测
     st, r = req("GET", f"{B}/retest/{tid}")
     rq = r.get("questions", [])
-    if not check(13, "迁移复测发题", st == 200 and rq, f"{len(rq)} 题"):
+    if not check(14, "迁移复测发题", st == 200 and rq, f"{len(rq)} 题"):
         return 1
     rright, _ = answers_from_db([q["id"] for q in rq])
 
-    # 14 复测提交（答对 → 标记掌握）
+    # 15 复测提交（答对 → 标记掌握）
     st, r = req("POST", f"{B}/retest/{tid}/submit", {"answers": rright})
-    check(14, "复测判分→掌握度", st == 200 and r.get("passed") is True,
+    check(15, "复测判分→掌握度", st == 200 and r.get("passed") is True,
           f"正确 {r.get('correct')}/{r.get('total')}，通过={r.get('passed')}")
 
-    # 15 掌握度总览
+    # 16 掌握度总览
     st, r = req("GET", f"{B}/users/{uid}/mastery")
     items = r if isinstance(r, list) else r.get("mastery", r.get("items", []))
-    check(15, "掌握度总览", st == 200 and len(items) >= 1, f"{len(items)} 条状态")
+    check(16, "掌握度总览", st == 200 and len(items) >= 1, f"{len(items)} 条状态")
 
-    # 16 合规闭环：撤回同意 + 删除回执
+    # 17 合规闭环：撤回同意 + 删除回执
     st, r = req("POST", f"{B}/users/{uid}/consent/withdraw", {"confirm": True})
-    ok16a = st == 200
+    ok17a = st == 200
     st2, r2 = req("GET", f"{B}/users/{uid}/deletion-receipt")
-    check(16, "撤回同意+删除回执", ok16a and st2 == 200 and bool(r2.get("receipt")),
+    check(17, "撤回同意+删除回执", ok17a and st2 == 200 and bool(r2.get("receipt")),
           f"回执号 {r2.get('receipt')}，{r.get('physical_delete_after_days', '?')} 天内物理删除")
 
     print("-" * 68)
