@@ -7,7 +7,7 @@
    - 规则初标（cognitive_level/difficulty/source_ref）覆盖全部 786 题
    - 章节 35（含补章 CH8/13/18/39）
    - 各内容化批重放保留：P1 CH6 46 / P2a CH3 19 / P2b CH2 45（两文件累加）/ P3 补章 4 章 36
-    / P4a CH7 38 / P4b CH15 36+CH12 20+CH14 14 → published 总量 254
+    / P4a CH7 38 / P4b CH15 36+CH12 20+CH14 14 / P4c CH19-CH24 164 → published 总量 418
 2. 幂等重放（不重建表再次 seed，模拟 startup 重启）：CH6 内容不丢失、不重复。
 """
 import sys
@@ -95,11 +95,18 @@ def test_contentize_survives_rebuild():
                 TikuQuestion.chapter_ref == ch,
                 TikuQuestion.review_status == "published").count()
             assert got == exp, f"{ch} published 应 {exp}，实际 {got}"
+        # P4c: 心血管块 6 章 164 题重放后保留（CH19 44/CH20 32/CH21 19/CH22 31/CH23 29/CH24 9）
+        exp_p4c = {"CH19": 44, "CH20": 32, "CH21": 19, "CH22": 31, "CH23": 29, "CH24": 9}
+        for ch, exp in exp_p4c.items():
+            got = db.query(TikuQuestion).filter(
+                TikuQuestion.chapter_ref == ch,
+                TikuQuestion.review_status == "published").count()
+            assert got == exp, f"{ch} published 应 {exp}，实际 {got}"
         total_pub = db.query(TikuQuestion).filter(
             TikuQuestion.review_status == "published").count()
-        assert total_pub == 254, (
-            f"published 总量应 254（CH6 46+CH3 19+CH2 45+P3 36+CH7 38"
-            f"+P4b CH15 36+CH12 20+CH14 14），实际 {total_pub}")
+        assert total_pub == 418, (
+            f"published 总量应 418（CH6 46+CH3 19+CH2 45+P3 36+CH7 38"
+            f"+P4b 70+P4c 164），实际 {total_pub}")
         # 4 内容化列必须存在于表
         cols = {c["name"] for c in inspect(engine).get_columns("tiku_questions")}
         for need in ("analysis", "cognitive_level", "difficulty", "source_ref"):
