@@ -1,5 +1,8 @@
 FROM python:3.12-slim
 WORKDIR /srv
+# pip 用阿里云镜像 (避免 Docker Hub IPv6 直连被掐)
+RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ \
+    && pip config set global.trusted-host mirrors.aliyun.com
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt psycopg[binary]
 COPY backend/ ./

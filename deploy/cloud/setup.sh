@@ -55,8 +55,11 @@ if ! command -v node >/dev/null 2>&1 || [ "$(node -v 2>/dev/null | cut -d. -f1 |
 fi
 export PATH=/usr/local/bin:$PATH
 echo "    node: $(node -v)  npm: $(npm -v)"
-# npm 也用国内镜像
-npm config set registry https://registry.npmmirror.com
+# 服务器到 npmjs.org 是通的 (实测). 先默认走 npmjs 官方; 若后续遇卡顿可换 npmmirror
+# 注: 之前 npmmirror 同步滞后致 @fontsource/noto-serif-sc 404, 改回官方
+npm config set registry https://registry.npmjs.org
+npm config set fund false
+npm config set audit false
 
 echo "==> [3/4] 构建前端静态站"
 cd "$REPO_ROOT/frontend"

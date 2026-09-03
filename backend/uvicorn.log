@@ -1,0 +1,11 @@
+INFO:     Started server process [39296]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+[题库] 卷 0 新增 / 题 0 新增 / 786 已存在跳过
+[大纲] 章节 0 新增 / 31 已存在跳过；实验 0 新增
+[seed] 补章恢复: 新增章节 0，题归位 24
+[seed] A类修正恢复: 4 题映射强制回写（人工判定优先级>词表）
+[seed] 内容化恢复: 规则初标新填 0 题, 批注稿 {'CH6': 46, 'CH3': 22, 'CH2': 45, 'CH8': 8, 'CH13': 4, 'CH18': 4, 'CH39': 20, 'CH7': 38, 'CH15': 36, 'CH12': 20, 'CH14': 14, 'CH19': 44, 'CH20': 32, 'CH21': 19, 'CH22': 31, 'CH23': 29, 'CH24': 9, 'CH33': 8, 'CH34': 17, 'CH35': 41, 'CH36': 10, 'CH37': 13, 'CH38': 14, 'CH29': 43, 'CH30': 22, 'CH31': 14, 'CH27': 42, 'CH17': 18, 'CH5': 1, 'CH16': 5, 'CH25': 20, 'CH26': 10, 'CH40': 14, 'CH42': 10}
+[seed] 题库桥接: 物化 0 题, 解析重绑定 723 题, 题型 {'A1': 659, 'B1': 64}, 章域 []
+INFO:     127.0.0.1:57850 - "GET /healthz HTTP/1.1" 200 OK
