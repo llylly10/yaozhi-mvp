@@ -9,3 +9,5 @@ corpus/ocr_textbook9e/chapter_index.json
 # 运行产物：服务日志、DB 备份、临时导出（不入版本控制）
 # 注意：.gitignore 不支持行内注释，注释必须独占一行，否则整行会被当成匹配模式而失效
 session/
+# 浏览器走查截图（体积大、按需本地保留，不入版本控制）
+corpus/tools/shots/
