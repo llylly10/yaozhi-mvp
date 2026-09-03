@@ -1,13 +1,15 @@
-"""题库→业务桥接回归（2026-09-03 方案 A：闭环消费 published 题库）。
+"""题库→业务桥接回归（2026-09-03 方案 A：闭环消费 published 题库；P4 收口含 B1）。
 
 红线：
-1. 物化：published A1 题库题以 code=T{paper}-{qid} 物化为 Question 行（type=single /
-   usage=diagnostic / published），并绑定解析型证据；B1 配伍题保持隔离（P4 适配）。
+1. 物化：published 题库题（A1 131 + B1 15 = 146）以 code=T{paper}-{qid} 物化为 Question 行
+   （type=single / usage=diagnostic / published），绑定解析型证据；B1 配伍组摊平存储，
+   物化与题库逐字一致（P4 实证隔离假设作废）。
 2. 幂等：reset-demo / startup 重复 seed 不重复物化。
 3. 诚实归因：物化题无错因标注 → 作答走解析型反馈（state=answered / 无 DiagnosisSession），
    绝不产出空错因卡；幂等重放同样补反馈。
 4. 摸底混卷：真实题库(按章配额 3) + 种子诊断域(2) 混卷；同 user 同卷可回放；题带章信息。
 5. 薄弱语义分层：题库题答错 → 章级薄弱（category=None，只发练习任务）；种子域题答错 → 错因薄弱。
+6. 种子题来源锚点：10 题解析绑定教材第5章真实锚点（EV-PENDING-W3 占位作废）。
 """
 import sys
 from pathlib import Path
@@ -68,17 +70,22 @@ def _first_tiku_question() -> dict:
     return next(x for x in qs if x["code"].startswith("T"))
 
 
-def test_bridge_materializes_published_a1():
+def test_bridge_materializes_all_published():
+    """P4：published 全量物化（A1 131 + B1 15 = 146）；B1 摊平单选与业务同构。"""
     _rebuild()
     db = SessionLocal()
     try:
-        expected = db.query(TikuQuestion).filter(
+        exp_a1 = db.query(TikuQuestion).filter(
             TikuQuestion.review_status == "published",
             TikuQuestion.type == "A1").count()
-        assert expected >= 100, f"published A1 题库应成规模，实际 {expected}"
+        exp_b1 = db.query(TikuQuestion).filter(
+            TikuQuestion.review_status == "published",
+            TikuQuestion.type == "B1").count()
+        assert exp_a1 >= 100 and exp_b1 >= 1, f"published 规模异常 A1={exp_a1}/B1={exp_b1}"
         t_rows = db.execute(select(Question).where(
             Question.code.like("T%"))).scalars().all()
-        assert len(t_rows) == expected, f"物化 T 题应 {expected}，实际 {len(t_rows)}"
+        assert len(t_rows) == exp_a1 + exp_b1, \
+            f"物化应 A1+B1={exp_a1}+{exp_b1}，实际 {len(t_rows)}"
         # 结构：单选/诊断池/已发布/域存在；每个 T 题恰好绑定一条解析证据
         ev_qids = {e.question_id for e in db.execute(select(QuestionEvidence).where(
             QuestionEvidence.support_type == "解析")).scalars()}
@@ -88,16 +95,40 @@ def test_bridge_materializes_published_a1():
             assert q.domain_id, f"{q.code} 必须挂章级诊断域"
             assert q.id in ev_qids, f"{q.code} 缺解析证据（题目绑定证据，ADR-02）"
             assert q.stem and q.options and q.answer, f"{q.code} 题干/选项/答案不完整"
-        # B1 配伍题不物化（结构不同，P4 适配）——published 池存在 B1 时校验隔离语义
-        n_b1 = db.query(TikuQuestion).filter(
+        # B1 配伍组摊平物化：同组题 options 与物化后逐字一致、answer 为单字母
+        b1_rows = db.execute(select(TikuQuestion).where(
             TikuQuestion.review_status == "published",
-            TikuQuestion.type == "B1").count()
-        assert n_b1 >= 0
+            TikuQuestion.type == "B1")).scalars().all()
+        for t in b1_rows:
+            q = db.execute(select(Question).where(
+                Question.code == f"T{t.paper_no}-{t.qid:03d}")).scalar_one_or_none()
+            assert q and q.options == t.options and q.answer == t.answer, \
+                f"B1 {t.paper_no}-{t.qid:03d} 摊平物化不一致"
         # 摸底 3 章配额前提：published A1 覆盖 ≥3 章
         ch_refs = {t.chapter_ref for t in db.query(TikuQuestion).filter(
             TikuQuestion.review_status == "published",
             TikuQuestion.type == "A1").all()}
         assert len(ch_refs) >= 3, f"A1 published 覆盖章数应 ≥3，实际 {len(ch_refs)}"
+    finally:
+        db.close()
+
+
+def test_seed_questions_have_real_source_anchor():
+    """种子 10 题解析来源锚点（原 EV-PENDING-W3 占位作废）：
+    证据 chunk id 为教材锚点且非占位，与题库"题目绑定证据"口径一致。"""
+    _rebuild()
+    db = SessionLocal()
+    try:
+        qs = db.execute(select(Question).where(Question.code.like("Q-%"))).scalars().all()
+        assert len(qs) >= 10, f"种子题应 10 道，实际 {len(qs)}"
+        for q in qs:
+            ev = db.execute(select(QuestionEvidence).where(
+                QuestionEvidence.question_id == q.id,
+                QuestionEvidence.support_type == "解析")).scalar_one_or_none()
+            assert ev is not None and ev.content_text, f"{q.code} 解析文本缺失"
+            assert ev.evidence_chunk_id != "EV-PENDING-W3", f"{q.code} 仍是 W3 占位"
+            assert "第5章" in ev.evidence_chunk_id or "胆碱能" in ev.evidence_chunk_id, \
+                f"{q.code} 锚点应指向教材第5章: {ev.evidence_chunk_id}"
     finally:
         db.close()
 
@@ -116,6 +147,7 @@ def test_bridge_idempotent_reseed():
         n2 = db.query(Question).filter(Question.code.like("T%")).count()
         assert n1 == n2, f"幂等重放后物化数不得增长: {n1} -> {n2}"
         assert stat["bridged"] == 0, "二次桥接不应新建任何题"
+        assert set(stat["by_type"]) == {"A1", "B1"}, "统计应按题型拆分（P4 全量物化）"
     finally:
         db.close()
 

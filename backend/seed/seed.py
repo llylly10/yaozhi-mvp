@@ -261,6 +261,11 @@ def seed(db):
     for a, b, txt in CONFUSION_PAIRS:
         db.add(ConfusionPair(domain_id=domain.id, drug_a=a, drug_b=b, distinction_text=txt))
 
+    # 解析来源锚点（2026-09-03 与题库"题目绑定证据"口径对齐）：
+    # 种子 10 题内容均为 M 胆碱受体药（阿托品/毛果芸香碱/碘解磷定等），
+    # 依据人卫《药理学》9e 第5章"作用于胆碱能神经系统的药物"（OCR p60-78 范围）。
+    # 原 EV-PENDING-W3 为 W3 RAG 占位，演示/教学预览若透出会显得证据悬空，已弃用。
+    seed_src = "人卫《药理学》9e·第5章·胆碱能神经系统药物"
     for code, stem, options, answer, usage, levels, cond, signals, ev in QUESTIONS:
         q = Question(code=code, type="single", domain_id=domain.id, stem=stem, options=options,
                      answer=answer, usage=usage, leakage_group_id="LG-ANS-01",
@@ -268,7 +273,7 @@ def seed(db):
                      review_status="published")  # 同上
         db.add(q)
         db.flush()
-        db.add(QuestionEvidence(question_id=q.id, evidence_chunk_id="EV-PENDING-W3",
+        db.add(QuestionEvidence(question_id=q.id, evidence_chunk_id=seed_src,
                                 support_type="解析", content_text=ev))
     audit(db, "seed", "content.seeded", domain.code, questions=len(QUESTIONS),
           followups=len(FOLLOWUPS), misconceptions=len(MISCONCEPTIONS))
@@ -312,11 +317,11 @@ def _restore_course_assets(db):
         r = restore_content(db)
         print(f"[seed] 内容化恢复: 规则初标新填 {r['tagged']} 题, "
               f"批注稿 {r['batches']}")
-        # 题库→业务桥接（2026-09-03）：published A1 物化进 questions，闭环消费真实题库。
+        # 题库→业务桥接（2026-09-03）：published A1+B1 物化进 questions，闭环消费真实题库。
         from seed.seed_tiku_bridge import bridge_tiku_questions
         b = bridge_tiku_questions(db)
         print(f"[seed] 题库桥接: 物化 {b['bridged']} 题, 解析重绑定 {b['rebound']} 题, "
-              f"B1 暂隔 {b['skipped_b1']} 题, 章域 {b['domain_codes']}")
+              f"题型 {b['by_type']}, 章域 {b['domain_codes']}")
     except Exception as e:  # noqa: BLE001
         # 醒目提示：异常会导致补章(4章)与内容化(published)静默缺失，reset-demo
         # 接口仍返回 ok，演示方不易察觉。打印类型便于定位（如枚举非法值拦截）。
