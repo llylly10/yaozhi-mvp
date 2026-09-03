@@ -64,6 +64,8 @@ npm config set audit false
 
 echo "==> [3/4] 构建前端静态站（dist/ 已存在则跳过，避免服务器上 rolldown native binding 问题）"
 cd "$REPO_ROOT/frontend"
+# 修 npm 缓存权限 (旧版本 npm 的 bug: 之前 sudo 装 docker 时留下了 root-owned 缓存, 致 npm install EACCES)
+sudo chown -R "$(id -u):$(id -g)" /home/admin/.npm 2>/dev/null || chown -R "$(id -u):$(id -g)" ~/.npm 2>/dev/null || true
 if [ -f dist/index.html ]; then
   echo "    ✅ dist/index.html 已存在, 跳过构建（前端在本机构建, 服务器只起 nginx 提供静态）"
 else
