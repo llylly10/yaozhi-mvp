@@ -24,7 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # backend/
 from app.db import SessionLocal  # noqa: E402
 from app.models import TikuQuestion  # noqa: E402
 
-MAT_DIR = r"D:\ceshi\corpus\course-materials"
+# 内容资产随仓库走（backend/seed/ → 上两级为仓库根），避免硬编码盘符
+MAT_DIR = Path(__file__).resolve().parents[2] / "corpus" / "course-materials"
 # 批注稿清单：后续 P2/P3 批在此追加 (chapter_ref, json文件名)
 BATCH_FILES = [
     ("CH6", "P1-CH6解析批注稿-20260903.json"),
@@ -35,6 +36,7 @@ BATCH_FILES = [
     ("CH13", "P3-CH13解析批注稿-20260903.json"),
     ("CH18", "P3-CH18解析批注稿-20260903.json"),
     ("CH39", "P3-CH39解析批注稿-20260903.json"),
+    ("CH7", "P4a-CH7解析批注稿-20260903.json"),
 ]
 
 COG_ANALYSIS_WORDS = re.compile(r"机制|为什么|药理基础|理由是|原因是")

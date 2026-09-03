@@ -6,4 +6,4 @@ dist/
 corpus/raw/
 corpus/ocr_textbook9e/_tmp/
 corpus/ocr_textbook9e/chapter_index.json
-session/*.log
+session/          # 运行产物：服务日志、DB 备份、临时导出（不入版本控制）

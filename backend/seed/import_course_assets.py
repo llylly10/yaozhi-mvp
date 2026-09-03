@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """导入课程资产（题库原文 + 大纲树）到 yaozhi_w1.db。
 
-来源: D:\\ceshi\\corpus\\course-materials\\tiku_parsed.json / 教学大纲-结构化.json
+来源: <repo>/corpus/course-materials/tiku_parsed.json / 教学大纲-结构化.json
+（内容资产随仓库走，路径按脚本位置相对解析，避免硬编码盘符）
 幂等: 按 (paper_no, qid) 与 book_chapter_no 查重，已存在则跳过（可重复执行）。
 运行: cd backend && python -m seed.import_course_assets
 """
@@ -15,9 +16,9 @@ from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.models import (  # noqa: E402
     SyllabusChapter, SyllabusExperiment, TikuPaper, TikuQuestion)
 
-MAT_DIR = r"D:\ceshi\corpus\course-materials"
-TIKU_JSON = MAT_DIR + r"\tiku_parsed.json"
-SYLLABUS_JSON = MAT_DIR + r"\教学大纲-结构化.json"
+MAT_DIR = Path(__file__).resolve().parents[2] / "corpus" / "course-materials"
+TIKU_JSON = MAT_DIR / "tiku_parsed.json"
+SYLLABUS_JSON = MAT_DIR / "教学大纲-结构化.json"
 
 
 def options_to_list(opts: dict) -> list:
