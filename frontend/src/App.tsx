@@ -894,7 +894,8 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
   const [rationale, setRationale] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null)
-  // 题库物化题（无错因标注）：答完即给解析型反馈，不进五级漏斗诊断
+  // 题库物化题（无 distractor_signals 标注）：答错走通用四分类归因轻量诊断会话
+  // （一级错因 + 证据等级低 + 可细化），答对只给解析型反馈
   const [tikuFeedback, setTikuFeedback] = useState<{ feedback: TikuFeedback; is_correct: boolean } | null>(null)
   const [training, setTraining] = useState<{
     training_id: string; mode: string; note: string
@@ -921,7 +922,7 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
         setTikuFeedback(null)
         pushDiagnosis(await api.diagnosis(r.session_id))
       } else {
-        // 题库题：session 不会创建，直接展示解析型反馈
+        // 题库题答对：不建会话，直接展示解析型反馈
         pushDiagnosis(null)
         setTikuFeedback({ feedback: r.feedback as TikuFeedback, is_correct: !!r.is_correct })
       }
@@ -1424,7 +1425,7 @@ function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onE
         </motion.div>
       )}
 
-      {!diagnosis.is_correct && diagnosis.card?.can_refine && !showFollowup && (
+      {!diagnosis.is_correct && diagnosis.card?.can_refine && !showFollowup && diagnosis.followup && (
         <motion.button initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => setShowFollowup(true)}
           className="btn card w-full items-center gap-3 p-5 text-left hover:shadow-[var(--shadow-lg)]">
           <span className="grid size-9 flex-none place-items-center rounded-xl bg-gold-soft font-serif font-bold text-gold">问</span>
