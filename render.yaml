@@ -1,0 +1,16 @@
+# Render 部署配置（后端：Docker）。Cloudflare Pages 托管前端并代理 /api 到本服务。
+# 用法：Render 控制台 → New → Blueprint → 连接本仓库，自动按此文件建服务。
+services:
+  - type: web
+    name: yaozhi-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: YAOZHI_SEED_ON_STARTUP
+        value: "true"
+      - key: YAOZHI_MODEL_PROVIDER
+        value: "mock"
+      - key: YAOZHI_DATABASE_URL
+        value: "sqlite:///./yaozhi_w1.db"

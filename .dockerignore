@@ -1,0 +1,17 @@
+# 后端镜像构建上下文（仓库根）忽略项
+backend/yaozhi_w1.db
+backend/uvicorn.log
+backend/session/
+backend/__pycache__/
+backend/.venv/
+backend/tests/
+**/__pycache__/
+**/*.pyc
+frontend/
+.git/
+
+# 大体积 / 受版权语料不进镜像（种子仅需 course-materials 小 JSON）
+corpus/raw/
+corpus/ocr_textbook9e/
+corpus/tools/
+corpus/*.pdf

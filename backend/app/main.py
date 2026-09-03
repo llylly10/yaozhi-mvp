@@ -10,7 +10,9 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 app = FastAPI(title="药知 MVP API", version="1.1-w1")
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"],
+# 演示部署：允许所有来源（Cloudflare Pages 经 Functions 代理 /api 时为同源，此处为兜底）。
+# 生产环境应改为具体的 Pages 域名白名单。
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                    allow_headers=["*"])
 app.include_router(router)
 
