@@ -15,6 +15,22 @@ import { api, type Diagnosis, type Question, type TikuFeedback } from './api'
 
 const USER_KEY = 'yaozhi_user_id_v2'
 
+// 幂等键 UUID 生成：优先 crypto.randomUUID（仅 HTTPS/localhost 可用）；
+// 降级 crypto.getRandomValues（非安全上下文也有），再降级纯 JS（极老浏览器/非安全上下文兜底）。
+function genUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  const c = (typeof crypto !== 'undefined' && crypto.getRandomValues)
+    ? crypto
+    : { getRandomValues: (arr: Uint8Array) => { for (let i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256); return arr } }
+  const b = c.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6] & 0x0f) | 0x40 // version 4
+  b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
 type Screen = 'register' | 'consent' | 'goal' | 'assessment' | 'portrait' | 'list' | 'material' | 'flow' | 'profile'
 type View = 'todo' | 'material' | 'wrongbook' | 'profile'
 
@@ -977,7 +993,7 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
     try {
       const r = await api.submitAttempt({
         user_id: userId, question_id: question.id, selected_option: selected,
-        rationale: rationale || undefined, idempotency_key: crypto.randomUUID(),
+        rationale: rationale || undefined, idempotency_key: genUUID(),
       })
       if (r.session_id) {
         setTikuFeedback(null)
