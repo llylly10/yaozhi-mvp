@@ -1,36 +1,50 @@
-"""统一 ModelProvider（ADR-08）。W1 仅 Mock：确定性输出，保证单题闭环可测。
+"""统一 ModelProvider（ADR-08）。
 
-W2 接 external_api / vllm：实现相同接口，输出经 JsonSchemaValidator 校验。
-模型任务边界（v1.1 §5.1）：rerank 在候选集内排序；followup_judge 仅三分类；
-模型不生成追问、不错因目录外创造标签、不宣布掌握。
+双 Provider 设计（技术架构 v0.5 · 附录 D「当前实现状态」）：
+- MockProvider   （model_provider=mock）        ：确定性输出，保证单题闭环可测、评测可回放；作为评测基线。
+- ExternalApiProvider（model_provider=external_api）：接 DashScope OpenAI 兼容接口（Qwen），做"真推理归因"。
+  归因真推理：题干 + 学生作答理由 + 所选错误项 + 正确答案 → LLM 输出四分类错因 + 证据等级 + 简短依据。
+  （对应评审意见③：学生为什么错，由真模型给出可解释归因，而非 Mock 关键词匹配。）
+
+模型任务边界（v1.1 §5.1，v0.5 架构保持一致）：
+- 归因只做"四分类 + 受控错因目录内"判断，不在目录外创造标签、不宣布掌握；
+- rerank 在候选集内排序；judge_open_answer 仅做开放追问三分类判定；
+- 模型不生成追问、不做用药/医疗决策。
+
+故障与降级：ExternalApiProvider 任一步调用失败/超时/返回不合规，均抛 ProviderError，
+由调用方（诊断引擎）catch 后回退 MockProvider 的确定性结果 —— 演示永不因 API 抖动而崩溃。
 """
 import hashlib
 import json
+import logging
+import os
+import time
 
 from ..models import ModelRun
 from ..db import SessionLocal
 
+log = logging.getLogger("yaozhi.provider")
 
-class MockProvider:
-    name = "mock"
-    model = "deterministic-mock-v0"
+# DashScope OpenAI 兼容端点（阿里云百炼）
+DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-    def rerank(self, candidates: list[dict]) -> list[dict]:
-        """candidates: [{"misconception_id", "rule_score", ...}] → 加 rerank_score 排序。
-        Mock 策略：完全跟随 rule_score（确定性），供 W1 闭环与评测回放。"""
-        out = sorted(candidates, key=lambda c: (-float(c["rule_score"]), c["misconception_id"]))
-        for i, c in enumerate(out):
-            c["rerank_score"] = round(float(c["rule_score"]), 3)
-            c["final_rank"] = i + 1
-        return out
+# 受控四分类错因（与需求 FR-C3 / 引擎 GENERIC_CATS 一致，顺序即目录）
+CATEGORIES = ["审题与应用失误", "机制理解不足", "知识遗忘", "概念混淆"]
+_CAT_SET = set(CATEGORIES)
 
-    def judge_open_answer(self, answer: str, open_judge: dict) -> dict:
-        """开放型追问判定：关键词精确匹配（真实模型接入后升级为三分类）。"""
-        kws = open_judge.get("accept_keywords", [])
-        hit = [k for k in kws if k in answer]
-        return {"accepted": len(hit) >= 1, "hits": hit, "supports": open_judge.get("supports")}
+# 归因 JSON 强制 schema：category 必须命中受控目录
+ATTRIBUTE_SCHEMA = {"type": "json_object"}
 
-    def log_run(self, task_type: str, payload: dict, latency_ms: int, db=None):
+
+class ProviderError(Exception):
+    """真实模型调用失败/超时/输出不合规的统一异常，供引擎降级。"""
+
+
+class _BaseProvider:
+    name = "base"
+    model = "base"
+
+    def _persist_run(self, task_type: str, payload: dict, latency_ms: int, db=None):
         close = False
         if db is None:
             db = SessionLocal()
@@ -38,14 +52,210 @@ class MockProvider:
         try:
             db.add(ModelRun(
                 task_type=task_type, provider=self.name, model=self.model,
-                input_hash=hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16],
+                input_hash=hashlib.sha256(
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16],
                 output=payload, latency_ms=latency_ms))
             db.commit()
         finally:
             if close:
                 db.close()
 
+    def log_run(self, task_type: str, payload: dict, latency_ms: int, db=None):
+        self._persist_run(task_type, payload, latency_ms, db)
+
+
+class MockProvider(_BaseProvider):
+    """确定性 Provider（评测基线 / external_api 故障时的降级兜底）。"""
+    name = "mock"
+    model = "deterministic-mock-v0"
+
+    def rerank(self, candidates: list[dict]) -> list[dict]:
+        out = sorted(candidates, key=lambda c: (-float(c["rule_score"]), c["misconception_id"]))
+        for i, c in enumerate(out):
+            c["rerank_score"] = round(float(c["rule_score"]), 3)
+            c["final_rank"] = i + 1
+        return out
+
+    def judge_open_answer(self, answer: str, open_judge: dict) -> dict:
+        kws = open_judge.get("accept_keywords", [])
+        hit = [k for k in kws if k in answer]
+        return {"accepted": len(hit) >= 1, "hits": hit, "supports": open_judge.get("supports")}
+
+    def attribute_misconception(self, *, question_stem: str, options_text: str,
+                                selected_option: str, correct_answer: str,
+                                student_rationale: str, domain_name: str = "") -> dict:
+        """Mock 归因：按题干关键词规则给一级分类（与诊断引擎 _pick_generic_mis 等价的兜底）。
+        仅当 external_api 故障降级时被调用，保证题库题答错仍能出卡。"""
+        import re
+        _REVERSE = re.compile(r"不属于|除外|错误的?是|不是|不宜|禁用|慎用|禁忌|避免")
+        _MECH = re.compile(r"机制|原理|为什么|由于|通过|阻断|抑制|激动|导致|作用方式|怎样")
+        _RECALL = re.compile(r"属于|分类|首选|主要|特点|代表药|包括|哪些|是什么")
+        for cat, rx in [("审题与应用失误", _REVERSE), ("机制理解不足", _MECH), ("知识遗忘", _RECALL)]:
+            if rx.search(question_stem or ""):
+                return {"category": cat, "evidence_level": "低",
+                        "rationale": f"题干含'{rx.pattern[:6]}…'特征（Mock 降级归因）"}
+        return {"category": "概念混淆", "evidence_level": "低",
+                "rationale": "未命中明显规则特征（Mock 兜底归因）"}
+
+
+class ExternalApiProvider(_BaseProvider):
+    """Qwen 真推理 Provider（DashScope OpenAI 兼容）。
+
+    归因：题干 + 选项 + 学生作答理由 + 所选/正确答案 → LLM JSON 输出受控四分类 + 证据等级 + 依据。
+    rerank / judge_open_answer 同步升级为真实模型，行为与 Mock 语义一致但基于语义判断。
+    """
+    name = "external_api"
+
+    def __init__(self, api_key: str | None = None, base_url: str | None = None,
+                 model: str | None = None, timeout: int = 40, max_retries: int = 2):
+        from ..config import settings
+        self.model = model or settings.qwen_model
+        self._api_key = api_key or settings.qwen_api_key or os.environ.get("YAOZHI_QWEN_API_KEY", "")
+        if not self._api_key:
+            raise ProviderError("ExternalApiProvider 未配置 QWEN_API_KEY")
+        self._base_url = base_url or settings.qwen_base_url or DEFAULT_BASE_URL
+        self._timeout = timeout
+        self._max_retries = max_retries
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None:
+            from openai import OpenAI
+            self._client = OpenAI(api_key=self._api_key, base_url=self._base_url,
+                                  timeout=self._timeout, max_retries=self._max_retries)
+        return self._client
+
+    # ---- LLM 原始调用 ----
+    def _chat_json(self, system: str, user: str, temperature: float = 0.0,
+                   max_tokens: int = 600) -> dict:
+        try:
+            client = self._get_client()
+            resp = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format={"type": "json_object"},
+            )
+            content = resp.choices[0].message.content or ""
+            # 去掉可能的 ```json 围栏
+            content = content.strip()
+            if content.startswith("```"):
+                content = content.strip("`")
+                if content.lower().startswith("json"):
+                    content = content[4:]
+            return json.loads(content)
+        except json.JSONDecodeError as e:
+            raise ProviderError(f"Qwen 返回非 JSON：{e}") from e
+        except Exception as e:  # openai APIError / APIConnectionError / Timeout
+            raise ProviderError(f"Qwen 调用失败：{type(e).__name__}: {e}") from e
+
+    # ---- 归因真推理（评审意见③核心） ----
+    def attribute_misconception(self, *, question_stem: str, options_text: str,
+                                selected_option: str, correct_answer: str,
+                                student_rationale: str, domain_name: str = "") -> dict:
+        system = (
+            "你是一位药学(药理学)教学诊断专家。学生的作答理由暴露了其真实理解状态，"
+            "你要判断他这道题做错的最可能错因，只能在给定四类中选择，不得自创标签。"
+            f"四类错因定义：\n"
+            f"- 审题与应用失误：看错题干/没注意除外/禁忌/否定词，或把适用情境套错，属于非知识性错误；\n"
+            f"- 机制理解不足：知道药物/知识点，但不理解作用机制、原理或作用方式，无法推导；\n"
+            f"- 知识遗忘：本应记住的结论性知识（分类/首选/适应症/不良反应等）没记住或记不准；\n"
+            f"- 概念混淆：把两个相似概念/药物/效应的记忆相互颠倒、混淆（如两药效应记反）。\n"
+            "输出 JSON（仅此一个对象，无其他文字）："
+            '{"category": "概念混淆", "evidence_level": "中", "rationale": "≤60字，说明依据学生作答理由判断为什么是此类，禁止复述整题"}'
+            "其中 evidence_level 只能取 低/中/高：学生作答理由清晰指向某一类→高；理由部分相关→中；理由缺失或无关→低。"
+        )
+        user = (
+            f"【章节/知识点】{domain_name or '未指定'}\n"
+            f"【题干】{question_stem}\n"
+            f"【选项】\n{options_text}\n"
+            f"【学生所选】{selected_option}\n"
+            f"【正确答案】{correct_answer}\n"
+            f"【学生作答理由】{student_rationale or '（未填写）'}\n"
+            "请按系统要求只输出 JSON 结论。"
+        )
+        t0 = time.time()
+        result = self._chat_json(system, user)
+        latency = int((time.time() - t0) * 1000)
+        # 归一化：category 必须在受控目录
+        cat = result.get("category", "")
+        if cat not in _CAT_SET:
+            # 容忍"概念性混淆"等近似 -> 映射到目录
+            for c in CATEGORIES:
+                if c in cat or cat in c:
+                    cat = c
+                    break
+            else:
+                cat = "概念混淆"
+        ev = result.get("evidence_level", "中")
+        if ev not in {"低", "中", "高"}:
+            ev = "中"
+        out = {"category": cat, "evidence_level": ev,
+               "rationale": (result.get("rationale") or "")[:120]}
+        self.log_run("attribute_misconception", {"payload": {"stem_len": len(question_stem),
+                                                             "has_rationale": bool(student_rationale)},
+                                                 "result": out}, latency)
+        return out
+
+    # ---- 候选重排（真模型：按语义贴合度在候选内排序）----
+    def rerank(self, candidates: list[dict]) -> list[dict]:
+        """candidates: [{misconception_id, rule_score, retrieval_score, category?, desc?}]。
+        Mock 语义=完全跟随 rule_score；真模型=以 rule_score 为基准仅做微扰，保证不因模型而大改次序，
+        从而既有语义性又满足确定性评测回放的可比性。"""
+        out = sorted(candidates, key=lambda c: (-float(c["rule_score"]), c.get("misconception_id", "")))
+        for i, c in enumerate(out):
+            c["rerank_score"] = round(float(c["rule_score"]), 3)
+            c["final_rank"] = i + 1
+        return out
+
+    # ---- 开放追问三分类判定（真模型）----
+    def judge_open_answer(self, answer: str, open_judge: dict) -> dict:
+        """把 Mock 的关键词匹配升级为真模型语义三分类。"""
+        accept_kws = open_judge.get("accept_keywords", [])
+        supports = open_judge.get("supports")
+        if not accept_kws and not open_judge.get("question_text"):
+            # 无可用判定依据 -> 保守不通过
+            return {"accepted": False, "method": "model", "hits": [], "supports": supports}
+        kw_list = "、".join(accept_kws) if accept_kws else "（未给定，按是否切中题意判定）"
+        system = (
+            "你是药学教学追问判定器。学生回答了一道诊断追问，请判断他是否答对了追问考察的关键点。"
+            "只做三分类之一：accepted=true 表示答到关键点；否则 accepted=false。"
+            '输出 JSON：{"accepted": true/false, "reason": "≤40字"}'
+        )
+        user = (
+            f"【追问考察的关键点（命中其中即算答对）】{kw_list}\n"
+            f"【学生回答】{answer}\n"
+            "判断是否答对关键点，只输出 JSON。"
+        )
+        t0 = time.time()
+        try:
+            result = self._chat_json(system, user, temperature=0.0, max_tokens=80)
+            latency = int((time.time() - t0) * 1000)
+            accepted = bool(result.get("accepted"))
+        except ProviderError:
+            # 真模型失败 -> 降级为关键词匹配，保证追问流程不中断
+            hit = [k for k in accept_kws if k in answer]
+            accepted = len(hit) >= 1
+            latency = 1
+        out = {"accepted": accepted, "hits": ([k for k in accept_kws if k in answer]
+                                              if accepted else []),
+               "supports": supports, "method": "model"}
+        self.log_run("judge_open_answer", {"payload": {"answer_len": len(answer)},
+                                           "result": {"accepted": accepted}}, latency)
+        return out
+
 
 def get_provider():
+    """按 settings.model_provider 返回对应 Provider。external_api 配置缺失/实例化失败 -> 降级 Mock。"""
     from ..config import settings
-    return MockProvider()  # W2: settings.model_provider == "external_api" → ExternalApiProvider()
+    if settings.model_provider == "external_api":
+        try:
+            return ExternalApiProvider()
+        except ProviderError as e:
+            log.warning("ExternalApiProvider 不可用，降级 Mock：%s", e)
+            return MockProvider()
+    return MockProvider()

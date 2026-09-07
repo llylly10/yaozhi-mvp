@@ -12,8 +12,8 @@ from ..llm.provider import get_provider
 from ..misconceptions.service import route_intervention
 from ..models import (
     Attempt, ChainNode, DiagnosisCandidate, DiagnosisEvidence, DiagnosisSession,
-    FollowupTurn, FollowupNode, Misconception, MisconceptionFollowup, Question,
-    QuestionEvidence, TrainingSession, TrainingSessionQuestion, audit,
+    DiagnosticDomain, FollowupTurn, FollowupNode, Misconception, MisconceptionFollowup,
+    Question, QuestionEvidence, TrainingSession, TrainingSessionQuestion, audit,
 )
 from ..mastery import engine as mastery
 
@@ -83,32 +83,72 @@ def _pick_generic_mis(db: Session, question: Question) -> Misconception | None:
     return by_cat.get("概念混淆") or mis_list[0]
 
 
+def _attribute_tiku_model(db: Session, attempt: Attempt, question: Question) -> tuple:
+    """题库题真模型归因：题干+作答理由+所选/正确答案 → 受控四分类（external_api 模式）。
+
+    - external_api：调 provider.attribute_misconception 得 (category, evidence_level, rationale)，
+      映射到章级同域同类别错因；调用失败/无 key → 抛 ProviderError 由调用方降级。
+    - 其余模式（mock）：直接走 _pick_generic_mis 正则兜底，保证确定性评测不回归。
+    返回 (misconception|None, evidence_level, rationale_text)。
+    """
+    from ..config import settings
+    from ..llm.provider import ProviderError, get_provider
+    if settings.model_provider != "external_api":
+        mis = _pick_generic_mis(db, question)
+        return mis, "低", None
+    provider = get_provider()
+    options_text = "\n".join(f"{o.get('key')}. {o.get('text')}" for o in (question.options or []))
+    domain_name = ""
+    if question.domain_id:
+        dom = db.get(DiagnosticDomain, question.domain_id)
+        if dom:
+            domain_name = dom.name
+    try:
+        res = provider.attribute_misconception(
+            question_stem=question.stem or "", options_text=options_text,
+            selected_option=attempt.selected_option or "", correct_answer=question.answer or "",
+            student_rationale=attempt.rationale or "", domain_name=domain_name or "")
+        cat = res.get("category") or "概念混淆"
+        mis = db.execute(select(Misconception).where(
+            Misconception.domain_id == question.domain_id,
+            Misconception.category == cat,
+            Misconception.status == "published")).scalars().first() \
+            or _pick_generic_mis(db, question)
+        return mis, res.get("evidence_level", "低"), res.get("rationale")
+    except ProviderError:
+        mis = _pick_generic_mis(db, question)
+        return mis, "低", None
+
+
 def start_session_tiku(db: Session, attempt: Attempt) -> DiagnosisSession | None:
     """题库物化题答错时的轻量诊断会话：通用四分类归因 + 低证据 + 可细化。
 
     不跑五级漏斗（无 distractor_signals，跑全漏斗会误导），直接出一级错因卡，
     让 练→诊断→训练→复测 在 723 道题库题上闭合。
+    external_api 模式下用真模型按学生作答理由归因（评审意见③：可解释的"为什么错"）。
     """
     question = db.get(Question, attempt.question_id)
-    chosen = _pick_generic_mis(db, question)
+    chosen, evidence_level, rationale = _attribute_tiku_model(db, attempt, question)
     if not chosen:
         return None
     session = DiagnosisSession(
         attempt_id=attempt.id, state="diagnosed",
         chain_focus=(question.chain_levels or [None])[0],
-        hypothesis_id=chosen.id, evidence_level="低", can_refine=True)
+        hypothesis_id=chosen.id, evidence_level=evidence_level, can_refine=True)
     db.add(session)
     db.flush()
+    rationale_note = f"，依据学生作答理由归因：{rationale}" if rationale else ""
     db.add(DiagnosisEvidence(
         session_id=session.id, evidence_type="选项标注",
         source_ref=f"question:{question.id}",
         content=f"学生选择 {attempt.selected_option}，正确答案为 {question.answer}"
-                f"（通用四分类归因，证据等级低，可追问细化）"))
+                f"（通用四分类归因：{chosen.category}，证据等级{evidence_level}"
+                f"{rationale_note}，可追问细化）"))
     # 注意：通用四分类归因不写错因级掌握度薄弱——那是种子域「真错因」才有的。
     # 章级薄弱由 router.practice_failed 负责；本会话仅用于出卡片 + 接训练，
     # 避免同一道错题在 domain 内既建章级薄弱又建错因级薄弱导致双重计数。
     audit(db, "system", "diagnosis.state", session.id, to="diagnosed",
-          misconception=chosen.id, evidence_level="低", note="tiku_generic")
+          misconception=chosen.id, evidence_level=evidence_level, note="tiku_generic")
     db.commit()
     return session
 
