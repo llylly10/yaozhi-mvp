@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     # ---- external_api（Qwen）相关 ----
     qwen_api_key: str = ""          # 阿里云百炼 DashScope API Key（env: YAOZHI_QWEN_API_KEY）
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    qwen_model: str = "qwen3.7-max-2026-06-08"
+    qwen_model: str = "qwen-plus"  # 演示默认用 plus(归因延迟~1s, 质量可靠); 可切 qwen3.7-max-2026-06-08(更强但20-65s)
     seed_on_startup: bool = True
 
     class Config:
