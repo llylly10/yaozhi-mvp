@@ -15,7 +15,8 @@ services:
       - PORT=8000
       - SEED_ON_STARTUP=true
       # db 放独立数据目录 /srv/data（named volume 挂载点），避免 volume 遮蔽镜像代码
-      - DATABASE_URL=sqlite:////srv/data/yaozhi_w1.db
+      # env 前缀必须是 YAOZHI_（Settings.env_prefix），否则 config 回退默认库
+      - YAOZHI_DATABASE_URL=sqlite:////srv/data/yaozhi_w1.db
     volumes:
       - backend_data:/srv/data   # 仅持久化 SQLite，不遮蔽镜像 /srv 代码
     expose:
