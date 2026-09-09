@@ -40,6 +40,44 @@ class ProviderError(Exception):
     """真实模型调用失败/超时/输出不合规的统一异常，供引擎降级。"""
 
 
+class CircuitOpenError(ProviderError):
+    """熔断已开启：连续失败超过阈值，进入冷却期，本次调用直接降级（不发起真请求）。"""
+
+
+class TimeoutError(ProviderError):
+    """单次 LLM 调用超过硬超时阈值。"""
+
+
+def _run_with_deadline(fn, timeout: float):
+    """在独立线程里执行同步 LLM 调用，硬超时保护（W2 ④，2026-09-08）。
+
+    场景：DashScope 偶发挂起/慢响应时，即便 openai client 设了 timeout，
+    仍可能卡在传输层；这里再套一层墙钟硬超时，超时即抛 TimeoutError →
+    调用方（诊断引擎）降级 Mock，保证演示永不因一次挂起而整个请求崩溃。
+    注意：线程无法强制杀正在运行的 socket 阻塞，超时后主流程继续并抛错，
+    迟到结果被丢弃（线程设为 daemon，进程退出不等待）。
+    """
+    import threading
+
+    box: dict = {"result": None, "exc": None}
+    deadline_s = max(float(timeout), 0.1)
+
+    def _worker():
+        try:
+            box["result"] = fn()
+        except BaseException as e:  # noqa: BLE001 线程内捕获并回传
+            box["exc"] = e
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout=deadline_s)
+    if t.is_alive():
+        raise TimeoutError(f"LLM 调用超过硬超时 {deadline_s:.0f}s")
+    if box["exc"] is not None:
+        raise box["exc"]
+    return box["result"]
+
+
 class _BaseProvider:
     name = "base"
     model = "base"
@@ -114,9 +152,33 @@ class ExternalApiProvider(_BaseProvider):
         if not self._api_key:
             raise ProviderError("ExternalApiProvider 未配置 QWEN_API_KEY")
         self._base_url = base_url or settings.qwen_base_url or DEFAULT_BASE_URL
-        self._timeout = timeout
-        self._max_retries = max_retries
+        # openai 客户端超时/重试（传输层）
+        self._timeout = timeout or settings.model_call_timeout
+        self._max_retries = max_retries or settings.model_max_retries
+        # 硬超时 + 熔断（W2 ④）：墙钟保护 + 连续失败冷却，防挂起/雪崩打垮演示
+        self._hard_timeout = float(settings.model_call_timeout)
+        self._cb_threshold = int(settings.circuit_breaker_threshold or 3)
+        self._cb_cooldown = float(settings.circuit_breaker_cooldown or 60.0)
+        self._fail_count = 0
+        self._open_until = 0.0  # 熔断开启的时间戳（epoch 秒）；0 = 关闭
         self._client = None
+
+    # ---- 熔断状态 ----
+    def _circuit_open(self) -> bool:
+        if self._open_until and time.time() < self._open_until:
+            return True
+        return False
+
+    def _record_success(self):
+        self._fail_count = 0
+        self._open_until = 0.0
+
+    def _record_failure(self):
+        self._fail_count += 1
+        if self._fail_count >= self._cb_threshold:
+            self._open_until = time.time() + self._cb_cooldown
+            log.warning("Qwen 连续失败 %s 次，熔断开启 %.0fs，期间降级 Mock",
+                        self._fail_count, self._cb_cooldown)
 
     def _get_client(self):
         if self._client is None:
@@ -125,32 +187,49 @@ class ExternalApiProvider(_BaseProvider):
                                   timeout=self._timeout, max_retries=self._max_retries)
         return self._client
 
-    # ---- LLM 原始调用 ----
+    # ---- LLM 原始调用（带硬超时 + 熔断，W2 ④）----
     def _chat_json(self, system: str, user: str, temperature: float = 0.0,
                    max_tokens: int = 600) -> dict:
+        # 熔断门：处于冷却期 → 不开真请求，直接降级
+        if self._circuit_open():
+            raise CircuitOpenError(
+                f"Qwen 熔断冷却中（剩余 {max(0.0, self._open_until - time.time()):.0f}s）")
         try:
-            client = self._get_client()
-            resp = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                temperature=temperature,
-                max_tokens=max_tokens,
-                response_format={"type": "json_object"},
-            )
-            content = resp.choices[0].message.content or ""
+            def _call() -> str:
+                client = self._get_client()
+                resp = client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format={"type": "json_object"},
+                )
+                return resp.choices[0].message.content or ""
+
+            # 墙钟硬超时：即便传输层挂死，也保证主流程在 deadline 内返回/抛错
+            content = _run_with_deadline(_call, self._hard_timeout)
             # 去掉可能的 ```json 围栏
             content = content.strip()
             if content.startswith("```"):
                 content = content.strip("`")
                 if content.lower().startswith("json"):
                     content = content[4:]
-            return json.loads(content)
+            result = json.loads(content)
+            self._record_success()
+            return result
+        except CircuitOpenError:
+            raise
+        except TimeoutError:
+            self._record_failure()
+            raise
         except json.JSONDecodeError as e:
+            self._record_failure()
             raise ProviderError(f"Qwen 返回非 JSON：{e}") from e
         except Exception as e:  # openai APIError / APIConnectionError / Timeout
+            self._record_failure()
             raise ProviderError(f"Qwen 调用失败：{type(e).__name__}: {e}") from e
 
     # ---- 归因真推理（评审意见③核心） ----
@@ -249,13 +328,25 @@ class ExternalApiProvider(_BaseProvider):
         return out
 
 
+_cached_external: ExternalApiProvider | None = None
+
+
 def get_provider():
-    """按 settings.model_provider 返回对应 Provider。external_api 配置缺失/实例化失败 -> 降级 Mock。"""
+    """按 settings.model_provider 返回对应 Provider。external_api 配置缺失/实例化失败 -> 降级 Mock。
+
+    实例级缓存：熔断状态（连续失败/冷却）跨请求保留。若切回 mock，缓存作废，下次
+    再切 external_api 重新实例化（settings.model_provider 驱动，测试可 monkeypatch）。
+    """
     from ..config import settings
+    global _cached_external
     if settings.model_provider == "external_api":
-        try:
-            return ExternalApiProvider()
-        except ProviderError as e:
-            log.warning("ExternalApiProvider 不可用，降级 Mock：%s", e)
-            return MockProvider()
+        if _cached_external is None:
+            try:
+                _cached_external = ExternalApiProvider()
+            except ProviderError as e:
+                log.warning("ExternalApiProvider 不可用，降级 Mock：%s", e)
+                return MockProvider()
+        return _cached_external
+    # 非 external_api 模式：清缓存，避免切回 mock 后再切回时拿到旧熔断态/旧 key
+    _cached_external = None
     return MockProvider()

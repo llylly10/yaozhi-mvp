@@ -18,8 +18,76 @@ import pytest  # noqa: E402
 
 from app.config import settings  # noqa: E402
 from app.llm.provider import (  # noqa: E402
-    ExternalApiProvider, MockProvider, ProviderError, get_provider,
+    CircuitOpenError, ExternalApiProvider, MockProvider, ProviderError,
+    TimeoutError, _run_with_deadline, get_provider,
 )
+
+
+# ---------- ④ W2：硬超时 + 熔断保护（确定性，无网络） ----------
+
+def _ext_provider(monkeypatch, api_key="k", threshold=2, cooldown=5.0):
+    monkeypatch.setattr(settings, "qwen_api_key", api_key)
+    monkeypatch.setattr(settings, "model_call_timeout", 5.0)
+    monkeypatch.setattr(settings, "circuit_breaker_threshold", threshold)
+    monkeypatch.setattr(settings, "circuit_breaker_cooldown", cooldown)
+    p = ExternalApiProvider()
+    p._hard_timeout = 0.05  # 缩短以快速触发硬超时
+    return p
+
+
+def test_run_with_deadline_times_out_when_slow():
+    """慢调用超时 → TimeoutError；不阻塞主流程。"""
+    def slow():
+        import time
+        time.sleep(1.0)
+        return "late"
+    import pytest as _pt
+    with _pt.raises(TimeoutError):
+        _run_with_deadline(slow, 0.05)
+
+
+def test_run_with_deadline_returns_when_fast():
+    def fast():
+        return {"ok": 1}
+    assert _run_with_deadline(fast, 1.0) == {"ok": 1}
+
+
+def test_circuit_breaker_opens_after_consecutive_failures(monkeypatch):
+    """连续失败达阈值 → 熔断开启（_circuit_open=True）。"""
+    p = _ext_provider(monkeypatch, threshold=2)
+    assert not p._circuit_open()
+    p._record_failure()
+    assert p._fail_count == 1 and not p._circuit_open()
+    p._record_failure()  # 达阈值
+    assert p._circuit_open()
+
+
+def test_circuit_open_raises_without_calling_real_model(monkeypatch):
+    """熔断期 _chat_json 直接抛 CircuitOpenError，绝不发起真请求。"""
+    p = _ext_provider(monkeypatch, threshold=1)
+    p._open_until = 1e18  # 强制开启（冷却到纪元时间外）
+    monkeypatch.setattr(p, "_get_client",
+                        lambda: (_ for _ in ()).throw(AssertionError("不应创建 client")))
+    import pytest as _pt
+    with _pt.raises(CircuitOpenError):
+        p._chat_json("s", "u")
+
+
+def test_get_provider_caches_external_instance(monkeypatch):
+    """实例缓存：熔断态跨请求保留（同一实例）。"""
+    monkeypatch.setattr(settings, "model_provider", "external_api")
+    monkeypatch.setattr(settings, "qwen_api_key", "k")
+    from app.llm import provider as prov_mod
+    prov_mod._cached_external = None
+    a = get_provider()
+    b = get_provider()
+    assert a is b
+    # 切回 mock → 缓存清空
+    monkeypatch.setattr(settings, "model_provider", "mock")
+    m = get_provider()
+    assert isinstance(m, MockProvider)
+    assert prov_mod._cached_external is None
+    prov_mod._cached_external = None
 
 
 def test_default_provider_is_mock(monkeypatch):
