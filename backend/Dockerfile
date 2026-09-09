@@ -6,6 +6,9 @@ RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ \
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt psycopg[binary]
 COPY backend/ ./
+# 数据库数据目录：named volume 仅挂载于此(/srv/data)，不再遮蔽 /srv 下的镜像代码，
+# 保证每次 rebuild 新代码即生效、SQLite 数据独立持久化。
+RUN mkdir -p /srv/data
 # 种子数据：仅复制小体积 course-materials JSON（约 3MB），不含 280MB 原始语料与受版权教材 OCR
 COPY corpus/course-materials/ /corpus/course-materials/
 # RAG 教材检索语料：body_*.txt(约2.1MB, 538 页 OCR 文本)+chapter_index.json。_tmp/原始扫描片已由
