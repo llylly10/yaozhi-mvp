@@ -13,6 +13,12 @@ async function handle(res: Response) {
 }
 
 export const api = {
+  // 探活：localStorage 里的 userId 在服务器可能已被重置/撤回，无效返回 false（不抛通用 404 文案）
+  userExists: async (userId: string) => {
+    const res = await fetch(`/api/users/${userId}/exists`)
+    return res.ok
+  },
+
   demoSession: (account: string, inviteCode: string) =>
     fetch('/api/sessions/demo', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ account, invite_code: inviteCode }) }).then(handle),
 

@@ -90,6 +90,16 @@ export default function App() {
     setUserId(null); setScreen('register'); setActiveQuestion(null); setDiagnosis(null); setView('todo')
   }
 
+  // 本地缓存的 userId 若在服务器已失效(演示库被重置/账号已撤回)，自动清缓存回落注册页，
+  // 避免残留下直入主壳报「数据不存在或已被重置」。每次 userId 变更探活一次。
+  const checkedUid = useRef<string | null>(null)
+  useEffect(() => {
+    if (!userId) { checkedUid.current = null; return }
+    if (checkedUid.current === userId) return
+    checkedUid.current = userId
+    api.userExists(userId).then((ok) => { if (!ok) logout() }).catch(() => {})
+  }, [userId])
+
   const step = stepIndex(screen, diagnosis)
   const inLearning = ['list', 'flow', 'profile', 'goal', 'study', 'assessment', 'portrait', 'material'].includes(screen)
 

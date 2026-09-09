@@ -129,3 +129,16 @@ def test_deletion_receipt_and_purge():
     purged = [x for x in p.json()["purged"] if x["user_id"] == uid]
     assert purged, "撤回用户应被物理删除"
     assert purged[0]["receipt"] == receipt
+
+
+def test_exists_reflects_active_user():
+    """探活端点：有效→200；不存在→404；已撤回→403。前端据此回落注册页。"""
+    uid = fresh_user()
+    assert client.get(f"/users/{uid}/exists").status_code == 200
+    # 不存在的 id → 404
+    assert client.get(f"/users/{uuid.uuid4().hex}/exists").status_code == 404
+    # 撤回后 → 403（撤回用户对前端等同「会话失效」）
+    consent(uid)
+    client.post(f"/users/{uid}/consent/withdraw", json={"confirm": True})
+    assert client.get(f"/users/{uid}/exists").status_code == 403
+

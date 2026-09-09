@@ -91,6 +91,17 @@ def _purge_user_data(db: Session, user_id: str) -> int:
     return n
 
 
+@router.get("/users/{user_id}/exists")
+def user_exists(user_id: str, db: Session = Depends(get_db)):
+    """探活：本地缓存了 userId 但服务器已重置/撤回时，前端据此回落注册页。
+
+    语义与 _active_user 一致：用户不存在→404，已撤回→403；两者前端都视为
+    「会话失效」→ 清本地缓存回欢迎页，避免卡在今日待办报「数据不存在」。
+    """
+    _active_user(user_id, db)
+    return {"ok": True}
+
+
 # ---------- 演示账号（US-0 同意门） ----------
 
 DEMO_INVITE_CODE = "DEMO2026"
