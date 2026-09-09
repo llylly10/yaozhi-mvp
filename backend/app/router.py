@@ -722,6 +722,12 @@ def study_detail(user_id: str, domain_id: str, db: Session = Depends(get_db)):
     return {**base, "source": "none", "chapter": None}
 
 
+class MaterialQuizIn(BaseModel):
+    """随堂自测提交：answers: {question_id: option_key}，服务端判分。"""
+
+    answers: dict[str, str] = {}
+
+
 @router.get("/users/{user_id}/study-map/{domain_id}/quiz")
 def get_study_quiz(user_id: str, domain_id: str, db: Session = Depends(get_db)):
     """知识图谱节点随堂摸底：抽本域 published 未作答题（与学习材料自测同池规则）。"""
@@ -802,11 +808,6 @@ def get_materials(domain_id: str, db: Session = Depends(get_db)):
             "knowledge_relations": [{"source": r.source, "edge": r.edge, "target": r.target,
                                      "note": r.note} for r in rels],
             "evidence": evidence[:6]}
-
-
-class MaterialQuizIn(BaseModel):
-    """随堂自测提交：answers: {question_id: option_key}，服务端判分。"""
-    answers: dict[str, str] = {}
 
 
 def _domain_quiz_pool(db: Session, domain_id: str, user_id: str, limit: int = 3):
