@@ -53,3 +53,8 @@ def migrate():
         if col not in existing_t:
             with engine.begin() as conn:
                 conn.execute(text(f"ALTER TABLE tiku_questions ADD COLUMN {col} {dtype}"))
+    # misconceptions 错因目录案例列（v0.7 错因卡第④字段，2026-09-08，旧库补列）
+    existing_m = {c["name"] for c in inspect(engine).get_columns("misconceptions")}
+    if "case_evidence" not in existing_m:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE misconceptions ADD COLUMN case_evidence TEXT"))

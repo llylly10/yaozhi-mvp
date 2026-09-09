@@ -107,6 +107,10 @@ class Misconception(Base):
     remediation_type: Mapped[str] = mapped_column(_enum(
         "remediation_type", "记忆卡", "混淆对变式", "断环重讲", "情境拆解"))
     remediation_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    # 教材事实案例（v0.7 错因卡第④字段，2026-09-08）：每个错因附 1 条教材/说明书事实
+    # 案例辅助学生记忆，来源署名（教材页码/说明书条目），不虚构。结构：
+    # {"scenario": 临床场景, "lesson": 一句话要点, "source": 来源署名}
+    case_evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(_enum("asset_status", "draft", "in_review", "published", "deprecated"),
                                         default="published")
 
@@ -121,6 +125,27 @@ class ConfusionPairEvidence(Base):
     __tablename__ = "confusion_pair_evidence"
     pair_id: Mapped[str] = mapped_column(ForeignKey("confusion_pairs.id"), primary_key=True)
     evidence_chunk_id: Mapped[str] = mapped_column(String(36))  # W3 接 evidence_chunks 后加 FK
+
+
+class KnowledgeRelation(Base):
+    """结构化知识关系（FR-A2 图谱最小落地，2026-09-08）。
+
+    以「源节点 —(边类型)→ 目标节点」表示一条知识关系。节点用 JSON {type, name}
+    内联标识（不另设节点注册表，MVP 够用）。边类型对齐 FR-A2：
+    作用于 / 表现为 / 禁忌用于 / 适应证 / 与…相互作用 / 属于。
+    内容仅由种子已署名教材事实转写（见 seed.KNOWLEDGE_EDGES），不虚构；
+    全章节铺开前须药理顾问审校（字段 author/review_status 预留）。
+    """
+    __tablename__ = "knowledge_relations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    domain_id: Mapped[str] = mapped_column(ForeignKey("diagnostic_domains.id"))
+    source: Mapped[dict] = mapped_column(JSON)          # {"type": 药物|机制|靶点|..., "name": …}
+    edge: Mapped[str] = mapped_column(String(32))        # 作用于/表现为/禁忌用于/适应证/与…相互作用/属于
+    target: Mapped[dict] = mapped_column(JSON)          # {"type": …, "name": …}
+    note: Mapped[str] = mapped_column(String(256), default="")
+    author: Mapped[str] = mapped_column(String(64), default="待药理顾问确认")
+    review_status: Mapped[str] = mapped_column(_enum("asset_status", "draft", "in_review", "published", "deprecated"),
+                                               default="draft")  # 试用前置 published
 
 
 class Question(Base):
@@ -277,6 +302,21 @@ VALID_MASTERY_TRANSITIONS = {
     ("未评估", "薄弱"), ("薄弱", "学习中"), ("学习中", "初步掌握"), ("学习中", "薄弱"),
     ("初步掌握", "掌握"), ("初步掌握", "薄弱"), ("掌握", "稳定掌握"), ("掌握", "薄弱"),
 }
+
+
+class StudyProgress(Base):
+    """学习进度（2026-09-09 学习→摸底 流程）：选完目标后在知识图谱里的「学一节→随堂摸底」。
+    每域一行：随堂摸底 ≥60% 通过即 state='已达标'（记录最优分数）。
+    与 MasteryState 解耦——摸底前(尚未产出薄弱画像)也能独立记录「学过」，图谱节点据此显示已达标；
+    若该域已有对应薄弱错因行，判分通过时会同步触发 mastery.material_passed（薄弱→学习中）。
+    """
+    __tablename__ = "study_progress"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    domain_id: Mapped[str] = mapped_column(ForeignKey("diagnostic_domains.id"), primary_key=True)
+    state: Mapped[str] = mapped_column(_enum("study_state", "未学", "已达标"), default="未学")
+    best_score: Mapped[float] = mapped_column(Numeric(4, 3), default=0)
+    quiz_total: Mapped[int] = mapped_column(default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
 
 class ModelRun(Base):

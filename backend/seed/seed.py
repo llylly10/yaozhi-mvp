@@ -65,6 +65,62 @@ CONFUSION_PAIRS = [
     ("阿托品", "碘解磷定", "有机磷中毒解救分工：阿托品阻断 M 受体对抗 M 样症状（对流涎、瞳孔缩小等）；碘解磷定复活胆碱酯酶、恢复 ACh 水解（对肌束颤动等 N 样症状更有效）。两药合用、机制互补、不能互相替代。"),
 ]
 
+# 教材事实案例（v0.7 错因卡第④字段，2026-09-08）——每个种子错因附 1 条临床事实案例，
+# 辅助学生从"知道答案"到"理解记忆"。事实表述与 seed 头部 docstring 一致（人卫《药理学》9e
+# 第5章胆碱能神经系统药物），来源署名到章（与 QUESTION 解析证据 source 同口径），不虚构页码。
+CASE_EVIDENCE = {
+    "MIS-ANS-01": {
+        "scenario": "同一患者滴眼：毛果芸香碱用于青光眼使瞳孔缩小、眼压下降；误用阿托品则散瞳、眼压升高。",
+        "lesson": "阿托品阻断 M 受体→散瞳/升眼压/调节麻痹；毛果芸香碱激动 M 受体→缩瞳/降眼压/调节痉挛，效应相反，别记反。",
+        "source": "人卫《药理学》9e·第5章·胆碱能神经系统药物",
+    },
+    "MIS-ANS-02": {
+        "scenario": "闭角型青光眼患者误用阿托品点眼，可因瞳孔散大、前房角变窄诱发眼压急剧升高甚至急性发作。",
+        "lesson": "闭角型青光眼、前列腺肥大是阿托品的绝对禁忌，不是「慎用」或「可用」。",
+        "source": "人卫《药理学》9e·第5章·胆碱能神经系统药物",
+    },
+    "MIS-ANS-03": {
+        "scenario": "阿托品散瞳后房水回流路径受阻，患者可诉眼胀、视物模糊，青光眼者诱发急性发作。",
+        "lesson": "散瞳使前房角变窄、房水经前房角回流受阻→眼压升高，这正是散瞳致眼压升高的机制链。",
+        "source": "人卫《药理学》9e·第5章·胆碱能神经系统药物",
+    },
+    "MIS-ANS-04": {
+        "scenario": "开角型青光眼患者用毛果芸香碱滴眼后瞳孔缩小、眼压下降，视近物清楚、视远物模糊。",
+        "lesson": "毛果芸香碱激动 M 受体三大眼作用：缩瞳、降眼压、调节痉挛（视近物清楚），是青光眼与缩瞳常用药。",
+        "source": "人卫《药理学》9e·第5章·胆碱能神经系统药物",
+    },
+    "MIS-ANS-05": {
+        "scenario": "有机磷中毒患者静注阿托品，护士监测到瞳孔散大、颜面潮红、皮肤干燥、心率加快、肺部啰音消失——阿托品化。",
+        "lesson": "阿托品化指征（瞳孔散大/颜面潮红/皮肤干燥/啰音消失/心率加快）是调整阿托品用量的观察终点。",
+        "source": "人卫《药理学》9e·第5章·胆碱能神经系统药物",
+    },
+    "MIS-ANS-06": {
+        "scenario": "有机磷中毒患者同时出现流涎、瞳孔缩小（M 样）与肌束颤动（N 样），临床阿托品+碘解磷定联合解救。",
+        "lesson": "阿托品对抗 M 样症状（流涎/缩瞳等）；碘解磷定复活胆碱酯酶、解除 N 样症状（肌颤）。分工互补，不能互相替代。",
+        "source": "人卫《药理学》9e·第5章·胆碱能神经系统药物",
+    },
+    "MIS-ANS-07": {
+        "scenario": "有机磷中毒早期肌束颤动明显，碘解磷定使用后肌颤减轻——因胆碱酯酶被复活、ACh 得以正常水解。",
+        "lesson": "碘解磷定通过与磷酰化胆碱酯酶结合并裂解，使酶复活，针对的是酶而非 M 受体，故不能替代阿托品。",
+        "source": "人卫《药理学》9e·第5章·胆碱能神经系统药物",
+    },
+    "MIS-ANS-08": {
+        "scenario": "用药前筛禁忌情境：闭角型青光眼/前列腺肥大者不宜用阿托品类抗胆碱药，哮喘患者不宜用毛果芸香碱。",
+        "lesson": "审题先判人群与禁忌：题目出现「青光眼/前列腺肥大/哮喘/孕妇」等情境，往往考用药禁忌而非药理机制本身。",
+        "source": "人卫《药理学》9e·第5章·胆碱能神经系统药物",
+    },
+    "MIS-ANS-09": {
+        "scenario": "瞳孔括约肌由副交感（M 受体）支配，收缩致缩瞳；瞳孔开大肌由交感（α 受体）支配，收缩致散瞳。",
+        "lesson": "括约肌=环行肌、受 M 支配→收缩缩瞳；开大肌=辐射肌、受 α 支配→收缩散瞳。别把两者的神经支配记反。",
+        "source": "人卫《药理学》9e·第5章·胆碱能神经系统药物",
+    },
+    "MIS-ANS-10": {
+        "scenario": "毛果芸香碱使睫状肌收缩、悬韧带放松、晶状体变凸，患者视近物清楚、视远物模糊——调节痉挛。",
+        "lesson": "调节痉挛＝睫状肌收缩→晶状体变凸→折光力↑→视近清楚、视远模糊；阿托品则相反（调节麻痹、视近不清）。",
+        "source": "人卫《药理学》9e·第5章·胆碱能神经系统药物",
+    },
+}
+
 # 追问树节点：code, chain_level, question, options, option_signals, open_judge
 FOLLOWUPS = [
     ("FU-ANS-00", 2, "你如何理解阿托品和毛果芸香碱对瞳孔作用的区别？",
@@ -218,9 +274,38 @@ TRAINING_POOL = [q for q in QUESTIONS if q[4] == "training"]
 DIAG_POOL = [q for q in QUESTIONS if q[4] == "diagnostic"]
 
 
+def _apply_case_evidence(db):
+    """幂等给既有错因目录回填教材事实案例（v0.7 第④字段，2026-09-08）。
+
+    新库在插入时已带 case_evidence；旧库（升级前已 seed）此函数补回，已填的不覆盖。
+    """
+    changed = 0
+    for code, case in CASE_EVIDENCE.items():
+        m = db.execute(select(Misconception).where(
+            Misconception.code == code)).scalar_one_or_none()
+        if m is not None and not m.case_evidence:
+            m.case_evidence = case
+            changed += 1
+    if changed:
+        db.commit()
+
+
+def _apply_knowledge_edges(db):
+    """FR-A2 图谱边幂等回填（新库/旧库都覆盖，见 seed_knowledge_graph.apply_knowledge_edges）。"""
+    try:
+        from seed.seed_knowledge_graph import apply_knowledge_edges
+        return apply_knowledge_edges(db)
+    except Exception as e:  # noqa: BLE001
+        print(f"[seed][WARN] 知识关系边回填跳过: {type(e).__name__}: {e}")
+        return 0
+
+
 def seed(db):
     """幂等：以 code 判重。全部内容 review_status=draft（待药理顾问审校）。"""
     _restore_course_assets(db)  # 课程资产（题库/大纲/章节映射）幂等恢复，reset-demo 后自动还原
+    _apply_case_evidence(db)  # 给既有错因目录回填教材事实案例（幂等，新库/旧库都覆盖）
+    # 结构化知识关系（FR-A2 图谱最小落地）：旧库（域已存在）在此补回；新库域稍后建，末段再补
+    _apply_knowledge_edges(db)
     if db.execute(select(DiagnosticDomain).where(DiagnosticDomain.code == DOMAIN["code"])).scalar_one_or_none():
         return
     domain = DiagnosticDomain(**DOMAIN, status="published")  # 域本身已定稿
@@ -250,7 +335,8 @@ def seed(db):
     for code, cat, name, rem, ind in MISCONCEPTIONS:
         m = Misconception(code=code, category=cat, name=name, domain_id=domain.id,
                           indicators=ind, counter_indicators=[], remediation_type=rem,
-                          remediation_payload={}, status="published")  # 同上
+                          remediation_payload={}, case_evidence=CASE_EVIDENCE.get(code),
+                          status="published")  # 同上
         db.add(m)
         mis_by_code[code] = m
     db.flush()
@@ -277,6 +363,7 @@ def seed(db):
                                 support_type="解析", content_text=ev))
     audit(db, "seed", "content.seeded", domain.code, questions=len(QUESTIONS),
           followups=len(FOLLOWUPS), misconceptions=len(MISCONCEPTIONS))
+    _apply_knowledge_edges(db)  # 新库域刚建，补 FR-A2 图谱边（幂等）
     db.commit()
 
 

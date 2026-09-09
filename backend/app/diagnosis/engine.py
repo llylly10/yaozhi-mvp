@@ -16,7 +16,6 @@ from ..models import (
     Question, QuestionEvidence, TrainingSession, TrainingSessionQuestion, audit,
 )
 from ..mastery import engine as mastery
-
 MAX_FOLLOWUP_ROUNDS = 3
 SUFFICIENCY_MARGIN = 0.2
 HIGH_SCORE = 0.6
@@ -144,6 +143,9 @@ def start_session_tiku(db: Session, attempt: Attempt) -> DiagnosisSession | None
         content=f"学生选择 {attempt.selected_option}，正确答案为 {question.answer}"
                 f"（通用四分类归因：{chosen.category}，证据等级{evidence_level}"
                 f"{rationale_note}，可追问细化）"))
+    # W3 RAG：题库题答错时按题干检索教材切片，补充"知识库切片"证据（讲解更贴近教材）
+    for etype, ref, content in _rag_evidence(question, attempt):
+        db.add(DiagnosisEvidence(session_id=session.id, evidence_type=etype, source_ref=ref, content=content))
     # 注意：通用四分类归因不写错因级掌握度薄弱——那是种子域「真错因」才有的。
     # 章级薄弱由 router.practice_failed 负责；本会话仅用于出卡片 + 接训练，
     # 避免同一道错题在 domain 内既建章级薄弱又建错因级薄弱导致双重计数。
@@ -162,9 +164,84 @@ def _collect_evidence(db: Session, session: DiagnosisSession, attempt: Attempt, 
     for chunk in db.execute(select(QuestionEvidence).where(
             QuestionEvidence.question_id == question.id)).scalars():
         evidences.append(("知识库切片", chunk.evidence_chunk_id, chunk.content_text))
+    # W3 RAG：按题干+作答动态检索教材切片，作为"知识库切片"证据并入证据链
+    for etype, ref, content in _rag_evidence(question, attempt):
+        evidences.append((etype, ref, content))
     for etype, ref, content in evidences:
         db.add(DiagnosisEvidence(session_id=session.id, evidence_type=etype, source_ref=ref, content=content))
     session.state = "evidence_collected"
+
+
+def _rag_query(question: Question, attempt: Attempt | None = None) -> str:
+    """构造检索 query：题干 + 选项文本(去答案标注) 的关键字集合，太长则截题干。"""
+    parts = [question.stem or ""]
+    opts = []
+    for o in (question.options or []):
+        t = o.get("text", "")
+        if t and len(t) <= 60:  # 长选项多为临床情境，不参与检索；取短术语型选项
+            opts.append(t)
+    parts.extend(opts)
+    q = " ".join(parts)
+    return q[:400] if q else ""
+
+
+def _rag_evidence(question: Question, attempt: Attempt | None = None) -> list[tuple[str, str, str]]:
+    """对题库物化题/种子题做教材检索，返回 [(etype, ref, content)] 证据元组列表。
+
+    仅在配置 rag_enabled 且语料存在时产出；检索失败/无命中返回 []（不阻塞诊断）。
+    source_ref 形如 rag:教材p<PDF页>。
+    """
+    from ..config import settings
+    if not getattr(settings, "rag_enabled", True):
+        return []
+    query = _rag_query(question, attempt)
+    if not query:
+        return []
+    try:
+        from ..rag import retrieve_top_k
+        hits = retrieve_top_k(query, k=getattr(settings, "rag_top_k", 2))
+    except Exception as e:  # 检索异常绝不影响诊断主链路
+        import logging as _l
+        _l.getLogger("yaozhi.rag").warning("RAG 检索失败，跳过证据：%s", e)
+        return []
+    out = []
+    for h in hits:
+        src = f"rag:教材p{h.page}"
+        if h.chapter:
+            src += f"·{h.chapter}"
+        # 截取命中页正文做证据卡内容；附章节/页码定位便于复核
+        body = h.text
+        note = f"（教材第{h.book_page}页定位）" if h.book_page else ""
+        out.append(("知识库切片", src, f"{body}{note}"))
+    return out
+
+
+def _rag_evidence_for(query: str, k: int = 1) -> list[tuple[str, str, str]]:
+    """追问环节的教材检索：按追问节点题干(可拼错因名)检索教材，返回证据元组。
+
+    与 _rag_evidence 的区别在 query 来源：这里检索的是"追问正在钻探的具体子概念/
+    错因"，而非整道错题，故命中的教材段落更聚焦（如强心苷"中毒机制"而非"用途"）。
+    k 默认 1，保持追问证据链精简。语料缺失/失败 → []（不阻塞判读）。
+    """
+    from ..config import settings
+    if not getattr(settings, "rag_enabled", True) or not query:
+        return []
+    try:
+        from ..rag import retrieve_top_k
+        hits = retrieve_top_k(query, k=k or 1)
+    except Exception as e:
+        import logging as _l
+        _l.getLogger("yaozhi.rag").warning("追问 RAG 检索失败，跳过证据：%s", e)
+        return []
+    out = []
+    for h in hits:
+        src = f"rag:教材p{h.page}"
+        if h.chapter:
+            src += f"·{h.chapter}"
+        body = h.text
+        note = f"（教材第{h.book_page}页定位）" if h.book_page else ""
+        out.append(("知识库切片", src, f"{body}{note}"))
+    return out
 
 
 def _mis_by_code(db: Session, code: str) -> Misconception | None:
@@ -343,6 +420,15 @@ def answer_followup(db: Session, session: DiagnosisSession, payload: dict) -> Di
                         student_answer=payload.get("option_key") or payload.get("text", ""),
                         judge_method=method, judge_result=result, turn_no=turn_no))
     audit(db, "student", "diagnosis.followup_answered", session.id, turn_no=turn_no, method=method)
+    # W3 RAG·追问：按追问节点题干(+假设错因名)检索教材，补充本轮"知识库切片"证据，
+    # 让钻探的子概念/错因有教材原文背书（如追问强心苷"中毒机制"→命中中毒章节而非用途章）。
+    _hyp = db.get(Misconception, session.hypothesis_id) if session.hypothesis_id else None
+    _q = (node.question_text or "").strip()
+    if _hyp and _hyp.name:
+        _q = f"{_q} {_hyp.name}".strip()
+    for etype, ref, content in _rag_evidence_for(_q, k=1):
+        db.add(DiagnosisEvidence(session_id=session.id, evidence_type=etype,
+                                 source_ref=f"{ref}·追问{node.code}", content=content))
 
     if supports and supports == session.hypothesis_id:
         # 追问坐实原假设：证据链补全，升级为高并结束细化
