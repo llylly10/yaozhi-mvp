@@ -21,6 +21,8 @@ export const api = {
 
   wrongBook: (userId: string) => fetch(`/api/users/${userId}/wrong-book`).then(handle),
 
+  wrongRecall: (attemptId: string) => fetch(`/api/wrong/${attemptId}/recall`).then(handle),
+
   mastery: (userId: string) => fetch(`/api/users/${userId}/mastery`).then(handle),
 
   assessment: (userId: string) => fetch(`/api/users/${userId}/assessment`).then(handle),
@@ -30,6 +32,8 @@ export const api = {
 
   profileSummary: (userId: string) => fetch(`/api/users/${userId}/profile-summary`).then(handle),
 
+  archive: (userId: string) => fetch(`/api/users/${userId}/archive`).then(handle),
+
   feedback: (sessionId: string, matches: boolean) =>
     fetch(`/api/diagnoses/${sessionId}/feedback`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ matches }) }).then(handle),
 
@@ -38,6 +42,25 @@ export const api = {
   questionAnalysis: (questionId: string) => fetch(`/api/questions/${questionId}/analysis`).then(handle),
 
   materials: (domainId: string) => fetch(`/api/materials/${domainId}`).then(handle),
+
+  studyMap: (userId: string) => fetch(`/api/users/${userId}/study-map`).then(handle),
+
+  studyDetail: (userId: string, domainId: string) =>
+    fetch(`/api/users/${userId}/study-map/${domainId}`).then(handle),
+
+  studyQuiz: (userId: string, domainId: string) =>
+    fetch(`/api/users/${userId}/study-map/${domainId}/quiz`).then(handle),
+
+  submitStudyQuiz: (userId: string, domainId: string, answers: Record<string, string>) =>
+    fetch(`/api/users/${userId}/study-map/${domainId}/quiz/submit`,
+      { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answers }) }).then(handle),
+
+  materialQuiz: (userId: string, domainId: string) =>
+    fetch(`/api/users/${userId}/learning-plan/${domainId}/quiz`).then(handle),
+
+  submitMaterialQuiz: (userId: string, domainId: string, answers: Record<string, string>) =>
+    fetch(`/api/users/${userId}/learning-plan/${domainId}/quiz/submit`,
+      { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answers }) }).then(handle),
 
   retest: (trainingId: string) => fetch(`/api/retest/${trainingId}`).then(handle),
 
@@ -76,6 +99,7 @@ export type Diagnosis = {
   card: null | {
     misconception: { code: string; name: string; category: string }
     evidence_level: string
+    case_evidence?: { scenario: string; lesson: string; source: string } | null
     evidences: { type: string; source: string; content: string }[]
     alternatives?: { code: string; name: string; primary: boolean }[]
     can_refine?: boolean

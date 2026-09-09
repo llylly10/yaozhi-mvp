@@ -53,13 +53,16 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
 
 .display { font-family: var(--font-serif); font-weight: 700; }
 
-/* ---------- 分子网络背景（苯环母题，fixed 不随滚动重绘） ---------- */
+/* ---------- 分子网络背景（苯环母题，fixed 不随滚动重绘） ----------
+ * 调整为「退到页缘的点缀」而非满屏纹理：整体透明度下调、斜线网络移除、
+ * 苯环主要落在左上/右下两簇，content 区保持干净。 */
 .mol-field {
   position: fixed;
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.55;
+  opacity: 0.4;
+  overflow: hidden;
 }
 
 /* ---------- 玻璃拟态（悬浮导航） ---------- */

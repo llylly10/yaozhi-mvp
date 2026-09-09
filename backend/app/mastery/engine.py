@@ -34,7 +34,8 @@ def _apply(db, st: MasteryState, state: str, reason: str) -> None:
 def transition(db, user_id: str, domain_id: str, category: str | None, event: str) -> MasteryState:
     """event: misdiagnosed(摸底/诊断失败) | diagnosed | training_passed | training_failed |
     retest_passed | retest_failed | delayed_passed | forgot |
-    practice_passed/practice_failed（章级练习，题库物化题专用推进）"""
+    practice_passed/practice_failed（章级练习，题库物化题专用推进）|
+    material_passed（种子域学习材料随堂自测通过，薄弱→学习中，2026-09-08）"""
     st = db.get(MasteryState, (user_id, domain_id, category))
     if st is None:
         st = MasteryState(user_id=user_id, domain_id=domain_id, category=category, state="未评估")
@@ -48,6 +49,7 @@ def transition(db, user_id: str, domain_id: str, category: str | None, event: st
         "training_failed": "靶向训练未通过，退回薄弱",
         "practice_passed": "章级练习作答通过",
         "practice_failed": "章级练习作答未通过",
+        "material_passed": "学习材料随堂自测通过",
         "retest_passed": "迁移复测通过",
         "retest_failed": "迁移复测未通过，退回薄弱",
         "delayed_passed": "延迟复测通过，进入稳定掌握",
@@ -69,6 +71,18 @@ def transition(db, user_id: str, domain_id: str, category: str | None, event: st
             return st  # 幂等：重复开始训练不报错
         if st.state not in ("薄弱", "未评估"):
             raise IllegalTransition(f"{st.state} -training_started-> ?")
+        _apply(db, st, "学习中", REASONS[event])
+        db.commit()
+        audit(db, "system", "mastery.transition", f"{user_id}/{domain_id}", to=st.state, event=event)
+        return st
+
+    if event == "material_passed":
+        # 种子域学习材料随堂自测通过：薄弱→学习中（表示已完成该薄弱错因的主动学习、
+        # 可进入练习/训练推进）。学习中以上不因学习再推进（需训练/复测事件到掌握）。
+        if st.state in ("学习中", "初步掌握", "掌握", "稳定掌握"):
+            return st
+        if st.state not in ("薄弱", "未评估"):
+            raise IllegalTransition(f"{st.state} -material_passed-> ?")
         _apply(db, st, "学习中", REASONS[event])
         db.commit()
         audit(db, "system", "mastery.transition", f"{user_id}/{domain_id}", to=st.state, event=event)

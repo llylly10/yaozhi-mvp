@@ -11,8 +11,9 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from .models import (
-    Attempt, DiagnosticDomain, DiagnosisCandidate, DiagnosisEvidence, DiagnosisSession, DemoUser,
-    FollowupNode, FollowupTurn, MasteryState, Misconception, Question, QuestionEvidence,
+    Attempt, ChainNode, ConfusionPair, DiagnosticDomain, DiagnosisCandidate, DiagnosisEvidence,
+    DiagnosisSession, DemoUser, FollowupNode, FollowupTurn, KnowledgeRelation, MasteryState,
+    Misconception, Question, QuestionEvidence, StudyProgress, SyllabusChapter,
     TrainingSession, TrainingSessionQuestion, audit, now,
 )
 from .diagnosis import engine as dx
@@ -247,10 +248,90 @@ def wrong_book(user_id: str, db: Session = Depends(get_db)):
             "attempt_id": a.id, "question_code": q.code, "stem": q.stem,
             "selected": a.selected_option, "answer": q.answer,
             "misconception": {"name": mis.name, "category": mis.category} if mis else None,
+            "case_evidence": mis.case_evidence if mis else None,
             "evidence_level": s.evidence_level if s else None,
             "mastery_state": None,
         })
     return out
+
+
+@router.get("/wrong/{attempt_id}/recall")
+def wrong_recall(attempt_id: str, db: Session = Depends(get_db)):
+    """错题记忆卡：对单条错题聚合「图谱 + 临床/教材助记 + 归因」，供错题本点开展示。
+
+    三层全部取真实数据（不虚构）：
+     1) 归因卡：诊断会话假设错因 + case_evidence（教材事实案例，仅错因目录预置者带）；
+     2) 知识关系图谱：该错题所属域已发布的 FR-A2 knowledge_relations + confusion_pairs；
+     3) 教材记忆锚点：按题干实时检索人卫《药理学》9e OCR，返回 top-2 原文（带章/页码署名）——
+        题库题即便无预置案例，也能给出真实教材依据辅助记忆。
+    """
+    from .config import settings
+    a = db.get(Attempt, attempt_id)
+    if not a:
+        raise HTTPException(404, "作答不存在")
+    _active_user(a.user_id, db)
+    q = db.get(Question, a.question_id)
+    s = db.execute(select(DiagnosisSession).where(
+        DiagnosisSession.attempt_id == a.id)).scalar_one_or_none()
+    mis = db.get(Misconception, s.hypothesis_id) if s and s.hypothesis_id else None
+
+    # 1) 归因卡 + 临床案例
+    card = {
+        "attempt_id": a.id,
+        "is_correct": a.is_correct,
+        "question": {"code": q.code, "stem": q.stem, "options": q.options,
+                     "answer": q.answer, "domain_id": q.domain_id} if q else None,
+        "misconception": {"code": mis.code, "name": mis.name, "category": mis.category} if mis else None,
+        "case_evidence": mis.case_evidence if mis else None,
+        "evidence_level": s.evidence_level if s else None,
+    }
+
+    # 2) 知识关系图谱（FR-A2）+ 混淆对（按错题所属域；题库章节域暂无 relations 时诚实为空）
+    relations, pairs = [], []
+    if q:
+        from .models import ConfusionPair, KnowledgeRelation
+        domain = db.get(DiagnosticDomain, q.domain_id)
+        if domain:
+            rels = db.execute(select(KnowledgeRelation).where(
+                KnowledgeRelation.domain_id == domain.id)).scalars().all()
+            relations = [{"source": r.source, "edge": r.edge, "target": r.target,
+                          "note": r.note} for r in rels]
+            cps = db.execute(select(ConfusionPair).where(
+                ConfusionPair.domain_id == domain.id)).scalars().all()
+            pairs = [{"drug_a": p.drug_a, "drug_b": p.drug_b,
+                      "distinction": p.distinction_text} for p in cps]
+    card["relations"] = relations
+    card["confusion_pairs"] = pairs
+
+    # 3) 教材记忆锚点：按题干实时 RAG
+    anchors = []
+    if q and getattr(settings, "rag_enabled", True):
+        try:
+            query = dx._rag_query(q, a)
+            if query:
+                from .rag import retrieve_top_k
+                hits = retrieve_top_k(query, k=getattr(settings, "rag_top_k", 2))
+                for h in hits:
+                    ch = h.chapter or f"教材第{h.book_page}页"
+                    anchors.append({
+                        "chapter": ch, "page": h.page, "book_page": h.book_page,
+                        "score": h.score,
+                        "text": (h.text or "")[:320],
+                        "source_ref": f"rag:教材p{h.page}" + (f"·{h.chapter}" if h.chapter else ""),
+                    })
+        except Exception:  # 检索失败不阻断记忆卡
+            anchors = []
+    card["textbook_anchors"] = anchors
+
+    # 4) 训练/复测状态摘要（已训练过的错题标注）
+    # 4) 训练状态摘要（若该诊断会话已做过训练）
+    trained = False
+    if s:
+        tr = db.execute(select(TrainingSession).where(
+            TrainingSession.diagnosis_id == s.id)).scalar_one_or_none()
+        trained = bool(tr and getattr(tr, "state", None) == "passed")
+    card["trained"] = trained
+    return card
 
 
 @router.post("/attempts", status_code=202)
@@ -339,6 +420,8 @@ def get_diagnosis(session_id: str, db: Session = Depends(get_db)):
             "misconception": {"code": m.code, "name": m.name, "category": m.category},
             "evidence_level": s.evidence_level,
             "can_refine": s.can_refine,
+            # 教材事实案例（v0.7 错因卡第④字段，2026-09-08）：错因目录挂的临床记忆点
+            "case_evidence": m.case_evidence,
             "evidences": [{"type": label.get(e.evidence_type, e.evidence_type),
                            "source": source_label.get(e.evidence_type, ""),
                            "content": e.content} for e in evidences],
@@ -416,46 +499,293 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
 
     2026-09-03 题库接入：章级薄弱（category=None，题库题答错产生）只发练习任务——
     章级诊断域暂无整理的学习材料（chain/混淆对资产在种子域），不发空材料任务。
+
+    2026-09-08 完成口径修正（用户反馈：练习做完不消失/不打勾）：
+      - 章级题库行（category=None）无复测资产，状态机最高到「初步掌握」即已「达标」，
+        达到 初步掌握/掌握/稳定掌握 即移入 done_tasks，从待办出列，不再无限滞留。
+      - 种子域错因行（category 非空）有 训练→迁移复测 链路，须到「掌握/稳定掌握」才出列。
+      - 每个待办任务附 guide（下一步引导）+ goal（达成路径），前端据此给出明确指引。
     """
     _active_user(user_id, db)
     from .models import MasteryState
     order = {"薄弱": 0, "学习中": 1, "初步掌握": 2}
     rows = db.execute(select(MasteryState).where(MasteryState.user_id == user_id)).scalars().all()
-    weak = sorted([r for r in rows if r.state in order], key=lambda r: order[r.state])
-    done = [r for r in rows if r.state in ("掌握", "稳定掌握")]
+    pending = sorted([r for r in rows if r.state in order], key=lambda r: order[r.state])
+    # 达标出列判定：章级(无 category)到「初步掌握」即完成；种子域须到「掌握」。
+    def _is_done(r):
+        if r.state in ("掌握", "稳定掌握"):
+            return True
+        return r.state == "初步掌握" and r.category is None
+    done_rows = [r for r in rows if _is_done(r)]
     tasks = []
-    for r in weak:
+    for r in pending:
+        if _is_done(r):
+            continue  # 章级初步掌握在此不列入待办（已达标出列）
         domain = db.get(DiagnosticDomain, r.domain_id)
         if not domain:
             continue
-        if r.state == "薄弱" and r.category:
+        is_chapter = r.category is None
+        # 种子域「薄弱」错因才发学习材料任务；学习随堂自测通过后该行离开薄弱，任务自然消失。
+        if (not is_chapter) and r.state == "薄弱":
             tasks.append({"type": "material", "domain_id": r.domain_id, "domain": domain.name,
                           "category": r.category, "state": r.state,
-                          "title": f"学习：{domain.name}" + (f"（{r.category}）" if r.category else "")})
+                          "title": f"学习：{domain.name}（{r.category}）",
+                          "guide": "先看本域学习材料，再回答随堂自测；自测通过后此任务出列，进入下方练习。",
+                          "goal": "自测通过（答对 ≥60%）"})
+        if is_chapter:
+            need = {"薄弱": "答对本章 2 道题", "学习中": "再答对本章 1 道题"}.get(r.state, "")
+            guide = (f"本章暂无学习材料，直接练习即可。{need}后达标出列（不再出现在待办）。"
+                     if r.state in ("薄弱", "学习中")
+                     else "继续巩固本域知识点。")
+        else:
+            guide = "答对本章题目、若答错则沿「诊断 → 靶向训练 → 迁移复测」把错因突破到「掌握」后出列。"
         tasks.append({"type": "practice", "domain_id": r.domain_id, "domain": domain.name,
                       "category": r.category, "state": r.state,
-                      "title": f"练习：{domain.name}" + (f"（{r.category}）" if r.category else "")})
+                      "title": f"练习：{domain.name}" + (f"（{r.category}）" if r.category else ""),
+                      "guide": guide,
+                      "goal": "掌握" if not is_chapter else ("初步掌握（题库题可达到的最强状态）"
+                               if r.state == "学习中" else "初步掌握")})
     # 已完成项：明确返回「已完成」，前端打勾展示，避免掌握态被静默过滤造成"学习后无反馈"（用户反馈）
     done_tasks = []
-    for r in done:
+    for r in sorted(done_rows, key=lambda x: (x.category is not None, x.domain_id)):
         domain = db.get(DiagnosticDomain, r.domain_id)
         if not domain:
             continue
+        is_chapter = r.category is None
+        state_label = "初步掌握" if (is_chapter and r.state == "初步掌握") else r.state
         done_tasks.append({"domain_id": r.domain_id, "domain": domain.name, "category": r.category,
-                           "state": r.state,
+                           "state": state_label,
                            "title": f"已完成：{domain.name}" + (f"（{r.category}）" if r.category else "")})
-    return {"tasks": tasks, "done_tasks": done_tasks,
-            "note": "路径按「先学后练」规则生成，可跳过；AI 个性化排序为 Post-MVP"}
+    note = "路径按「先学后练」规则生成；练到达标态（章节初步掌握 / 错因掌握）即出列，不再滞留待办。"
+    return {"tasks": tasks, "done_tasks": done_tasks, "note": note}
+
+
+# ---------- 学习地图 · 知识图谱（2026-09-09：目标后、摸底前 的「先学→随堂摸底」） ----------
+#
+# 用户：选完学习目标后先进入课程知识图谱，学一个章节（知识点做成图谱）→ 该章节随堂摸底(≥60%过)
+# → 标「已达标」→ 可继续学下一节或进入正常摸底流程。
+# 内容底座：34 个章节域(每章=一个 DiagnosticDomain) 一一映射教学大纲 SyllabusChapter（节→知识点，
+# 真实课程大纲，review_status=draft 待顾问）；种子域 DOM-PHARMO-ANS 另有顾问整理的深图谱(链+关系+混淆对)。
+# 其余章节只有题库题、无顾问整理图谱 → 如实标注「题库先行」，不伪造。
+
+# 药理系统分组（仅作图谱展示的粗聚类，非教材权威编章顺序；book_chapter_no → 组）
+STUDY_GROUPS: list[dict] = [
+    {"key": "auto", "name": "总论 · 自主神经", "no": [1, 2, 3, 5, 6, 7, 8]},
+    {"key": "cns", "name": "中枢神经系统药", "no": [12, 13, 14, 15, 16, 17, 18]},
+    {"key": "cvs", "name": "心血管 · 血液系统药", "no": [19, 20, 21, 22, 23, 24, 27]},
+    {"key": "endo", "name": "呼吸消化 · 内分泌代谢", "no": [25, 26, 29, 30, 31]},
+    {"key": "infec", "name": "抗感染药", "no": [33, 34, 35, 36, 37, 38, 39, 40]},
+    {"key": "other", "name": "肿瘤与其他", "no": [42]},
+]
+SEED_DOMAIN_CODE = "DOM-PHARMO-ANS"
+
+
+def _chapter_no(domain: DiagnosticDomain) -> int | None:
+    """从 DiagnosticDomain.chapter_ref 提取教材章号（'CH6'→6；种子域为文字锚点→None）。"""
+    import re
+    m = re.search(r"CH(\d+)", domain.chapter_ref or "")
+    return int(m.group(1)) if m else None
+
+
+def _group_of(no: int | None) -> dict | None:
+    for g in STUDY_GROUPS:
+        if no is not None and no in g["no"]:
+            return g
+    return None
+
+
+def _json_field(row, col):
+    """SyllabusChapter 的 JSON 列安全取值：列可能为 None/字符串/列表/字典。"""
+    v = getattr(row, col, None)
+    if v is None:
+        return None
+    if isinstance(v, str):
+        import json as _json
+        try:
+            return _json.loads(v)
+        except Exception:
+            return None
+    return v
+
+
+@router.get("/users/{user_id}/study-map")
+def study_map(user_id: str, db: Session = Depends(get_db)):
+    """课程知识图谱门户（目标后、摸底前）。返回按药理系统分组的章节节点：
+    每个节点=一章(域)，含题量、是否已随堂达标、掌握态、以及该章学习内容来源标记
+    （seed=顾问深图谱 / syllabus=课程大纲结构 / none=题库先行待补）。
+    is_seed 节点为种子域深图谱示范。"""
+    _active_user(user_id, db)
+    syl_by_no = {s.book_chapter_no: s for s in db.execute(select(SyllabusChapter)).scalars()}
+    mastered = {m.domain_id: m for m in db.execute(
+        select(MasteryState).where(MasteryState.user_id == user_id, MasteryState.category.is_(None))).scalars()}
+    studied = {s.domain_id: s for s in db.execute(
+        select(StudyProgress).where(StudyProgress.user_id == user_id)).scalars()}
+    # 各域 published 题量（摸底/练习可用题）
+    qcount: dict = {}
+    for d_id in db.execute(select(Question.domain_id).where(
+            Question.review_status == "published")).scalars():
+        qcount[d_id] = qcount.get(d_id, 0) + 1
+
+    groups = {g["key"]: {"key": g["key"], "name": g["name"], "nodes": []} for g in STUDY_GROUPS}
+    orphan = {"key": "orphan", "name": "综合", "nodes": []}
+
+    def node_of(domain: DiagnosticDomain, seed: bool) -> dict:
+        no = None if seed else _chapter_no(domain)
+        sy = None if seed else (syl_by_no.get(no) if no in syl_by_no else None)
+        has_syl = sy is not None
+        st = studied.get(domain.id)
+        ms = mastered.get(domain.id)
+        return {
+            "domain_id": domain.id, "code": domain.code, "is_seed": seed,
+            "title": ("传出神经 · M受体激动药与阻断药（示范深挖）" if seed
+                      else (sy.title if sy else domain.name)),
+            "book_chapter_no": no,
+            "source": "seed" if seed else ("syllabus" if has_syl else "none"),
+            "q_published": qcount.get(domain.id, 0),
+            "objective": (domain.name if seed else domain.name),
+            "studied": ({"passed": st.state == "已达标", "score": float(st.best_score or 0),
+                         "total": st.quiz_total} if st and st.state == "已达标" else None),
+            "mastery": ({"state": ms.state} if ms and ms.state != "未评估" else None),
+        }
+
+    # 章节域（DOM-CHx）——加入对应药理系统分组
+    for d in db.execute(select(DiagnosticDomain).where(
+            DiagnosticDomain.code.like("DOM-CH%"))).scalars():
+        no = _chapter_no(d)
+        gkey = (_group_of(no) or orphan)["key"]
+        (groups.get(gkey) or orphan)["nodes"].append(node_of(d, seed=False))
+    # 种子域深图谱节点（DOM-PHARMO-ANS）放入「总论·自主神经」组首位，作示范
+    seed_dom = db.execute(select(DiagnosticDomain).where(
+        DiagnosticDomain.code == SEED_DOMAIN_CODE)).scalar_one_or_none()
+    if seed_dom:
+        groups["auto"]["nodes"].insert(0, node_of(seed_dom, seed=True))
+
+    ordered = [groups[g["key"]] for g in STUDY_GROUPS]
+    if orphan["nodes"]:
+        ordered.append(orphan)
+    payload_groups = []
+    for g in ordered:
+        if not g["nodes"]:
+            continue
+        payload_groups.append({"key": g["key"], "name": g["name"], "nodes": g["nodes"]})
+    # 建议先学：优先未达标、题库可摸底(≥3)的章节域；种子域恒为最优先示范
+    recs = []
+    if seed_dom:
+        recs.append(seed_dom.id)
+    for g in payload_groups:
+        for n in g["nodes"]:
+            if n["domain_id"] not in recs and not n["studied"] and n["q_published"] >= 3:
+                recs.append(n["domain_id"])
+        if len(recs) >= 5:
+            break
+    return {"groups": payload_groups, "recommended": recs[:5],
+            "total_domains": sum(len(g["nodes"]) for g in payload_groups),
+            "note": "节点=药理学一章。蓝点可学习并随堂摸底；其余章节为题库先行，材料待药理顾问图谱化。"}
+
+
+@router.get("/users/{user_id}/study-map/{domain_id}")
+def study_detail(user_id: str, domain_id: str, db: Session = Depends(get_db)):
+    """单个图谱节点的学习内容：
+      - source=seed：种子域顾问整理的深图谱（推理链 + 药效关系 + 易混对），可完全走通 学→摸底。
+      - source=syllabus：该章课程大纲结构（章节→知识点树 + 重点/难点/掌握要求），属真实大纲待顾问图谱化。
+      - source=none：仅有题库题，无学习材料（如实提示，不伪造），仍可随堂摸底。"""
+    _active_user(user_id, db)
+    d = db.get(DiagnosticDomain, domain_id) or _404()
+    seed = d.code == SEED_DOMAIN_CODE
+    no = None if seed else _chapter_no(d)
+    base = {"domain_id": d.id, "code": d.code, "title": d.name,
+            "is_seed": seed, "book_chapter_no": no}
+    if seed:
+        chain = db.execute(select(ChainNode).where(ChainNode.domain_id == d.id)
+                           .order_by(ChainNode.level)).scalars().all()
+        rels = db.execute(select(KnowledgeRelation).where(
+            KnowledgeRelation.domain_id == d.id)).scalars().all()
+        pairs = db.execute(select(ConfusionPair).where(ConfusionPair.domain_id == d.id)).scalars().all()
+        return {**base, "source": "seed",
+                "graph": {"chain": [{"level": c.level, "title": c.title, "summary": c.summary}
+                                    for c in chain],
+                          "relations": [{"source": r.source, "edge": r.edge, "target": r.target,
+                                         "note": r.note} for r in rels],
+                          "confusion": [{"drug_a": p.drug_a, "drug_b": p.drug_b,
+                                         "distinction": p.distinction_text} for p in pairs]}}
+    sy = db.execute(select(SyllabusChapter).where(
+        SyllabusChapter.book_chapter_no == no)).scalar_one_or_none() if no else None
+    if sy is not None:
+        def clean(x):  # 规整大纲 JSON（可能多层字符串）
+            return _json_field(sy, x)
+        return {**base, "source": "syllabus",
+                "chapter": {"no": sy.book_chapter_no, "title": sy.title,
+                            "objectives": clean("objectives") or {},
+                            "key_points": clean("key_points") or [],
+                            "difficulties": clean("difficulties") or [],
+                            "sections": clean("sections") or []}}
+    return {**base, "source": "none", "chapter": None}
+
+
+@router.get("/users/{user_id}/study-map/{domain_id}/quiz")
+def get_study_quiz(user_id: str, domain_id: str, db: Session = Depends(get_db)):
+    """知识图谱节点随堂摸底：抽本域 published 未作答题（与学习材料自测同池规则）。"""
+    _active_user(user_id, db)
+    db.get(DiagnosticDomain, domain_id) or _404()
+    pool = _domain_quiz_pool(db, domain_id, user_id, limit=3)
+    return {"domain_id": domain_id, "questions": [
+        {"id": q.id, "code": q.code, "stem": q.stem, "options": q.options} for q in pool]}
+
+
+@router.post("/users/{user_id}/study-map/{domain_id}/quiz/submit")
+def submit_study_quiz(user_id: str, domain_id: str, body: MaterialQuizIn,
+                      db: Session = Depends(get_db)):
+    """随堂摸底判分并写学习进度：≥60% 通过 → 该域 StudyProgress 置「已达标」；
+    若该域已有薄弱错因行则同步 mastery.material_passed（薄弱→学习中）。"""
+    _active_user(user_id, db)
+    d = db.get(DiagnosticDomain, domain_id) or _404()
+    correct = total = 0
+    detail = []
+    for qid, opt in body.answers.items():
+        q = db.get(Question, qid)
+        if not q or q.domain_id != domain_id:
+            continue
+        total += 1
+        ok = opt == q.answer
+        correct += 1 if ok else 0
+        detail.append({"question_id": qid, "correct": ok, "answer": q.answer})
+    passed = total > 0 and correct / total >= 0.6
+    prog = db.get(StudyProgress, (user_id, domain_id))
+    if prog is None:
+        prog = StudyProgress(user_id=user_id, domain_id=domain_id, state="未学",
+                             best_score=0, quiz_total=0)
+        db.add(prog)
+    if passed:
+        prog.state = "已达标"
+        prog.best_score = max(float(prog.best_score or 0), correct / total)
+        prog.quiz_total = max(prog.quiz_total or 0, total)
+        # 该域薄弱错因（seed 域概念级）若有 → 薄弱→学习中；章级行不强推（StudyProgress 已标达标）
+        weak_rows = db.execute(select(MasteryState).where(
+            MasteryState.user_id == user_id, MasteryState.domain_id == domain_id,
+            MasteryState.category.isnot(None), MasteryState.state == "薄弱")).scalars().all()
+        for r in weak_rows:
+            mastery.transition(db, user_id, domain_id, r.category, "material_passed")
+    db.commit()
+    audit(db, "student", "study.quiz", f"{user_id}/{domain_id}",
+          passed=passed, correct=correct, total=total)
+    return {"passed": passed, "correct": correct, "total": total, "detail": detail,
+            "note": "该章已达标，可继续学下一节或进入摸底。" if passed
+            else "未通过：回看本章知识点后重试。"}
 
 
 @router.get("/materials/{domain_id}")
 def get_materials(domain_id: str, db: Session = Depends(get_db)):
-    """学习材料：推理链 + 混淆对辨析 + 题目证据要点（现有合法内容组装）。"""
-    from .models import ChainNode, ConfusionPair, Question, QuestionEvidence
+    """学习材料：推理链 + 混淆对辨析 + 题目证据要点 + 结构化知识关系（FR-A2 图谱）。
+
+    现有合法内容组装；knowledge_relations 为种子域 FR-A2 最小图谱（draft，待顾问）。
+    """
+    from .models import ChainNode, ConfusionPair, KnowledgeRelation, Question, QuestionEvidence
     domain = db.get(DiagnosticDomain, domain_id) or _404()
     chain = db.execute(select(ChainNode).where(ChainNode.domain_id == domain.id)
                        .order_by(ChainNode.level)).scalars().all()
     pairs = db.execute(select(ConfusionPair).where(ConfusionPair.domain_id == domain.id)).scalars().all()
+    rels = db.execute(select(KnowledgeRelation).where(
+        KnowledgeRelation.domain_id == domain.id)).scalars().all()
     qs = db.execute(select(Question).where(Question.domain_id == domain.id,
                                            Question.review_status == "published")).scalars().all()
     evidence = []
@@ -464,11 +794,79 @@ def get_materials(domain_id: str, db: Session = Depends(get_db)):
                 QuestionEvidence.question_id == q.id)).scalars():
             if ev.content_text:
                 evidence.append({"ref": q.code, "text": ev.content_text})
+    # FR-A2 图谱：源节点—边→目标节点；status=draft 属内容待顾问（演示属种子域已审口径）
     return {"domain": {"code": domain.code, "name": domain.name, "chapter_ref": domain.chapter_ref},
             "chain": [{"level": c.level, "title": c.title, "summary": c.summary} for c in chain],
             "confusion_pairs": [{"drug_a": p.drug_a, "drug_b": p.drug_b,
                                  "distinction": p.distinction_text} for p in pairs],
+            "knowledge_relations": [{"source": r.source, "edge": r.edge, "target": r.target,
+                                     "note": r.note} for r in rels],
             "evidence": evidence[:6]}
+
+
+class MaterialQuizIn(BaseModel):
+    """随堂自测提交：answers: {question_id: option_key}，服务端判分。"""
+    answers: dict[str, str] = {}
+
+
+def _domain_quiz_pool(db: Session, domain_id: str, user_id: str, limit: int = 3):
+    """学习随堂自测题池：本域 published 题，剔除用户已作答过的（真实检验"学没学会"）。
+    优先取 training/retest 变式池（不挤占 diagnostic 诊断题），不足再回退任何未答过的本域题。"""
+    from .models import Attempt
+    answered = set(db.execute(select(Attempt.question_id).where(
+        Attempt.user_id == user_id)).scalars())
+    qs = db.execute(select(Question).where(
+        Question.domain_id == domain_id, Question.review_status == "published")).scalars().all()
+    unseen = [q for q in qs if q.id not in answered]
+    pref = [q for q in unseen if q.usage in ("training", "retest")]
+    pool = (pref or unseen)[:limit]
+    return pool
+
+
+@router.get("/users/{user_id}/learning-plan/{domain_id}/quiz")
+def get_material_quiz(user_id: str, domain_id: str, db: Session = Depends(get_db)):
+    """学习随堂自测（检验学习程度，2026-09-08）：读完本域材料后作答本域未做过的题，
+    答对 ≥60% 视作该域薄弱错因已完成学习（material_passed，薄弱→学习中）。
+    id 幂等：以 domain 的题资产为内容源，无状态副作用。"""
+    _active_user(user_id, db)
+    db.get(DiagnosticDomain, domain_id) or _404()
+    pool = _domain_quiz_pool(db, domain_id, user_id)
+    return {"domain_id": domain_id, "questions": [
+        {"id": q.id, "code": q.code, "stem": q.stem,
+         "options": q.options} for q in pool]}
+
+
+@router.post("/users/{user_id}/learning-plan/{domain_id}/quiz/submit")
+def submit_material_quiz(user_id: str, domain_id: str, body: MaterialQuizIn,
+                         db: Session = Depends(get_db)):
+    """随堂自测判分并推进：通过(≥60%)→ 该域所有当前「薄弱」的错因行 material_passed
+    （薄弱→学习中），今日待办中这些错因的「学习材料」任务随之出列。"""
+    _active_user(user_id, db)
+    from .models import MasteryState
+    correct = total = 0
+    detail = []
+    for qid, opt in body.answers.items():
+        q = db.get(Question, qid)
+        if not q or q.domain_id != domain_id:
+            continue
+        total += 1
+        ok = opt == q.answer
+        correct += 1 if ok else 0
+        detail.append({"question_id": qid, "correct": ok, "answer": q.answer})
+    passed = total > 0 and correct / total >= 0.6
+    if passed:
+        rows = db.execute(select(MasteryState).where(
+            MasteryState.user_id == user_id, MasteryState.domain_id == domain_id,
+            MasteryState.category.isnot(None), MasteryState.state == "薄弱")).scalars().all()
+        for r in rows:
+            mastery.transition(db, user_id, r.domain_id, r.category, "material_passed")
+    db.commit()
+    audit(db, "student", "material.quiz", f"{user_id}/{domain_id}",
+          passed=passed, correct=correct, total=total)
+    return {"passed": passed, "correct": correct, "total": total,
+            "detail": detail,
+            "note": "自测通过，该域薄弱错因已完成学习，进入练习阶段。" if passed
+            else "未通过：再回看一遍材料后重试。"}
 
 
 @router.get("/retest/{training_id}")
@@ -640,6 +1038,128 @@ def profile_summary(user_id: str, db: Session = Depends(get_db)):
     return {"heatmap": [{"domain_id": k[0], "domain": k[1], "category": k[2], "wrong": v}
                         for k, v in heat.items()],
             "weak": weak}
+
+
+# ---------- 学习档案聚合（能力画像实时版，2026-09-09） ----------
+CATS = ["知识遗忘", "概念混淆", "机制理解不足", "审题与应用失误", "待诊断"]
+
+
+def _wrong_category(db: Session, attempt_id: str) -> str:
+    """错题的错因归因类别：取诊断会话 hypothesis 的 misconception.category；未诊断为待诊断。"""
+    s = db.execute(select(DiagnosisSession).where(
+        DiagnosisSession.attempt_id == attempt_id)).scalar_one_or_none()
+    if s and s.hypothesis_id:
+        m = db.get(Misconception, s.hypothesis_id)
+        if m:
+            return m.category
+    return "待诊断"
+
+
+@router.get("/users/{user_id}/archive")
+def user_archive(user_id: str, db: Session = Depends(get_db)):
+    """学习档案聚合（2026-09-09）：档案页 = 能力画像随时间演进，而非摸底一次性快照。
+
+    汇总累计作答/掌握/训练 + 域正确率 + 域×错因热力图 + 错因类别占比，
+    供前端学习档案页渲染统计卡片、热力图、掌握度总览。
+    """
+    _active_user(user_id, db)
+    from .models import Attempt, TrainingSession, DiagnosisSession as DS
+    attempts = db.execute(select(Attempt).where(Attempt.user_id == user_id)).scalars().all()
+    total = len(attempts)
+    correct = sum(1 for a in attempts if a.is_correct)
+    wrong = total - correct
+
+    # question_id → domain_id（Attempt 不冗余 domain，经题归属）
+    qid_list = [a.question_id for a in attempts] or [""]
+    q_domain = {q.id: q.domain_id for q in db.execute(
+        select(Question).where(Question.id.in_(qid_list))).scalars()}
+    dom_map = {d.id: d for d in db.execute(select(DiagnosticDomain)).scalars()}
+
+    # 域统计（作答域）
+    qmap = {}
+    for a in attempts:
+        did = q_domain.get(a.question_id)
+        if not did:
+            continue
+        d = qmap.setdefault(did, {"correct": 0, "attempts": 0, "wrong": 0})
+        d["attempts"] += 1
+        if a.is_correct:
+            d["correct"] += 1
+        else:
+            d["wrong"] += 1
+    domain_stats = []
+    for did, s in qmap.items():
+        dd = dom_map.get(did)
+        domain_stats.append({
+            "domain_id": did, "domain": dd.name if dd else did,
+            "chapter_ref": dd.chapter_ref if dd else "",
+            "attempts": s["attempts"], "correct": s["correct"],
+            "rate": round(s["correct"] / s["attempts"], 3)})
+    domain_stats.sort(key=lambda x: x["attempts"], reverse=True)
+
+    # 域×错因 热力图（错题按归因）
+    heat_cell: dict = {}
+    wrong_attempts = [a for a in attempts if not a.is_correct]
+    for a in wrong_attempts:
+        did = q_domain.get(a.question_id)
+        if not did:
+            continue
+        dd = dom_map.get(did)
+        dname = dd.name if dd else "未知域"
+        cat = _wrong_category(db, a.id)
+        heat_cell[(dname, cat)] = heat_cell.get((dname, cat), 0) + 1
+    domains_order = sorted({k[0] for k in heat_cell})
+    values = [[heat_cell.get((d, c), 0) for c in CATS] for d in domains_order]
+    category_dist = {c: sum(heat_cell.get((d, c), 0) for d in domains_order) for c in CATS}
+
+    # 训练统计
+    # 训练会话经 DiagnosisSession.attempt_id 归属 user
+    trained = 0
+    training_passed = 0
+    sessions = db.execute(select(DS).where(DS.attempt_id.in_(
+        [a.id for a in attempts] or [""]))).scalars().all()
+    ts_rows = db.execute(select(TrainingSession)).scalars().all()
+    diag_by_id = {s.id: s for s in sessions}
+    for ts in ts_rows:
+        if ts.status != "completed":
+            continue
+        s = diag_by_id.get(ts.diagnosis_id)
+        if not s:
+            continue
+        a = db.get(Attempt, s.attempt_id)
+        if a and a.user_id == user_id:
+            trained += 1
+            if ts.score is not None and ts.score >= 0.6:
+                training_passed += 1
+
+    # 掌握度总览
+    rows = db.execute(select(MasteryState).where(MasteryState.user_id == user_id)).scalars().all()
+    state_count = {}
+    mastery_list = []
+    for r in rows:
+        state_count[r.state] = state_count.get(r.state, 0) + 1
+        dd = dom_map.get(r.domain_id)
+        mastery_list.append({
+            "domain_id": r.domain_id, "domain": dd.name if dd else r.domain_id,
+            "category": r.category, "state": r.state, "reason": r.reason})
+    done_states = {"掌握", "稳定掌握"}
+
+    return {
+        "summary": {
+            "attempts": total, "correct": correct, "wrong": wrong,
+            "accuracy": round(correct / total, 3) if total else 0.0,
+            "wrong_book": len(wrong_attempts),
+            "diagnosed": sum(1 for a in wrong_attempts if _wrong_category(db, a.id) != "待诊断"),
+            "trained": trained, "training_passed": training_passed,
+            "mastery_rows": len(rows),
+            "mastery_done": sum(1 for r in rows if r.state in done_states),
+            "categories": len(CATS),
+        },
+        "domain_stats": domain_stats,
+        "heatmap": {"domains": domains_order, "categories": CATS, "values": values},
+        "category_dist": category_dist,
+        "mastery": mastery_list,
+    }
 
 
 # ---------- 训练与掌握度 ----------

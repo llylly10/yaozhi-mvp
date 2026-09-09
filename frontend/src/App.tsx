@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   CheckCircle, Warning, MagnifyingGlass, SkipForward, ArrowRight, Pill,
-  CalendarBlank, BookOpen, ClockCounterClockwise, SquaresFour, Gear, BookOpenText,
+  CalendarBlank, ClockCounterClockwise, SquaresFour, Gear, BookOpenText,
 } from '@phosphor-icons/react'
 import * as echarts from 'echarts'
 import { api, type Diagnosis, type Question, type TikuFeedback } from './api'
@@ -18,20 +18,20 @@ const USER_KEY = 'yaozhi_user_id_v2'
 // 幂等键 UUID 生成：优先 crypto.randomUUID（仅 HTTPS/localhost 可用）；
 // 降级 crypto.getRandomValues（非安全上下文也有），再降级纯 JS（极老浏览器/非安全上下文兜底）。
 function genUUID(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  const c = (typeof crypto !== 'undefined' && crypto.getRandomValues)
-    ? crypto
-    : { getRandomValues: (arr: Uint8Array) => { for (let i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256); return arr } }
-  const b = c.getRandomValues(new Uint8Array(16))
+  // 兼容非安全上下文（HTTP 公网）crypto 不可用：类型上把 crypto 视作可选，避免 TS2774
+  const g = globalThis as { crypto?: { randomUUID?: () => string; getRandomValues?: (a: Uint8Array) => Uint8Array } }
+  if (g.crypto?.randomUUID) return g.crypto.randomUUID()
+  const grv: (a: Uint8Array) => Uint8Array = g.crypto?.getRandomValues
+    ? g.crypto.getRandomValues.bind(g.crypto)
+    : (arr: Uint8Array) => { for (let i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256); return arr }
+  const b = grv(new Uint8Array(16))
   b[6] = (b[6] & 0x0f) | 0x40 // version 4
   b[8] = (b[8] & 0x3f) | 0x80 // variant 10
   const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-type Screen = 'register' | 'consent' | 'goal' | 'assessment' | 'portrait' | 'list' | 'material' | 'flow' | 'profile'
+type Screen = 'register' | 'consent' | 'goal' | 'study' | 'assessment' | 'portrait' | 'list' | 'material' | 'flow' | 'profile'
 type View = 'todo' | 'material' | 'wrongbook' | 'profile'
 
 const STEPS = ['注册', '同意', '目标', '摸底', '画像', '路径', '学习', '练习', '诊断', '追问', '训练', '复测', '档案'] as const
@@ -42,7 +42,7 @@ const Cconst = 2 * Math.PI * Rconst
 
 function stepIndex(screen: Screen, diagnosis: Diagnosis | null): number {
   const map: Record<Screen, number> = {
-    register: 0, consent: 1, goal: 2, assessment: 3, portrait: 4,
+    register: 0, consent: 1, goal: 2, study: 2, assessment: 3, portrait: 4,
     list: 5, flow: 7, profile: 12,
     material: 6,
   }
@@ -66,6 +66,18 @@ export default function App() {
   const [portrait, setPortrait] = useState<PortraitResult | null>(null)
   const [materialDomain, setMaterialDomain] = useState<string | null>(null)
 
+  // 主壳（可切换视图的页面：今日待办/错题本/档案），全屏子流程(材料/练习/onboarding)不显示底部导航
+  const isShell = screen === 'list' || screen === 'profile'
+  function goNav(v: View) {
+    setError(null); setView(v); setScreen(v === 'todo' ? 'list' : 'profile'); setActiveQuestion(null)
+  }
+  // 屏幕/视图切换时清掉上一页残留报错，避免错误条跨页误显示
+  const prevNavKey = useRef('')
+  useEffect(() => {
+    const k = `${screen}/${view}`
+    if (prevNavKey.current !== k) { prevNavKey.current = k; setError(null) }
+  }, [screen, view])
+
   function onRegistered(id: string) {
     localStorage.setItem(USER_KEY, id)
     setUserId(id); setScreen('consent')
@@ -79,7 +91,7 @@ export default function App() {
   }
 
   const step = stepIndex(screen, diagnosis)
-  const inLearning = ['list', 'flow', 'profile', 'goal', 'assessment', 'portrait', 'material'].includes(screen)
+  const inLearning = ['list', 'flow', 'profile', 'goal', 'study', 'assessment', 'portrait', 'material'].includes(screen)
 
   return (
     <div className="relative min-h-[100dvh]">
@@ -115,7 +127,7 @@ export default function App() {
 
       <div className="relative z-10 mx-auto flex w-full max-w-[1140px] gap-6 px-5 pb-16 pt-6">
         {/* 左侧学习栏 */}
-        {inLearning && <Sidebar view={view} onNav={(v) => { setError(null); setView(v); setScreen(v === 'todo' ? 'list' : 'profile'); setActiveQuestion(null) }} />}
+        {inLearning && <Sidebar view={view} onNav={goNav} />}
 
         <div className="min-w-0 flex-1">
           {error && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
@@ -124,23 +136,33 @@ export default function App() {
             {screen === 'register' && <Welcome key="register" onRegistered={onRegistered} onError={setError} />}
             {screen === 'consent' && userId && <Consent key="consent" userId={userId} onConsented={onConsented} onBack={() => setScreen('register')} onError={setError} />}
             {screen === 'goal' && (
-              <GoalPicker key="goal" onNext={(goal) => { setGoal(goal); setScreen('assessment') }} goal={goal} />
+              <GoalPicker key="goal" goal={goal}
+                onNext={(g) => { setGoal(g); setScreen('study') }}
+                onBack={() => setScreen('consent')} />
+            )}
+            {screen === 'study' && userId && (
+              <StudyMapOnboard key="study" userId={userId} goal={goal} onError={setError}
+                onProceed={() => setScreen('assessment')}
+                onSkip={() => setScreen('assessment')}
+                onBack={() => setScreen('goal')} />
             )}
             {screen === 'assessment' && userId && (
               <Assessment key="assess" userId={userId}
-                onDone={(r) => { setPortrait(r); setScreen('portrait') }} onError={setError} />
+                onDone={(r) => { setPortrait(r); setScreen('portrait') }} onError={setError}
+                onBack={() => setScreen('goal')} />
             )}
             {screen === 'portrait' && portrait && (
-              <Portrait key="portrait" result={portrait} onEnter={() => { setScreen('list'); setView('todo') }} />
+              <Portrait key="portrait" result={portrait} onEnter={() => { setError(null); setScreen('list'); setView('todo') }} />
             )}
             {screen === 'list' && userId && view === 'todo' && (
               <LearningPathHome key="plan" userId={userId}
                 onPick={(q) => { setError(null); setActiveQuestion(q); setScreen('flow'); setDiagnosis(null) }}
                 onMaterial={(domainId) => { setMaterialDomain(domainId); setScreen('material') }} />
             )}
-            {screen === 'material' && materialDomain && (
-              <MaterialView key={materialDomain} domainId={materialDomain} onError={setError}
-                onPractice={(q) => { setActiveQuestion(q); setScreen('flow'); setDiagnosis(null) }} />
+            {screen === 'material' && materialDomain && userId && (
+              <MaterialView key={materialDomain} userId={userId} domainId={materialDomain} onError={setError}
+                onPractice={(q) => { setActiveQuestion(q); setScreen('flow'); setDiagnosis(null) }}
+                onBack={() => { setScreen('list'); setView('todo') }} />
             )}
             {screen === 'flow' && userId && activeQuestion && (
               <PracticeFlow key={activeQuestion.id} userId={userId} question={activeQuestion}
@@ -149,26 +171,28 @@ export default function App() {
                 onExit={() => { setScreen('list'); setActiveQuestion(null); setDiagnosis(null); setView('todo') }} />
             )}
             {screen === 'profile' && userId && view === 'profile' && (
-              <Profile key="profile" userId={userId} />
+              <Profile key="profile" userId={userId} onGoTodo={() => goNav('todo')} />
             )}
             {screen === 'profile' && userId && view === 'wrongbook' && (
-              <WrongBook key="wrongbook" userId={userId} />
+              <WrongBook key="wrongbook" userId={userId} onGoTodo={() => goNav('todo')} />
             )}
 
           </AnimatePresence>
         </div>
       </div>
+
+      {/* 移动端底部导航（仅主壳显示）+ 留白防遮挡 */}
+      {isShell && (
+        <>
+          <div className="h-20 lg:hidden" aria-hidden />
+          <MobileTab current={{ screen, view }} onNav={goNav} />
+        </>
+      )}
     </div>
   )
 }
 
 /* ---------- 苯环分子背景 ---------- */
-
-const HEXES = [
-  [4, 10, 46], [12, 26, 30], [22, 8, 58], [33, 20, 36], [45, 6, 50], [58, 16, 42],
-  [70, 7, 54], [82, 22, 34], [92, 10, 46], [8, 55, 40], [26, 68, 56], [50, 60, 44],
-  [72, 72, 52], [90, 58, 38], [60, 85, 34], [16, 86, 44], [40, 40, 28],
-] as const
 
 function Hex({ size, className, style }: { size: number; className?: string; style?: React.CSSProperties }) {
   const h = size, w = size * 0.866
@@ -180,22 +204,30 @@ function Hex({ size, className, style }: { size: number; className?: string; sty
   )
 }
 
+/* 苯环分子背景：退到左右页缘的点缀，不再满屏平铺，避免干扰内容阅读 */
 function MolField() {
+  // 左上角簇（top-left）与右下角簇（bottom-right），尺寸递减、更淡
+  const tl = [
+    { left: -30, top: -24, size: 150 }, { left: 44, top: 60, size: 78 }, { left: -14, top: 108, size: 58 },
+  ]
+  const br = [
+    { right: -34, bottom: -30, size: 170 }, { right: 52, bottom: 40, size: 88 }, { right: -8, bottom: 150, size: 62 },
+  ]
+  type Spot = { size: number } & ({ left: number; top: number } | { right: number; bottom: number })
+  const hex = (c: Spot, i: number, flip: boolean) => (
+    <motion.div key={`${i}-${c.size}`} className="absolute text-primary/70" style={{
+      left: 'left' in c ? `${c.left}%` : undefined, top: 'top' in c ? `${c.top}%` : undefined,
+      right: 'right' in c ? `${c.right}%` : undefined, bottom: 'bottom' in c ? `${c.bottom}%` : undefined,
+    }}
+      animate={{ y: [0, -7, 0], rotate: [0, flip ? 5 : -5, 0] }}
+      transition={{ duration: 13 + (i % 4) * 3, repeat: Infinity, ease: 'easeInOut', delay: i * 0.8 }}>
+      <Hex size={c.size} className="opacity-90" />
+    </motion.div>
+  )
   return (
-    <div className="mol-field text-primary/25" aria-hidden>
-      <svg className="absolute inset-0 h-full w-full" preserveAspectRatio="none">
-        {HEXES.slice(0, 12).map(([x, y], i) => (
-          <line key={`b${i}`} x1={`${x}%`} y1={`${y}%`} x2={`${HEXES[(i + 3) % HEXES.length][0]}%`}
-            y2={`${HEXES[(i + 3) % HEXES.length][1]}%`} stroke="currentColor" strokeWidth={0.7} opacity={0.35} />
-        ))}
-      </svg>
-      {HEXES.map(([x, y, s], i) => (
-        <motion.div key={i} className="absolute text-primary/60" style={{ left: `${x}%`, top: `${y}%` }}
-          animate={{ y: [0, -9, 0], rotate: [0, i % 2 ? 6 : -6, 0] }}
-          transition={{ duration: 10 + (i % 5) * 2, repeat: Infinity, ease: 'easeInOut', delay: i * 0.4 }}>
-          <Hex size={s} />
-        </motion.div>
-      ))}
+    <div className="mol-field" aria-hidden>
+      {tl.map((c, i) => hex(c, i, true))}
+      {br.map((c, i) => hex(c, i, false))}
     </div>
   )
 }
@@ -218,7 +250,6 @@ function Sidebar({ view, onNav }: { view: View; onNav: (v: View) => void }) {
         <div>
           <p className="mb-1.5 px-3.5 text-[11px] font-semibold text-ink-3">学习</p>
           {item('todo', '今日待办', <CalendarBlank size={15} />)}
-          {item('material', '学习材料', <BookOpen size={15} />)}
           {item('wrongbook', '错题本', <ClockCounterClockwise size={15} />)}
         </div>
         <div>
@@ -233,6 +264,28 @@ function Sidebar({ view, onNav }: { view: View; onNav: (v: View) => void }) {
         </div>
       </div>
     </aside>
+  )
+}
+
+/* 移动端底部导航：窄屏(<lg)时左侧学习栏不可见，用底部 Tab 切换三大主入口 */
+function MobileTab({ current, onNav }: { current: { screen: Screen; view: View }; onNav: (v: View) => void }) {
+  const active = (screen: Screen, view: View) => current.screen === screen && current.view === view
+  const tab = (v: View, label: string, icon: React.ReactNode, screen: Screen, on = false) => (
+    <button onClick={() => onNav(v)} disabled={on}
+      className={`flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl py-1.5 text-[11px] font-medium transition-colors
+        ${active(screen, v) ? 'text-primary' : 'text-ink-3 hover:text-ink-2'} ${on ? 'opacity-45' : ''}`}>
+      {icon}
+      <span className="truncate">{label}</span>
+    </button>
+  )
+  return (
+    <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-white/85 px-3 py-1.5 backdrop-blur-lg lg:hidden">
+      <div className="mx-auto flex w-full max-w-[560px] items-center gap-1">
+        {tab('todo', '今日待办', <CalendarBlank size={19} />, 'list')}
+        {tab('wrongbook', '错题本', <ClockCounterClockwise size={19} />, 'profile')}
+        {tab('profile', '学习档案', <SquaresFour size={19} />, 'profile')}
+      </div>
+    </nav>
   )
 }
 
@@ -404,7 +457,7 @@ const GOALS = [
   ['备考执业药师', '对照执业药师考点组织练习，兼顾课程与考证。'],
 ] as const
 
-function GoalPicker({ onNext, goal }: { onNext: (g: string) => void; goal: string }) {
+function GoalPicker({ onNext, goal, onBack }: { onNext: (g: string) => void; goal: string; onBack: () => void }) {
   const [picked, setPicked] = useState<string>(goal)
   useEffect(() => { window.scrollTo(0, 0) }, [])
   return (
@@ -433,17 +486,378 @@ function GoalPicker({ onNext, goal }: { onNext: (g: string) => void; goal: strin
           </motion.button>
         ))}
       </div>
-      <button onClick={() => onNext(picked)} className="btn btn-primary mt-7">
-        保存目标，开始摸底<ArrowRight size={15} weight="bold" />
+      <div className="mt-7 flex items-center gap-3">
+        <button onClick={() => onNext(picked)} className="btn btn-primary">
+          保存目标，开始摸底<ArrowRight size={15} weight="bold" />
+        </button>
+        <button onClick={onBack} className="btn rounded-full border border-line bg-white px-5 py-3 text-sm font-medium text-ink-2 hover:bg-paper">上一步</button>
+      </div>
+    </motion.div>
+  )
+}
+
+/* ---------- 学习地图 · 知识图谱（2026-09-09：目标后、摸底前 先学→随堂摸底） ---------- */
+
+type StudyNode = {
+  domain_id: string; code: string; is_seed: boolean; title: string
+  book_chapter_no: number | null
+  source: 'seed' | 'syllabus' | 'none'
+  q_published: number; objective: string
+  studied: null | { passed: boolean; score: number; total: number }
+  mastery: null | { state: string }
+}
+type StudyMapData = {
+  groups: { key: string; name: string; nodes: StudyNode[] }[]
+  recommended: string[]
+  total_domains: number
+  note: string
+}
+
+/* 概览：课程知识图谱 = 各药理系统「组」节点 → 章节节点，星形/放射排布，状态着色 */
+function CourseGraph({ data, goal, onOpen, onSkip, onProceed }: {
+  data: StudyMapData; goal: string
+  onOpen: (n: StudyNode) => void; onSkip: () => void; onProceed: () => void
+}) {
+  const doneCount = data.groups.reduce((acc, g) => acc + g.nodes.filter((n) => n.studied?.passed).length, 0)
+  const node = (n: StudyNode) => {
+    const done = n.studied?.passed
+    const rec = data.recommended.includes(n.domain_id)
+    const seed = n.is_seed
+    return (
+      <button key={n.domain_id} onClick={() => onOpen(n)}
+        className={`group flex items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-[12px] transition
+          ${done ? 'border-ok/40 bg-[var(--color-ok-soft)]' : seed ? 'border-gold/50 bg-gold-soft/60' : rec ? 'border-primary/40 bg-primary-soft/60' : 'border-line-2 bg-white hover:border-ink-3/40'}`}>
+        <span className={`size-2 flex-none rounded-full ${done ? 'bg-ok' : seed ? 'bg-gold' : rec ? 'bg-primary' : 'bg-line'}`} />
+        <span className="leading-tight text-ink">{n.title}</span>
+        {done && <CheckCircle size={12} weight="fill" className="ml-auto flex-none text-ok" />}
+        {!done && seed && <span className="ml-auto flex-none rounded-full bg-gold px-1.5 text-[9px] font-semibold text-gold">示范深挖</span>}
+        {!done && !seed && rec && <span className="ml-auto flex-none text-[9px] font-semibold text-primary">建议</span>}
       </button>
+    )
+  }
+  return (
+    <motion.div key="study-overview" initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={spring}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold tracking-[0.18em] text-gold">目标驱动 · 学习地图</p>
+          <h2 className="display mt-1 text-[26px]">课程知识图谱</h2>
+          <p className="mt-2 max-w-[640px] text-sm leading-relaxed text-ink-2">
+            {goal}的下一站：按药理系统，把《药理学》拆成一棵棵「章节知识点树」。先学一课，再做这棵树的
+            随堂摸底，达标后再进入正式摸底，效果更好。
+          </p>
+        </div>
+        <div className="rounded-2xl border border-line bg-white px-4 py-3 text-center">
+          <p className="display text-2xl text-primary">{doneCount}<span className="text-sm text-ink-3">/{data.total_domains}</span></p>
+          <p className="text-[11px] text-ink-3">已随堂达标</p>
+        </div>
+      </div>
+
+      {/* 图例 */}
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-ink-3">
+        <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-primary" />建议先学</span>
+        <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-gold" />顾问深图谱（示范）</span>
+        <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-ok" />已达标</span>
+        <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-line" />待学（题库先行）</span>
+      </div>
+
+      <div className="mt-6 space-y-4">
+        {data.groups.map((g, gi) => {
+          const gDone = g.nodes.filter((n) => n.studied?.passed).length
+          return (
+            <motion.div key={g.key} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+              transition={{ ...spring, delay: gi * 0.05 }} className="spot-card p-5">
+              <div className="mb-4 flex flex-wrap items-center gap-3">
+                <span className="capsule" />
+                <p className="text-sm font-semibold">{g.name}</p>
+                <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] text-ink-3">
+                  {gDone}/{g.nodes.length} 达标
+                </span>
+              </div>
+              {/* 图谱：组节点为「中轴」，章节节点放射挂接（结构即图谱） */}
+              <div className="flex flex-wrap gap-2">
+                {g.nodes.map((n) => node(n))}
+              </div>
+            </motion.div>
+          )
+        })}
+      </div>
+
+      <div className="mt-7 flex flex-wrap items-center gap-3">
+        <button onClick={onProceed} className="btn btn-primary">
+          我准备好了，开始正式摸底<ArrowRight size={15} weight="bold" />
+        </button>
+        <button onClick={onSkip} className="btn rounded-full border border-line bg-white px-5 py-3 text-sm font-medium text-ink-2 hover:border-primary hover:text-primary">
+          跳过学习，直接摸底
+        </button>
+      </div>
+      <p className="mt-4 text-xs text-ink-3">{data.note}</p>
+    </motion.div>
+  )
+}
+
+/* 单章学习内容 + 随堂摸底：真实呈现该章「知识点图谱」，不伪造未整理内容 */
+function ChapterStudy({ userId, node, goal, onError, onDone }: {
+  userId: string; node: StudyNode; goal: string; onError: (m: string) => void
+  onDone: (passed: boolean, score: number, total: number) => void
+}) {
+  type Detail =
+    | { source: 'seed'; graph: { chain: { level: number; title: string; summary: string }[]; relations: { source: { type: string; name: string }; edge: string; target: { type: string; name: string }; note?: string }[]; confusion: { drug_a: string; drug_b: string; distinction: string }[] } }
+    | { source: 'syllabus'; chapter: { no: number; title: string; objectives: Record<string, string[]> | Record<string, string>; key_points: string[]; difficulties: string[]; sections: { title: string; points: string[] }[] } }
+    | { source: 'none'; chapter: null }
+  const [detail, setDetail] = useState<Detail | null>(null)
+  const [quiz, setQuiz] = useState<{ id: string; code: string; stem: string; options: { key: string; text: string }[] }[] | null>(null)
+  const [picks, setPicks] = useState<Record<string, string>>({})
+  const [res, setRes] = useState<{ passed: boolean; correct: number; total: number } | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => { window.scrollTo(0, 0) }, [node.domain_id])
+  useEffect(() => {
+    setDetail(null); setQuiz(null); setRes(null); setPicks({})
+    api.studyDetail(userId, node.domain_id).then(setDetail).catch((e) => onError(String(e)))
+    api.studyQuiz(userId, node.domain_id).then((r) => setQuiz(r.questions ?? [])).catch((e) => onError(String(e)))
+  }, [userId, node.domain_id])
+
+  async function submit() {
+    if (!quiz || busy) return
+    setBusy(true)
+    try {
+      const r = await api.submitStudyQuiz(userId, node.domain_id, picks)
+      setRes({ passed: r.passed, correct: r.correct, total: r.total })
+      if (r.passed) onDone(true, r.correct / r.total, r.total)
+      else onDone(false, 0, r.total)
+    } catch (e) { onError(String(e)) } finally { setBusy(false) }
+  }
+
+  const answered = Object.keys(picks).length
+  return (
+    <motion.div key={`cs-${node.domain_id}`} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={spring}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded-full border border-primary/30 bg-primary-soft px-2.5 py-0.5 text-[11px] font-medium text-primary">第 {node.book_chapter_no ?? '—'} 章</span>
+        <h2 className="display text-[22px]">{node.title}</h2>
+        {node.studied?.passed && <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-ok-soft)] px-2.5 py-0.5 text-[11px] font-semibold text-ok"><CheckCircle size={12} weight="fill" />已达标</span>}
+      </div>
+      <p className="mt-1 text-sm text-ink-2">{goal} · 本章知识点图谱 → 学完再做随堂摸底</p>
+
+      {/* 学习内容 */}
+      <div className="mt-5 space-y-4">
+        {!detail && <div className="skeleton h-48" />}
+
+        {detail?.source === 'seed' && (
+          <div className="spot-card p-6">
+            <p className="mb-4 flex items-center gap-2 text-sm font-semibold"><span className="capsule gold" />顾问深图谱 · 药理推理链（六环）</p>
+            <div className="space-y-0">
+              {detail.graph.chain.map((c, i) => (
+                <div key={c.level} className="flex gap-3">
+                  <div className="flex flex-col items-center">
+                    <span className="grid size-7 flex-none place-items-center rounded-lg bg-primary-soft text-xs font-bold text-primary">L{c.level}</span>
+                    {i < detail.graph.chain.length - 1 && <span className="w-px flex-1 bg-line" />}
+                  </div>
+                  <div className="pb-4">
+                    <p className="text-[13px] font-semibold">{c.title}</p>
+                    <p className="mt-0.5 text-[12px] leading-relaxed text-ink-2">{c.summary}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {detail.graph.relations.length > 0 && (
+              <>
+                <p className="mb-3 mt-5 text-sm font-semibold">药效关系（源—边→目标）</p>
+                <div className="flex flex-wrap gap-2">
+                  {detail.graph.relations.map((r, i) => (
+                    <div key={i} className="flex items-center gap-1.5 rounded-lg border border-line-2 bg-white px-2 py-1 text-[11px]">
+                      <NodeChip type={r.source.type} name={r.source.name} />
+                      <span className="rounded-full bg-paper-2 px-1.5 py-0.5 font-semibold text-ink-3">{r.edge}</span>
+                      <NodeChip type={r.target.type} name={r.target.name} />
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {detail?.source === 'syllabus' && detail.chapter && (
+          <div className="space-y-4">
+            {/* 掌握目标 */}
+            <div className="spot-card p-6">
+              <p className="mb-3 flex items-center gap-2 text-sm font-semibold"><span className="capsule" />本章学习目标 · 按掌握深度分层</p>
+              {(() => {
+                const o = detail.chapter.objectives || {}
+                const labels: [string, string, string][] = [
+                  ['master', '掌握', 'bg-primary-soft text-primary'],
+                  ['familiar', '熟悉', 'bg-gold-soft text-gold'],
+                  ['understand', '了解', 'bg-paper-2 text-ink-3'],
+                ]
+                return (
+                  <div className="space-y-2.5">
+                    {labels.map(([k, lab, cl]) => {
+                      const items = o[k]
+                      if (!items || (Array.isArray(items) ? items.length === 0 : !String(items).trim())) return null
+                      const arr = Array.isArray(items) ? items : String(items).split(/[；;\n]/).map((s) => s.trim()).filter(Boolean)
+                      return (
+                        <div key={k} className="flex gap-3">
+                          <span className={`mt-0.5 h-fit flex-none rounded-md px-2 py-0.5 text-[11px] font-semibold ${cl}`}>{lab}</span>
+                          <ul className="space-y-1 text-[13px] text-ink-2">
+                            {arr.map((t, i) => <li key={i} className="leading-relaxed">{t}</li>)}
+                          </ul>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+            </div>
+
+            {/* 知识点树：章节 → 节 → 知识点 */}
+            <div className="spot-card p-6">
+              <p className="mb-4 flex items-center gap-2 text-sm font-semibold"><span className="capsule" />知识点图谱 · {detail.chapter.title}</p>
+              {detail.chapter.sections.length === 0 ? (
+                <p className="text-[13px] text-ink-3">本章大纲暂未录入分节知识点（待内容化）。可先用下方题库随堂摸底，检验掌握度。</p>
+              ) : (
+                <div className="space-y-3">
+                  {detail.chapter.sections.map((s, si) => (
+                    <div key={si} className="flex gap-3">
+                      <div className="flex flex-col items-center">
+                        <span className="mt-1 size-2.5 flex-none rounded-full bg-primary" />
+                        {si < detail.chapter.sections.length - 1 && <span className="w-px flex-1 bg-line" />}
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-[13.5px] font-semibold">{s.title}</p>
+                        {(s.points ?? []).length > 0 && (
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {(s.points ?? []).map((p, pi) => (
+                              <span key={pi} className="rounded-lg border border-line-2 bg-white px-2 py-0.5 text-[11px] text-ink-2">{p}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {(detail.chapter.key_points.length > 0 || detail.chapter.difficulties.length > 0) && (
+                <div className="mt-5 flex flex-wrap gap-2 border-t border-dashed border-line pt-4">
+                  {detail.chapter.key_points.map((k, i) => <span key={i} className="rounded-full bg-gold-soft px-2.5 py-1 text-[11px] text-gold">重点 · {k}</span>)}
+                  {detail.chapter.difficulties.map((d2, i) => <span key={i} className="rounded-full bg-cat-red-soft px-2.5 py-1 text-[11px] text-cat-red">难点 · {d2}</span>)}
+                </div>
+              )}
+              <p className="mt-3 text-[11px] text-ink-3">来源：校内《药理学》教学大纲（章节→节→知识点）。知识点间的逻辑关系图谱化，由药理顾问逐章审校后补全。</p>
+            </div>
+          </div>
+        )}
+
+        {detail?.source === 'none' && (
+          <div className="spot-card p-6 text-sm text-ink-2">
+            本章暂无整理的学习材料（顾问图谱待补）。可以直接做随堂摸底，用本章题目检验你的掌握情况。
+          </div>
+        )}
+      </div>
+
+      {/* 随堂摸底 */}
+      <div className="mt-5 spot-card p-6">
+        <p className="mb-1 flex items-center gap-2 text-sm font-semibold"><span className="capsule" />随堂摸底 · 检验学习程度</p>
+        <p className="mb-4 text-xs text-ink-3">作答本章 3 道题，答对 ≥60% 即本章达标；未达可回看上方知识点后重试。</p>
+
+        {res ? (
+          <div className={`rounded-2xl border p-5 text-sm ${res.passed ? 'border-ok/40 bg-[var(--color-ok-soft)]' : 'border-cat-red/40 bg-[var(--color-cat-red-soft)]'}`}>
+            <p className="font-semibold">{res.passed ? `✅ 本章达标（${res.correct}/${res.total}）` : `❌ 未通过（${res.correct}/${res.total}）`}</p>
+            <p className="mt-1 text-ink-2">{res.passed ? '很棒，本章知识点已掌握到可进入练习的程度。' : '还有薄弱点：回到上方知识点再看一遍，再试一次。'}</p>
+          </div>
+        ) : quiz && quiz.length > 0 ? (
+          <div className="space-y-4">
+            {quiz.map((q, i) => (
+              <div key={q.id} className="rounded-2xl border border-line-2 p-5">
+                <p className="mb-3 text-sm font-medium leading-relaxed">{i + 1}. {q.stem}</p>
+                <div className="space-y-2.5">
+                  {q.options.map((o) => (
+                    <button key={o.key} onClick={() => setPicks({ ...picks, [q.id]: o.key })}
+                      className={`relative w-full rounded-xl border px-4 py-2.5 text-left text-sm
+                        ${picks[q.id] === o.key ? 'border-primary bg-primary-soft/50' : 'border-line bg-white hover:border-ink-3/40'}`}>
+                      <span className={`mr-2 inline-grid size-5 items-center justify-center rounded-full border text-[11px] font-bold
+                        ${picks[q.id] === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2'}`}>{o.key}</span>
+                      {o.text}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <button onClick={submit} disabled={answered < quiz.length || busy} className="btn btn-primary">
+              {busy ? '判分中…' : '提交摸底（已答 ' + answered + '/' + quiz.length + '）'}
+            </button>
+          </div>
+        ) : (
+          <p className="text-sm text-ink-2">本章暂无自测题，可直接进入正式摸底。</p>
+        )}
+      </div>
+    </motion.div>
+  )
+}
+
+/* 学习地图编排：目标后进入；默认停在总览，点章节进学习，学完回总览再决定进摸底 */
+function StudyMapOnboard({ userId, goal, onError, onBack, onProceed, onSkip }: {
+  userId: string; goal: string; onError: (m: string) => void
+  onBack: () => void; onProceed: () => void; onSkip: () => void
+}) {
+  const [map, setMap] = useState<StudyMapData | null>(null)
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [study, setStudy] = useState<'list' | 'chapter'>('list')
+
+  const load = useCallback(() => {
+    api.studyMap(userId).then(setMap).catch((e) => onError(String(e)))
+  }, [userId])
+  useEffect(() => { load(); window.scrollTo(0, 0) }, [load])
+
+  const open = map ? map.groups.flatMap((g) => g.nodes).find((n) => n.domain_id === openId) ?? null : null
+
+  if (!map) {
+    return (
+      <div className="pt-4">
+        <div className="skeleton h-40" />
+        <div className="mt-4 skeleton h-56" />
+      </div>
+    )
+  }
+
+  if (open && study === 'chapter') {
+    return (
+      <motion.div key="study-detail" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+        <div className="mb-4 flex items-center gap-2">
+          <button onClick={() => { setStudy('list'); setOpenId(null) }}
+            className="btn items-center gap-1 rounded-full border border-line bg-white px-3 py-1.5 text-xs text-ink-2 hover:border-primary hover:text-primary">
+            <ArrowRight size={12} className="rotate-180" />返回学习地图
+          </button>
+          <button onClick={onBack} className="inline-flex flex-none items-center gap-1 rounded-full px-2.5 py-1 text-xs text-ink-3 hover:bg-paper-2 hover:text-ink-2">
+            <ArrowRight size={12} className="rotate-180" />上一步（改目标）
+          </button>
+        </div>
+        <ChapterStudy userId={userId} node={open} goal={goal} onError={onError}
+          onDone={() => load()} />
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          <button onClick={onProceed} className="btn btn-primary">学得差不多，进入正式摸底<ArrowRight size={15} weight="bold" /></button>
+          <button onClick={() => { setStudy('list'); setOpenId(null) }} className="btn rounded-full border border-line bg-white px-5 py-3 text-sm font-medium text-ink-2 hover:border-primary hover:text-primary">继续学习下一节</button>
+        </div>
+      </motion.div>
+    )
+  }
+
+  return (
+    <motion.div key="study-overview" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="mb-4 flex items-center gap-2">
+        <button onClick={onBack} className="inline-flex flex-none items-center gap-1 rounded-full border border-line bg-white px-3 py-1.5 text-xs text-ink-2 hover:border-primary hover:text-primary">
+          <ArrowRight size={12} className="rotate-180" />上一步（改目标）
+        </button>
+      </div>
+      <CourseGraph data={map} goal={goal}
+        onOpen={(n) => { setOpenId(n.domain_id); setStudy('chapter') }}
+        onSkip={onSkip} onProceed={onProceed} />
     </motion.div>
   )
 }
 
 /* ---------- 第 4 步 · 摸底测试 ---------- */
 
-function Assessment({ userId, onDone, onError }: {
-  userId: string; onDone: (r: PortraitResult) => void; onError: (m: string) => void
+function Assessment({ userId, onDone, onError, onBack }: {
+  userId: string; onDone: (r: PortraitResult) => void; onError: (m: string) => void; onBack: () => void
 }) {
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [answers, setAnswers] = useState<Record<string, string>>({})
@@ -464,7 +878,12 @@ function Assessment({ userId, onDone, onError }: {
   const answered = Object.keys(answers).length
   return (
     <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="mx-auto w-full max-w-[860px] pt-4">
-      <p className="text-xs font-semibold tracking-[0.18em] text-gold">STEP 4 · 摸底测试</p>
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-xs font-semibold tracking-[0.18em] text-gold">STEP 4 · 摸底测试</p>
+        <button onClick={onBack} className="inline-flex flex-none items-center gap-1 rounded-full px-2.5 py-1 text-xs text-ink-3 transition hover:bg-paper-2 hover:text-ink-2">
+          <ArrowRight size={12} className="rotate-180" />返回上一步
+        </button>
+      </div>
       <h2 className="display mt-2 text-[26px]">先摸个底，看看你现在的位置</h2>
       <p className="mt-2 text-sm text-ink-2">
         {questions ? `${questions.length} 道题，约 8 分钟。` : '加载中…'}
@@ -622,7 +1041,7 @@ function Portrait({ result, onEnter }: { result: PortraitResult; onEnter: () => 
 
 /* ---------- 学习路径（今日待办） ---------- */
 
-type PlanTask = { type: 'material' | 'practice'; domain_id: string; domain: string; category: string | null; state: string; title: string }
+type PlanTask = { type: 'material' | 'practice'; domain_id: string; domain: string; category: string | null; state: string; title: string; guide?: string; goal?: string }
 type DoneTask = { domain_id: string; domain: string; category: string | null; state: string; title: string }
 
 function LearningPathHome({ userId, onPick, onMaterial }: {
@@ -681,45 +1100,75 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
 
       {hasTasks && (
         <div className="relative mt-6 space-y-4 before:absolute before:left-[19px] before:top-3 before:bottom-3 before:w-px before:bg-line">
-          {plan.tasks.map((t, i) => (
-            <motion.div key={t.type + t.domain_id + t.category} initial={{ opacity: 0, x: -14 }}
-              animate={{ opacity: 1, x: 0 }} transition={{ ...spring, delay: i * 0.07 }}
-              className="relative flex items-center gap-4">
-              <span className={`z-10 grid size-10 flex-none place-items-center rounded-xl font-serif font-bold
-                ${t.type === 'material' ? 'bg-gold-soft text-gold' : 'bg-primary-soft text-primary'}`}>
-                {t.type === 'material' ? '学' : '练'}
-              </span>
-              <div className="card flex-1 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-medium">{t.title}</p>
-                  <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium
-                    ${t.state === '薄弱' ? 'bg-cat-red-soft text-cat-red' : t.state === '学习中' ? 'bg-gold-soft text-gold' : 'bg-primary-soft text-primary'}`}>
-                    {t.state}
-                  </span>
+          {/* 按域分组：每张卡片=「一域一个薄弱点 → 学(可选) → 练」的一一对应引导 */}
+          {(() => {
+            const groups: { domain_id: string; domain: string; items: PlanTask[] }[] = []
+            for (const t of plan.tasks) {
+              // 学与练按 域×错因 配对成一组；无错因的章级练习按域自成一组的练习
+              let target = groups.find((x) => x.domain_id === t.domain_id && (x.items[0]?.category ?? null) === (t.category ?? null))
+              if (!target) { target = { domain_id: t.domain_id, domain: t.domain, items: [] }; groups.push(target) }
+              target.items.push(t)
+            }
+            return groups.map((g, gi) => (
+              <motion.div key={g.domain_id + gi} initial={{ opacity: 0, x: -14 }}
+                animate={{ opacity: 1, x: 0 }} transition={{ ...spring, delay: gi * 0.08 }}
+                className="relative">
+                <div className="z-10 mb-2 ml-9 flex items-center gap-2 text-[11px] font-medium text-ink-3">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />{g.domain} · 逐个突破
                 </div>
-                {t.type === 'material' ? (
-                  <button onClick={() => onMaterial(t.domain_id)}
-                    className="btn mt-2.5 items-center gap-1.5 rounded-full border border-line px-3.5 py-1.5 text-xs hover:border-primary hover:text-primary">
-                    进入学习<ArrowRight size={11} />
-                  </button>
-                ) : (
-                  questions && questions.length > 0 && (
-                    <button onClick={() => { const q = questions.find((x) => x.domain_id === t.domain_id) ?? questions[0]; onPick(q) }}
-                      className="btn mt-2.5 items-center gap-1.5 rounded-full border border-line px-3.5 py-1.5 text-xs hover:border-primary hover:text-primary">
-                      开始练习<ArrowRight size={11} />
-                    </button>
-                  )
-                )}
-              </div>
-            </motion.div>
-          ))}
+                <div className="space-y-3">
+                  {g.items.map((t) => {
+                    const isLearn = t.type === 'material'
+                    return (
+                      <div key={t.type + t.category} className="flex items-start gap-4">
+                        <span className={`z-10 mt-1 grid size-10 flex-none place-items-center rounded-xl font-serif font-bold
+                          ${isLearn ? 'bg-gold-soft text-gold' : 'bg-primary-soft text-primary'}`}>
+                          {isLearn ? '学' : '练'}
+                        </span>
+                        <div className="card flex-1 p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-medium">{t.title}</p>
+                              {isLearn && <p className="mt-0.5 text-[11px] text-gold">先学本域材料，再做随堂自测，最后练习</p>}
+                            </div>
+                            <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium
+                              ${t.state === '薄弱' ? 'bg-cat-red-soft text-cat-red' : t.state === '学习中' ? 'bg-gold-soft text-gold' : 'bg-primary-soft text-primary'}`}>
+                              {t.state}
+                            </span>
+                          </div>
+                          {/* 明确引导：这一步该做什么、做完会怎样 */}
+                          {t.guide && <p className="mt-2 rounded-lg bg-paper px-3 py-2 text-[12px] leading-relaxed text-ink-2">{t.guide}</p>}
+                          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                            {isLearn ? (
+                              <button onClick={() => onMaterial(t.domain_id)}
+                                className="btn items-center gap-1.5 rounded-full border border-gold/40 bg-gold-soft/60 px-3.5 py-1.5 text-xs text-gold hover:border-gold">
+                                进入学习 · 随堂自测<ArrowRight size={11} />
+                              </button>
+                            ) : (
+                              questions && questions.length > 0 && (
+                                <button onClick={() => { const q = questions.find((x) => x.domain_id === t.domain_id) ?? questions[0]; onPick(q) }}
+                                  className="btn items-center gap-1.5 rounded-full border border-line px-3.5 py-1.5 text-xs hover:border-primary hover:text-primary">
+                                  开始练习<ArrowRight size={11} />
+                                </button>
+                              )
+                            )}
+                            {t.goal && <span className="text-[11px] text-ink-3">达成：{t.goal}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </motion.div>
+            ))
+          })()}
         </div>
       )}
 
       {doneTasks.length > 0 && (
         <div className="mt-6">
           <p className="mb-3 flex items-center gap-2 text-xs font-semibold text-ink-3">
-            <CheckCircle size={14} weight="fill" className="text-ok" />已完成
+            <CheckCircle size={14} weight="fill" className="text-ok" />已完成（不再出现在待办）
           </p>
           <div className="space-y-2.5">
             {doneTasks.map((t, i) => (
@@ -728,7 +1177,9 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
                   <CheckCircle size={15} weight="fill" />
                 </span>
                 <p className="text-sm text-ink-2 line-through">{t.title}</p>
-                <span className="ml-auto rounded-full px-2.5 py-0.5 text-[11px] font-medium text-ok" style={{ background: 'var(--color-ok-soft)' }}>掌握</span>
+                <span className="ml-auto rounded-full px-2.5 py-0.5 text-[11px] font-medium text-ok" style={{ background: 'var(--color-ok-soft)' }}>
+                  {t.state === '初步掌握' ? '已达标' : '掌握'}
+                </span>
               </div>
             ))}
           </div>
@@ -745,19 +1196,40 @@ type MaterialData = {
   domain: { code: string; name: string; chapter_ref: string }
   chain: { level: number; title: string; summary: string }[]
   confusion_pairs: { drug_a: string; drug_b: string; distinction: string }[]
+  knowledge_relations?: {
+    source: { type: string; name: string }; edge: string; target: { type: string; name: string }; note: string
+  }[]
   evidence: { ref: string; text: string }[]
 }
 
-function MaterialView({ domainId, onPractice, onError }: {
-  domainId: string; onPractice: (q: Question) => void; onError: (m: string) => void
+function MaterialView({ userId, domainId, onPractice, onBack, onError }: {
+  userId: string; domainId: string
+  onPractice: (q: Question) => void; onBack: () => void; onError: (m: string) => void
 }) {
   const [mat, setMat] = useState<MaterialData | null>(null)
   const [starting, setStarting] = useState(false)
+  // 随堂自测（学习程度检验，2026-09-08）：读完材料后回答本域未做过的题，通过≥60%即完成本域学习
+  const [quiz, setQuiz] = useState<{ id: string; code: string; stem: string; options: { key: string; text: string }[] }[] | null>(null)
+  const [quizPicks, setQuizPicks] = useState<Record<string, string>>({})
+  const [quizResult, setQuizResult] = useState<{ passed: boolean; correct: number; total: number } | null>(null)
+  const [quizBusy, setQuizBusy] = useState(false)
 
   useEffect(() => { window.scrollTo(0, 0) }, [])
   useEffect(() => {
     api.materials(domainId).then(setMat).catch((e) => onError(String(e)))
+    api.materialQuiz(userId, domainId).then((r) => setQuiz(r.questions ?? []))
+      .catch((e) => onError(String(e)))
   }, [domainId])
+
+  async function submitQuiz() {
+    if (!quiz || quizBusy) return
+    setQuizBusy(true)
+    try {
+      const r = await api.submitMaterialQuiz(userId, domainId, quizPicks)
+      setQuizResult({ passed: r.passed, correct: r.correct, total: r.total })
+      if (r.passed) { /* 学习已完成：回待办会看到 material 任务出列 */ }
+    } catch (e) { onError(String(e)) } finally { setQuizBusy(false) }
+  }
 
   if (!mat) return <div className="space-y-3 pt-4">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-20" />)}</div>
 
@@ -808,6 +1280,27 @@ function MaterialView({ domainId, onPractice, onError }: {
         </div>
       )}
 
+      {/* 药效关系图谱（FR-A2 结构化知识关系） */}
+      {(mat.knowledge_relations ?? []).length > 0 && (
+        <div className="card mt-4 p-7">
+          <div className="mb-1 flex items-center gap-2">
+            <h3 className="text-sm font-semibold"><span className="capsule gold" />药效关系图谱 · 错题背后的知识点关系</h3>
+          </div>
+          <p className="mb-4 text-xs text-ink-3">把这道域内的药物/靶点/效应/禁忌关系画成一条条边，帮你看清「错因」所在的一环。</p>
+          <div className="flex flex-wrap items-center gap-2">
+            {(mat.knowledge_relations ?? []).map((r, i) => (
+              <div key={i} className="flex items-center gap-2 rounded-xl border border-line-2 bg-white px-3 py-2">
+                <NodeChip type={r.source.type} name={r.source.name} />
+                <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] font-semibold text-ink-3">{r.edge}</span>
+                <NodeChip type={r.target.type} name={r.target.name} />
+                {r.note && <span className="text-[11px] text-ink-3">· {r.note}</span>}
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-[11px] text-ink-3">种子域关系由教材事实转写；全章节铺开前由药理顾问逐条审校后发布。</p>
+        </div>
+      )}
+
       {/* 知识点原文 */}
       {mat.evidence.length > 0 && (
         <div className="card mt-4 p-7">
@@ -824,20 +1317,66 @@ function MaterialView({ domainId, onPractice, onError }: {
         </div>
       )}
 
-      <div className="sticky bottom-4 mt-5 flex justify-center">
-        <button
-          onClick={() => {
-            setStarting(true)
-            api.questions().then((list) => {
-              const q = list.find((x: Question) => x.domain_id === domainId)
-              if (q) onPractice(q)
-              else onError("该诊断域暂无练习题，请从今日待办选择其他任务。")
-            }).catch((e) => onError(String(e))).finally(() => setStarting(false))
-          }}
-          disabled={starting}
-          className="btn btn-primary !px-8 !py-3.5 shadow-[var(--shadow-lg)]">
-          <CheckCircle size={16} />{starting ? "正在进入…" : "完成学习，进入练习"}
-        </button>
+      {/* 随堂自测：学习程度检验（读完材料 → 自测 → 通过即完成本域学习） */}
+      <div className="card mt-4 p-7">
+        <h3 className="mb-1 flex items-center gap-2 text-sm font-semibold">
+          <span className="capsule" />随堂自测 · 检验学习程度
+        </h3>
+        <p className="mb-4 text-xs text-ink-3">回答本域 3 道未做过的题，答对 ≥60% 即完成本域学习，今日待办里的「学习材料」任务随之出列。</p>
+
+        {quizResult ? (
+          <div className={`rounded-2xl border p-5 text-sm ${quizResult.passed ? 'border-ok/40 bg-[var(--color-ok-soft)]' : 'border-cat-red/40 bg-[var(--color-cat-red-soft)]'}`}>
+            <p className="font-semibold">
+              {quizResult.passed ? `✅ 自测通过（${quizResult.correct}/${quizResult.total}）` : `❌ 未通过（${quizResult.correct}/${quizResult.total}）`}
+            </p>
+            <p className="mt-1 text-ink-2">
+              {quizResult.passed
+                ? '本域薄弱错因已完成学习，进入练习阶段。'
+                : '还有没掌握的：回到上方材料再看一遍，然后重试。'}
+            </p>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <button onClick={() => { setStarting(true); api.questions().then((list) => { const q = list.find((x: Question) => x.domain_id === domainId); if (q) onPractice(q); else onError('该域暂无练习题'); }).catch((e) => onError(String(e))).finally(() => setStarting(false)) }}
+                disabled={starting} className="btn btn-primary">
+                <CheckCircle size={15} />{starting ? '进入中…' : quizResult.passed ? '进入练习' : '先去练习试试'}
+              </button>
+              <button onClick={onBack} className="btn border border-line text-ink-2 hover:border-primary hover:text-primary">返回今日待办</button>
+            </div>
+          </div>
+        ) : quiz && quiz.length > 0 ? (
+          <div className="space-y-5">
+            {quiz.map((q, i) => (
+              <div key={q.id} className="rounded-2xl border border-line-2 p-5">
+                <p className="mb-3 text-sm font-medium leading-relaxed">{i + 1}. {q.stem}</p>
+                <div className="space-y-2.5">
+                  {q.options.map((o) => (
+                    <button key={o.key} onClick={() => setQuizPicks({ ...quizPicks, [q.id]: o.key })}
+                      className={`relative w-full rounded-xl border px-4 py-2.5 text-left text-sm
+                        ${quizPicks[q.id] === o.key ? 'border-primary bg-primary-soft/50' : 'border-line bg-white hover:border-ink-3/40'}`}>
+                      <span className={`mr-2 inline-grid size-5 items-center justify-center rounded-full border text-[11px] font-bold
+                        ${quizPicks[q.id] === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2'}`}>{o.key}</span>
+                      {o.text}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div className="flex flex-wrap items-center gap-3">
+              <button onClick={submitQuiz} disabled={Object.keys(quizPicks).length < quiz.length || quizBusy}
+                className="btn btn-primary">
+                {quizBusy ? '判分中…' : '提交自测'}
+              </button>
+              <span className="text-xs text-ink-3">全部作答后提交</span>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl bg-paper p-5 text-sm text-ink-2">
+            本域暂无自测题。可直接进入练习，用做题检验掌握程度。
+            <button onClick={() => { setStarting(true); api.questions().then((list) => { const q = list.find((x: Question) => x.domain_id === domainId); if (q) onPractice(q); else onError('该域暂无练习题，请从今日待办选择其他任务。'); }).catch((e) => onError(String(e))).finally(() => setStarting(false)) }}
+              disabled={starting} className="btn btn-primary mt-4">
+              <CheckCircle size={15} />{starting ? '进入中…' : '进入练习'}
+            </button>
+          </div>
+        )}
       </div>
     </motion.div>
   )
@@ -853,57 +1392,369 @@ type Analysis = {
   followups?: { question_text: string; options: { key: string; text: string }[] | null }[]
 }
 
-type MasteryRow = { domain_id: string; domain?: string; category: string | null; state: string; reason: string }
 type WrongRow = {
   attempt_id: string; question_code: string; stem: string
   selected: string; answer: string
   misconception: { name: string; category: string } | null
+  case_evidence?: { scenario: string; lesson: string; source: string } | null
   evidence_level: string | null
 }
 
-function Profile({ userId }: { userId: string }) {
-  const [mastery, setMastery] = useState<MasteryRow[] | null>(null)
+/* 错题记忆卡（wrong/{id}/recall）：图谱 + 临床/教材助记 */
+type RecallData = {
+  question: { code: string; stem: string; answer: string } | null
+  misconception: { code: string; name: string; category: string } | null
+  case_evidence: { scenario: string; lesson: string; source: string } | null
+  evidence_level: string | null
+  relations: { source: { type: string; name: string }; edge: string; target: { type: string; name: string }; note?: string }[]
+  confusion_pairs: { drug_a: string; drug_b: string; distinction: string }[]
+  textbook_anchors: { chapter: string; page: number; book_page: number; score: number; text: string; source_ref: string }[]
+  trained: boolean
+}
+
+type ArchiveData = {
+  summary: {
+    attempts: number; correct: number; wrong: number; accuracy: number
+    wrong_book: number; diagnosed: number; trained: number; training_passed: number
+    mastery_rows: number; mastery_done: number; categories: number
+  }
+  domain_stats: { domain_id: string; domain: string; chapter_ref: string; attempts: number; correct: number; rate: number }[]
+  heatmap: { domains: string[]; categories: string[]; values: number[][] }
+  category_dist: Record<string, number>
+  mastery: { domain_id: string; domain: string; category: string | null; state: string; reason: string }[]
+}
+
+function Profile({ userId, onGoTodo }: { userId: string; onGoTodo: () => void }) {
+  const [arch, setArch] = useState<ArchiveData | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => { window.scrollTo(0, 0) }, [])
   useEffect(() => {
-    api.mastery(userId).then(setMastery).catch(() => setMastery([]))
+    api.archive(userId).then(setArch).catch((e) => setError(String(e)))
   }, [userId])
+
+  if (error) return <ErrorPanel message={error} />
+  if (!arch) return <div className="space-y-3">{[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-24" />)}</div>
+
+  const s = arch.summary
+  const acc = Math.round(s.accuracy * 100)
+  const accColor = s.accuracy >= 0.7 ? 'var(--color-ok)' : s.accuracy >= 0.5 ? 'var(--color-gold)' : 'var(--color-cat-red)'
+  const accTone = s.accuracy >= 0.7 ? '达标' : s.accuracy >= 0.5 ? '待提升' : '偏低'
+  const masteryOrder = ['薄弱', '学习中', '初步掌握', '掌握', '稳定掌握']
+  const masteryByState = masteryOrder
+    .map((st) => ({ state: st, items: arch.mastery.filter((m) => m.state === st) }))
+    .filter((g) => g.items.length > 0)
+
+  // —— 薄弱点数据整理（用于「看得懂」的自适应视图）——
+  const heatDomains = arch.heatmap.domains
+  const heatCats = arch.heatmap.categories
+  const catColors: Record<string, string> = {
+    知识遗忘: 'var(--color-cat-blue)', 概念混淆: 'var(--color-cat-purple)',
+    机制理解不足: 'var(--color-cat-orange)', 审题与应用失误: 'var(--color-cat-red)', 待诊断: 'var(--color-ink-3)',
+  }
+  // 非零薄弱单元 [域, 错因, 错题数]
+  const cells: { domain: string; cat: string; n: number }[] = []
+  arch.heatmap.values.forEach((row, y) => row.forEach((v, x) => {
+    if (v > 0) cells.push({ domain: heatDomains[y] ?? '', cat: heatCats[x] ?? '', n: v })
+  }))
+  cells.sort((a, b) => b.n - a.n)
+  const judged = cells.filter((c) => c.cat !== '待诊断')            // 已归因的薄弱
+  const pendingCat = cells.filter((c) => c.cat === '待诊断')         // 待诊断
+  // 数据是否丰富到能撑起一张矩阵热力图（否则改用清单，避免全白大图）
+  const denseEnough = cells.length >= 6
+  const heatRowDomains = [...new Set(cells.map((c) => c.domain))]    // 仅含非零错的域
+  const heatColCats = [...new Set(cells.map((c) => c.cat))]          // 仅含非零错的错因
+  const cellVal = (d: string, c: string) => arch.heatmap.values
+    [heatDomains.indexOf(d)]?.[heatCats.indexOf(c)] ?? 0
+
+  // 错因占比：固定五类（含 0 值）完整展示，避免“看不见的类别”
+  const FIXED_CATS = ['知识遗忘', '概念混淆', '机制理解不足', '审题与应用失误']
+  const catTotal = Object.values(arch.category_dist).reduce((a, b) => a + b, 0)
+  // 诊断完整度：把「待诊断」错题也归因后，画像才准
+  const diagnosedComplete = s.wrong_book > 0 ? Math.round((s.diagnosed / s.wrong_book) * 100) : 0
+
+  const stat = (label: string, value: string | number, sub: string, accent = 'var(--color-primary)',
+    ratio?: number, ratioLabel?: string) => (
+    <div className="card p-4">
+      <p className="text-[11px] font-semibold text-ink-3">{label}</p>
+      <p className="display mt-1 text-[22px] leading-none" style={{ color: accent }}>{value}</p>
+      <p className="mt-1.5 text-[11px] text-ink-3">{sub}</p>
+      {typeof ratio === 'number' && (
+        <div className="mt-2.5">
+          <div className="h-1.5 overflow-hidden rounded-full bg-line-2">
+            <div className="h-full rounded-full" style={{ width: `${Math.round(ratio * 100)}%`, background: accent }} />
+          </div>
+          {ratioLabel && <p className="mt-1 text-[10px] text-ink-3">{ratioLabel}</p>}
+        </div>
+      )}
+    </div>
+  )
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <p className="text-xs font-semibold tracking-[0.18em] text-gold">学习档案</p>
-      <h2 className="display mt-2 text-[26px]">你的错因画像</h2>
-      <p className="mt-2 text-sm text-ink-2">演示账号 {userId.slice(0, 8)} · 数据仅存于校内演示环境</p>
+      <h2 className="display mt-2 text-[26px]">你的药理学能力画像</h2>
+      <p className="mt-2 text-sm text-ink-2">演示账号 {userId.slice(0, 8)} · 档案随每次练习自动更新 · 数据仅存于校内演示环境</p>
 
-      <div className="mt-6 space-y-8">
-        <section>
-          <h3 className="mb-3.5 flex items-center gap-2 text-sm font-semibold"><span className="capsule" />掌握状态</h3>
-          {!mastery && <div className="skeleton h-20" />}
-          {mastery && mastery.length === 0 && <EmptyPanel text="还没有掌握度记录：完成一次「作答 → 诊断 → 训练 → 复测」后这里会出现你的错因画像。" />}
-          {mastery && mastery.length > 0 && (
+      {/* 全新账号：给明确的第一步引导，而不是只摆四张 0 的卡片 */}
+      {arch.summary.attempts === 0 && (
+        <div className="mt-6 flex flex-col items-start justify-between gap-4 rounded-[20px] border border-primary/20 bg-primary-soft/60 px-6 py-5 sm:flex-row sm:items-center">
+          <div>
+            <p className="display text-lg text-ink">档案还是空的</p>
+            <p className="mt-1 text-sm text-ink-2">先去「今日待办」做几道题或跑一次摸底，这里就会随着练习逐步生成你的画像。</p>
+          </div>
+          <button onClick={onGoTodo} className="btn btn-primary flex-none">去今日待办<ArrowRight size={15} weight="bold" /></button>
+        </div>
+      )}
+
+      {/* 顶部统计卡片：每个数字都给含义 + 相对判定，不再是孤立数字 */}
+      <div className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
+        {stat('累计作答', s.attempts, '道题已作答',
+          'var(--color-primary)', s.attempts ? 1 : 0, s.attempts ? '作答量越高画像越准' : '暂无作答')}
+        {stat('正确率', `${acc}%`, `${s.correct} 对 / ${s.wrong} 错 · ${accTone}`,
+          accColor, s.attempts ? s.accuracy : 0,
+          s.attempts ? (s.accuracy < 0.7 ? '未到 70% 达标线 → 需要加强' : '已达 70% 达标线') : '暂无作答')}
+        {stat('薄弱错题', s.wrong_book, `${s.diagnosed} 项已诊断归因`,
+          'var(--color-cat-red)', s.wrong_book ? diagnosedComplete / 100 : 0,
+          s.diagnosed < s.wrong_book ? '还有错题未诊断 → 画像会偏' : '错题均已归因，画像完整')}
+        {stat('靶向训练', `${s.trained}`, `${s.training_passed} 次通过`,
+          'var(--color-gold)', s.trained ? s.training_passed / Math.max(s.trained, 1) : 0,
+          s.trained ? '训练的通过率' : '暂无训练')}
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        {/* 薄弱点分布：自适应——错题少用「清单」，错题够多才出「矩阵」，永远可读 */}
+        <div className="card p-6">
+          <h3 className="mb-1 text-sm font-semibold">薄弱点分布</h3>
+          <p className="mb-3 text-xs text-ink-3">错题集中在哪里、是哪种错因 · 数字 = 累计答错题数</p>
+
+          {cells.length === 0 && (
+            <p className="py-10 text-center text-sm text-ink-3">还没有错题——去「今日待办」练几道题后，这里会标出你最该补的薄弱点。</p>
+          )}
+
+          {/* A. 数据稀疏：优先给「该补哪里」的清单（demo 现态） */}
+          {cells.length > 0 && !denseEnough && (
             <div className="space-y-3">
-              {mastery.map((m, i) => (
-                <div key={i} className="card flex flex-wrap items-center gap-3 p-5">
-                  <CategoryTag category={m.category ?? '域级'} />
-                  <span className="text-sm font-semibold text-primary">{m.state}</span>
-                  <span className="text-xs text-ink-3">{m.reason}</span>
+              {judged.map((c) => (
+                <div key={`${c.domain}-${c.cat}`} className="flex items-center gap-3 rounded-xl border border-line px-3.5 py-2.5">
+                  <span className="grid size-7 flex-none place-items-center rounded-full text-xs font-bold text-ok" style={{ background: 'var(--color-ok-soft)' }}>{c.n}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{c.domain}</p>
+                    <p className="text-[11px] text-ink-3">主要问题：<CategoryTag category={c.cat} /></p>
+                  </div>
+                  <span className="ml-auto flex-none text-[11px] text-ink-3">去对应章节巩固</span>
                 </div>
               ))}
+              {pendingCat.length > 0 && (
+                <div className="rounded-xl border border-dashed border-line px-3.5 py-2.5 text-xs text-ink-3">
+                  <p className="font-medium text-ink-2">另有 {pendingCat.reduce((a, b) => a + b.n, 0)} 道错题还没完成归因诊断</p>
+                  <p className="mt-0.5">重新作答并走完「诊断」后，才能标出它们是哪种错因。</p>
+                </div>
+              )}
             </div>
           )}
-        </section>
+
+          {/* B. 数据充足：域 × 错因 矩阵（含色阶图例，深浅=错题数） */}
+          {denseEnough && (
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full border-separate" style={{ borderSpacing: 4 }}>
+                  <thead>
+                    <tr>
+                      <th className="w-[30%] py-1 pr-2 text-left text-[11px] font-medium text-ink-3">诊断域＼错因</th>
+                      {heatColCats.map((c) => <th key={c} className="px-1 py-1 text-center text-[11px] font-medium text-ink-3">{c}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {heatRowDomains.map((d) => (
+                      <tr key={d}>
+                        <td className="py-1 pr-2 text-right text-[11px] font-medium text-ink-2">{d}</td>
+                        {heatColCats.map((c) => {
+                          const n = cellVal(d, c)
+                          return (
+                            <td key={c} className="p-0">
+                              <div className="grid h-9 place-items-center rounded-lg text-xs font-bold"
+                                style={{ background: n === 0 ? 'var(--color-paper-2)' : n === 1 ? '#CFE6DB' : n === 2 ? '#79B69E' : '#0E7A63',
+                                  color: n >= 2 ? '#fff' : '#0E7A63' }}>
+                                {n > 0 ? n : ''}
+                              </div>
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {/* 色阶图例 */}
+              <div className="mt-3 flex items-center gap-2 text-[10px] text-ink-3">
+                <span>错题数</span>
+                {[0, 1, 2, 3].map((n) => (
+                  <span key={n} className="inline-flex items-center gap-1">
+                    <i className="inline-block size-3 rounded" style={{ background: n === 0 ? 'var(--color-paper-2)' : n === 1 ? '#CFE6DB' : n === 2 ? '#79B69E' : '#0E7A63' }} />
+                    {n === 3 ? '3+' : n}
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* 域级正确率：样本太少标灰不误判，样本够才按 70% 判色 */}
+        <div className="card p-6">
+          <h3 className="mb-1 text-sm font-semibold">各域作答正确率</h3>
+          <p className="mb-3 text-xs text-ink-3">
+            答过 ≥5 题才判定是否进入学习路径 · <span className="text-cat-red">低于 70% → 进今日待办重点补</span> · 答太少标灰（数字仅供参考）
+          </p>
+          {arch.domain_stats.length === 0 && <p className="py-10 text-center text-sm text-ink-3">还没有作答记录。</p>}
+          {arch.domain_stats.length > 0 && (
+            <div className="space-y-4">
+              {arch.domain_stats.map((d) => {
+                const reliable = d.attempts >= 5
+                const low = reliable && d.rate < 0.7
+                const pct = Math.round(d.rate * 100)
+                return (
+                  <div key={d.domain_id}>
+                    <div className="mb-1 flex items-center justify-between text-xs">
+                      <span className="flex items-center gap-1.5 font-medium">
+                        {d.domain}
+                        {!reliable && (
+                          <span className="rounded-full bg-line-2 px-2 py-0.5 text-[10px] text-ink-3">样本少</span>
+                        )}
+                      </span>
+                      <span className={reliable ? (low ? 'font-semibold text-cat-red' : 'text-ok') : 'text-ink-3'}>
+                        {pct}% · {d.attempts}题{!reliable && ' · 仅供参考'}
+                      </span>
+                    </div>
+                    <div className="relative h-2.5 overflow-hidden rounded-full bg-line-2">
+                      {/* 70% 达标刻度 */}
+                      <span className="absolute left-[70%] top-[-2px] z-10 h-[18px] w-px bg-line" />
+                      <div className="h-full rounded-full"
+                        style={{ width: `${pct}%`,
+                          background: !reliable ? 'var(--color-ink-3)' : low ? 'var(--color-cat-red)' : 'var(--color-ok)' }} />
+                    </div>
+                    <p className="mt-1 text-[10px] text-ink-3">
+                      {!reliable ? `只答了 ${d.attempts} 题，再多练几题才知道这域的真实水平` : low ? '低于达标线 → 今日待办会带你补这块' : '已达 70% 达标线，保持即可'}
+                    </p>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 错因类别占比 + 掌握度总览 */}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="card p-6">
+          <h3 className="mb-1 text-sm font-semibold">错因类型分布</h3>
+          <p className="mb-3 text-xs text-ink-3">错题被归为哪类学习障碍 · 固定五类，0 也如实显示</p>
+          {catTotal === 0 && <p className="py-8 text-center text-sm text-ink-3">还没有错因记录：答错并完成诊断后这里会分类你的薄弱原因。</p>}
+          {catTotal > 0 && (
+            <>
+              {/* 诊断完整度 */}
+              <div className="mb-4 rounded-xl border border-line px-3.5 py-2.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-medium text-ink-2">诊断完整度</span>
+                  <span className={diagnosedComplete === 100 ? 'text-ok' : 'text-gold'}>
+                    {s.diagnosed}/{s.wrong_book} 道错题已归因
+                  </span>
+                </div>
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-line-2">
+                  <div className="h-full rounded-full" style={{ width: `${diagnosedComplete}%`,
+                    background: diagnosedComplete === 100 ? 'var(--color-ok)' : 'var(--color-gold)' }} />
+                </div>
+                {diagnosedComplete < 100 && (
+                  <p className="mt-1.5 text-[10px] text-ink-3">
+                    还有 {s.wrong_book - s.diagnosed} 道错题没归因——先去「错题本」把待诊断的题走完诊断，下方分布才准确。
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-3.5">
+                {[...FIXED_CATS, '待诊断'].map((cat) => {
+                  const v = arch.category_dist[cat] ?? 0
+                  const share = v / Math.max(catTotal, 1)
+                  return (
+                    <div key={cat}>
+                      <div className="mb-1 flex items-center justify-between text-xs">
+                        <span className="inline-flex items-center gap-1.5">
+                          <CategoryTag category={cat} />
+                          {v === 0 && <span className="text-[10px] text-ink-3">暂未出现</span>}
+                        </span>
+                        <span className={v === 0 ? 'text-ink-3' : 'font-semibold text-ink-2'}>
+                          {v} 题{catTotal > 0 ? ` · ${Math.round(share * 100)}%` : ''}
+                        </span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-line-2">
+                        <div className="h-full rounded-full"
+                          style={{ width: `${Math.round(share * 100)}%`, minWidth: v > 0 ? 6 : 0,
+                            background: v === 0 ? 'transparent' : catColors[cat] ?? 'var(--color-primary)' }} />
+                      </div>
+                      {cat === '待诊断' && v > 0 && <p className="mt-0.5 text-[10px] text-ink-3">占比高时画像还不准，先去诊断归因</p>}
+                    </div>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="card p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-sm font-semibold">掌握度总览</h3>
+            <span className="rounded-full px-2.5 py-0.5 text-[11px] font-medium text-ok" style={{ background: 'var(--color-ok-soft)' }}>
+              已达标 {s.mastery_done}/{s.mastery_rows} 项
+            </span>
+          </div>
+          {arch.mastery.length === 0 && <EmptyPanel text="还没有掌握度记录：完成一次「作答 → 诊断 → 训练 → 复测」后这里会出现。" />}
+          <div className="space-y-3">
+            {masteryByState.map((g) => (
+              <div key={g.state}>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="text-xs font-semibold">{g.state}</span>
+                  <span className="text-xs text-ink-3">{g.items.length} 项</span>
+                </div>
+                <div className="space-y-1.5">
+                  {g.items.map((m, i) => (
+                    <div key={i} className="rounded-lg border border-line px-3 py-2 text-[12px]">
+                      <span className="font-medium">{m.domain}</span>
+                      {m.category && <span className="ml-2 text-ink-3">{m.category}</span>}
+                      {m.reason && <span className="block text-[11px] text-ink-3">{m.reason}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </motion.div>
   )
 }
 
-function WrongBook({ userId }: { userId: string }) {
+function WrongBook({ userId, onGoTodo }: { userId: string; onGoTodo: () => void }) {
   const [wrong, setWrong] = useState<WrongRow[] | null>(null)
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [recallMap, setRecallMap] = useState<Record<string, RecallData | null>>({})
+  const [loadingRecall, setLoadingRecall] = useState<string | null>(null)
 
   useEffect(() => { window.scrollTo(0, 0) }, [])
   useEffect(() => {
     api.wrongBook(userId).then(setWrong).catch(() => setWrong([]))
   }, [userId])
+
+  const toggleRecall = (attemptId: string) => {
+    if (openId === attemptId) { setOpenId(null); return }
+    setOpenId(attemptId)
+    if (!recallMap[attemptId]) {
+      setLoadingRecall(attemptId)
+      api.wrongRecall(attemptId)
+        .then((d) => setRecallMap((m) => ({ ...m, [attemptId]: d })))
+        .catch(() => setRecallMap((m) => ({ ...m, [attemptId]: null })))
+        .finally(() => setLoadingRecall(null))
+    }
+  }
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
@@ -915,7 +1766,12 @@ function WrongBook({ userId }: { userId: string }) {
         <section>
           <h3 className="mb-3.5 flex items-center gap-2 text-sm font-semibold"><span className="capsule gold" />错题本 · 按错因归档</h3>
           {!wrong && <div className="skeleton h-20" />}
-          {wrong && wrong.length === 0 && <EmptyPanel text="错题本是空的：还没有答错的题，或者错的题还没完成诊断。" />}
+          {wrong && wrong.length === 0 && (
+            <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-line px-6 py-10 text-center">
+              <p className="text-sm text-ink-2">错题本是空的：还没有答错的题，或者答错的题还没完成诊断。</p>
+              <button onClick={onGoTodo} className="btn btn-primary">去今日待办做几道题<ArrowRight size={15} weight="bold" /></button>
+            </div>
+          )}
           {wrong && wrong.length > 0 && (
             <div className="space-y-3">
               {wrong.map((w) => (
@@ -932,6 +1788,30 @@ function WrongBook({ userId }: { userId: string }) {
                   </div>
                   <p className="mt-2.5 text-sm leading-relaxed">{w.stem}</p>
                   {w.misconception && <p className="mt-2 text-xs text-ink-2">归因：{w.misconception.name}</p>}
+                  {w.case_evidence && (
+                    <div className="mt-3 rounded-xl border border-line-2 bg-paper px-4 py-3">
+                      <p className="flex items-center gap-1.5 text-[11px] font-semibold text-gold">
+                        <Pill size={12} weight="fill" />临床案例 · 助记
+                      </p>
+                      <p className="mt-1 text-[13px] leading-relaxed text-ink-2">{w.case_evidence.scenario}</p>
+                      <p className="mt-1 text-[13px] font-medium leading-relaxed text-ink">要点：{w.case_evidence.lesson}</p>
+                      <p className="mt-1.5 text-[11px] text-ink-3">来源：{w.case_evidence.source}</p>
+                    </div>
+                  )}
+                  <button onClick={() => toggleRecall(w.attempt_id)}
+                    className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-line px-3.5 py-1.5 text-xs text-ink-3 transition hover:border-primary hover:text-primary">
+                    <span aria-hidden>◎</span>
+                    {openId === w.attempt_id ? '收起错因图谱 · 记忆助记' : '看这张错题的图谱 & 临床助记'}
+                  </button>
+                  {openId === w.attempt_id && (
+                    <div className="mt-3 rounded-xl border border-primary/20 bg-primary-soft/40 px-4 py-4">
+                      {loadingRecall === w.attempt_id
+                        ? <p className="text-xs text-ink-3">正在生成错题记忆卡…</p>
+                        : !recallMap[w.attempt_id]
+                          ? <p className="text-xs text-ink-3">记忆卡加载失败，请稍后再试。</p>
+                          : <RecallCardView data={recallMap[w.attempt_id]!} />}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -956,6 +1836,97 @@ function CategoryTag({ category }: { category: string }) {
       style={{ background: s.bg, color: s.fg }}>
       {category}
     </span>
+  )
+}
+
+function NodeChip({ type, name }: { type: string; name: string }) {
+  const tint: Record<string, string> = {
+    药物: 'var(--color-primary-soft)',
+    靶点: 'var(--color-cat-purple-soft)',
+    机制: 'var(--color-cat-blue-soft)',
+    效应: 'var(--color-ok-soft)',
+    禁忌: 'var(--color-cat-red-soft)',
+    适应证: 'var(--color-gold-soft)',
+  }
+  const bg = tint[type] ?? 'var(--color-paper-2)'
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink"
+      style={{ background: bg }}>
+      <span className="text-[10px] text-ink-3">{type}</span>{name}
+    </span>
+  )
+}
+
+/* 错题记忆卡：图谱 + 临床/教材助记（wrong/{id}/recall 数据） */
+function RecallCardView({ data }: { data: RecallData }) {
+  const rels = data.relations ?? []
+  const cps = data.confusion_pairs ?? []
+  const anchors = data.textbook_anchors ?? []
+  const hasGraph = rels.length > 0
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2 text-[13px]">
+        {data.misconception
+          ? (<><CategoryTag category={data.misconception.category} /><span className="font-medium text-ink">{data.misconception.name}</span></>)
+          : <span className="text-xs text-ink-3">尚未归因到四类错因（可回到作答流程完成诊断细化）</span>}
+      </div>
+
+      {/* 知识关系图谱 */}
+      <div>
+        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-primary">
+          <span className="capsule" />错因背后的知识关系图谱{!hasGraph && '（该章关系表待扩充）'}
+        </p>
+        {hasGraph ? (
+          <div className="mt-2.5 space-y-1.5">
+            {rels.map((r, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-1.5">
+                <NodeChip type={r.source.type} name={r.source.name} />
+                <span className="text-[11px] font-medium text-primary">─{r.edge}→</span>
+                <NodeChip type={r.target.type} name={r.target.name} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-ink-3">这张题所属章节的知识关系表尚未铺开，正式内容由药理顾问标注后开放。</p>
+        )}
+      </div>
+
+      {/* 易混药对 */}
+      {cps.length > 0 && (
+        <div>
+          <p className="text-[11px] font-semibold text-primary"><span className="capsule gold" />易混药对辨析</p>
+          <div className="mt-2 space-y-1.5">
+            {cps.map((p, i) => (
+              <div key={i} className="rounded-lg bg-paper px-3 py-2 text-[12px] text-ink-2">
+                <span className="font-semibold text-ink">{p.drug_a}</span> × <span className="font-semibold text-ink">{p.drug_b}</span>
+                <p className="mt-0.5 leading-relaxed">{p.distinction}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 教材记忆锚点 */}
+      {anchors.length > 0 && (
+        <div>
+          <p className="flex items-center gap-1.5 text-[11px] font-semibold text-gold">
+            <Pill size={11} weight="fill" />教材依据 · 帮你想起来
+          </p>
+          <div className="mt-2 space-y-2">
+            {anchors.map((a, i) => (
+              <div key={i} className="rounded-lg border border-line-2 bg-paper px-3 py-2">
+                <p className="text-[10.5px] text-ink-3">{a.chapter || '教材'} · 教材定位第{a.book_page || a.page}页</p>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-ink-2">{a.text}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!hasGraph && cps.length === 0 && anchors.length === 0 && (
+        <p className="text-xs text-ink-3">这道题暂无可展示的图谱与教材助记（该章内容资产待扩充）。</p>
+      )}
+    </div>
   )
 }
 
@@ -1561,6 +2532,20 @@ function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onE
               <CategoryTag category={diagnosis.card.misconception.category} />
               <p className="text-[15.5px] font-medium">{diagnosis.card.misconception.name}</p>
             </div>
+
+            {diagnosis.card.case_evidence && (
+              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={spring}
+                className="mt-4 rounded-2xl border-2 border-gold/25 bg-gold-soft/40 px-5 py-4">
+                <p className="flex items-center gap-1.5 text-[11px] font-bold tracking-wide text-gold">
+                  <Pill size={13} weight="fill" />临床案例 · 帮你记住这个错因
+                </p>
+                <p className="mt-2 text-sm leading-relaxed text-ink">{diagnosis.card.case_evidence.scenario}</p>
+                <p className="mt-1.5 text-[13px] leading-relaxed text-ink-2">
+                  <span className="font-semibold text-ink">记：</span>{diagnosis.card.case_evidence.lesson}
+                </p>
+                <p className="mt-2 text-[11px] text-ink-3">来源 · {diagnosis.card.case_evidence.source}</p>
+              </motion.div>
+            )}
             <hr className="rx-divider my-6" />
             <div className="mb-3.5 flex items-center justify-between">
               <p className="flex items-center gap-2 text-xs font-semibold text-ink-3">

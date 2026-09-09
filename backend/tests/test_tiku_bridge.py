@@ -312,8 +312,11 @@ def test_chapter_weak_practice_loop_closes():
     assert state_of() == "初步掌握"
     attempt(False, "f2")    # 初步掌握不因单次答错降级（保守）
     assert state_of() == "初步掌握"
-    plan2 = client.get(f"/users/{uid}/learning-plan").json()["tasks"]
-    t_tasks = [x for x in plan2 if x["domain_id"] == dom]
-    assert t_tasks and all(x["state"] == "初步掌握" for x in t_tasks), \
-        f"学习路径任务 state 应随推进更新为初步掌握，实际 {t_tasks}"
+    plan2 = client.get(f"/users/{uid}/learning-plan").json()
+    # 2026-09-08 完成口径修正：章级(题库)无复测资产，「初步掌握」即达标出列，不再滞留待办。
+    t_tasks = [x for x in plan2["tasks"] if x["domain_id"] == dom]
+    assert not t_tasks, f"章级初步掌握应出列到已完成，实际仍在待办 {t_tasks}"
+    done = [x for x in plan2["done_tasks"] if x["domain_id"] == dom]
+    assert done and done[0]["state"] == "初步掌握", \
+        f"章级初步掌握应进入已完成并标『初步掌握』，实际 {done}"
 
