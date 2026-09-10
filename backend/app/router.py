@@ -1371,7 +1371,8 @@ def get_question(question_id: str, db: Session = Depends(get_db)):
 #   问答全文记 ModelRun（consent「对话原文」覆盖），audit 只记长度/哈希最小必要字段。
 
 QA_QUESTION_MAXLEN = 500
-QA_SLICE_CHARS = 600
+QA_SLICE_CHARS = 700   # 每条切片喂模型的上限（教材为页内窗口，题库为题干+答案+解析）
+QA_TOP_K = 4           # 双路混合召回条数（教材 + 题库各留至少 1 条）
 QA_REFUSE_MEDICATION = ("该吃", "剂量", "怎么吃", "能吃吗", "能不能吃", "处方", "开药",
                         "替我开", "我孩子", "孕妇", "哺乳", "用药建议", "吃多少",
                         "停药", "换药", "几天能好", "要不要去医院")
@@ -1399,19 +1400,21 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
                 "citations": [], "refused": True, "refuse_reason": "medication",
                 "provider": "rule", "note": "规则前置拒绝，未调用模型。"}
 
-    # 2) 教材切片检索；无命中 → 诚实拒答
-    from .rag import retrieve_top_k
-    hits = retrieve_top_k(q, k=3)
+    # 2) 双路混合检索（教材页 + 题库解析）；无命中 → 诚实拒答
+    from .rag import retrieve_mixed
+    hits = retrieve_mixed(q, k=QA_TOP_K, db=db)
     if not hits:
         audit(db, user_id, "qa.refused_no_evidence", f"user:{user_id}", q_len=len(q))
         db.commit()
-        return {"answer": "课程库里暂时没找到相关内容（35 章大纲 + 教材切片均无命中）。换个问法试试（带上药物名或章节名），也可以先去「今日待办」学对应章节再来问。",
+        return {"answer": "课程库里暂时没找到相关内容（教材切片与题库解析均无命中）。换个问法试试（带上药物名或章节名），也可以先去「今日待办」学对应章节再来问。",
                 "citations": [], "refused": True, "refuse_reason": "no_evidence",
                 "provider": "retriever", "note": "无检索命中，未调用模型。"}
-    refs = [{"ref": f"[{i + 1}]", "chapter": h.chapter, "book_page": h.book_page}
+    refs = [{"ref": f"[{i + 1}]", "source": h.source,
+             "chapter": h.chapter, "book_page": h.book_page, "code": h.code,
+             "label": h.label}
             for i, h in enumerate(hits)]
     slices = "\n\n".join(
-        f"[{i + 1}]({h.chapter}·教材 p{h.book_page}) {h.text[:QA_SLICE_CHARS]}"
+        f"[{i + 1}]({h.label}) {h.text[:QA_SLICE_CHARS]}"
         for i, h in enumerate(hits))
 
     # 3) 生成：有 key 走真模型；无 key/失败走 Mock 摘录
@@ -1419,11 +1422,11 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
         from .llm.provider import ExternalApiProvider
         provider = ExternalApiProvider()
     except Exception as e:  # ProviderError（含无 key）→ 演示降级
-        chaps = "、".join(dict.fromkeys(h.chapter for h in hits))
+        cites = "、".join(dict.fromkeys(h.label for h in hits))
         audit(db, user_id, "qa.mock_fallback", f"user:{user_id}",
               q_len=len(q), reason=str(e)[:80])
         db.commit()
-        return {"answer": f"（演示模式：真模型未接入）课程库中找到 {len(refs)} 处相关内容（{chaps}）。先去对应章节学习，再带着更具体的问题来问——比如把问题细化到某个药物或某个机制环节。",
+        return {"answer": f"（演示模式：真模型未接入）课程库中找到 {len(refs)} 处相关内容（{cites}）。先去对应章节学习，再带着更具体的问题来问——比如把问题细化到某个药物或某个机制环节。",
                 "citations": refs, "refused": False, "refuse_reason": None,
                 "provider": "mock", "note": "计划态：真模型（GLM）接入后此条由模型 grounded 生成。"}
 
@@ -1445,7 +1448,7 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
             "refused": r["refused"],
             "refuse_reason": "no_grounding" if r["refused"] else None,
             "provider": "external_api",
-            "note": "回答由课程资料切片 grounded 生成，仅供学习参考，不保证完全正确；不提供用药建议。"}
+            "note": "回答由课程资料切片（教材原文 + 题库题目解析）grounded 生成，仅供学习参考，不保证完全正确；不提供用药建议。"}
 
 
 def _404():

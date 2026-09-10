@@ -48,9 +48,18 @@ def _consent(uid: str):
 
 
 def _fake_hits():
-    return [Hit(page=70, book_page=61, chapter="第5章 传出神经系统药理概论",
-                text="阿托品为M胆碱受体阻断药，可散瞳、升高眼压，闭角型青光眼禁用。",
-                score=9.9)]
+    """混合检索桩：1 条教材 + 1 条题库，覆盖双源引用结构。"""
+    return [
+        Hit(source="textbook", page=70, book_page=61,
+            chapter="第5章 传出神经系统药理概论",
+            text="阿托品为M胆碱受体阻断药，可散瞳、升高眼压，闭角型青光眼禁用。",
+            score=1.0, raw_score=9.9,
+            label="教材 第5章 传出神经系统药理概论 p61"),
+        Hit(source="itembank", code="01-003", chapter="第6章 作用于胆碱受体的药物",
+            text="题干：阿托品对眼的作用是\nA.缩瞳 B.散瞳\n答案：B\n解析：阻断M受体致瞳孔括约肌松弛。",
+            score=0.8, raw_score=7.2,
+            label="题库 01-003 第6章 作用于胆碱受体的药物"),
+    ]
 
 
 def test_qa_requires_consent():
@@ -84,11 +93,11 @@ def test_qa_refuses_medication_without_model():
 
 
 def test_qa_no_evidence_refusal(monkeypatch):
-    """无检索命中 → 诚实拒答。"""
+    """无检索命中（教材 + 题库双路皆空）→ 诚实拒答。"""
     _rebuild()
     uid = _new_user("qa_noev")
     _consent(uid)
-    monkeypatch.setattr("app.rag.retrieve_top_k", lambda *a, **k: [])
+    monkeypatch.setattr("app.rag.retrieve_mixed", lambda *a, **k: [])
     r = client.post(f"/users/{uid}/qa/ask", json={"question": "阿托品为什么散瞳"})
     assert r.status_code == 200, r.text
     body = r.json()
@@ -120,15 +129,19 @@ def test_external_provider_defaults_glm(monkeypatch):
 
 
 def test_qa_mock_fallback_with_citations(monkeypatch):
-    """无 key 环境 → Mock 摘录降级，引用与检索切片一一对应。"""
+    """无 key 环境 → Mock 摘录降级，引用与检索切片一一对应（含双源字段）。"""
     _rebuild()
     uid = _new_user("qa_mock")
     _consent(uid)
-    monkeypatch.setattr("app.rag.retrieve_top_k", lambda *a, **k: _fake_hits())
+    monkeypatch.setattr("app.rag.retrieve_mixed", lambda *a, **k: _fake_hits())
     r = client.post(f"/users/{uid}/qa/ask", json={"question": "阿托品为什么散瞳"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["provider"] == "mock" and body["refused"] is False
-    assert len(body["citations"]) == 1
-    assert body["citations"][0]["book_page"] == 61
-    assert "第5章" in body["citations"][0]["chapter"]
+    assert len(body["citations"]) == 2
+    sources = {c["source"] for c in body["citations"]}
+    assert sources == {"textbook", "itembank"}, sources
+    tb = next(c for c in body["citations"] if c["source"] == "textbook")
+    it = next(c for c in body["citations"] if c["source"] == "itembank")
+    assert tb["book_page"] == 61 and "第5章" in tb["chapter"]
+    assert it["code"] == "01-003" and "第6章" in it["chapter"]

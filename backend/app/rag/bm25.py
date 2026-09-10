@@ -44,7 +44,7 @@ def tokenize(text: str) -> list[str]:
 @dataclass
 class _Doc:
     id: int
-    page: Page
+    obj: object                 # 任意文档对象（Page / Item / str）
     toks: list[str]
     tf: Counter = field(default_factory=Counter)
     dl: int = 0
@@ -54,21 +54,25 @@ class _Doc:
         self.dl = len(self.toks)
 
 
-class BM25Index:
-    """就地构建的 BM25 索引（语料 ~58 万字，内存足够）。文档单元=单页。"""
+class BM25:
+    """通用 BM25 索引：docs 为任意对象列表，texts 为对应可检索文本。
 
-    def __init__(self, pages: list[Page], k1: float = 1.5, b: float = 0.75):
+    教材页与题库解析共用同一套打分；两路的分数**不可直接跨路比较**（语料规模、文档
+    长度分布不同），混合检索时由上层按各自 top1 做归一化后再融合（见 retriever）。
+    """
+
+    def __init__(self, docs: list, texts: list[str], k1: float = 1.5, b: float = 0.75):
         self.k1, self.b = k1, b
         self.docs: list[_Doc] = []
         self.df: Counter[str] = Counter()
         self.avgdl: float = 0.0
         self._n: int = 0
-        if pages:
-            self._build(pages)
+        if docs:
+            self._build(docs, texts)
 
-    def _build(self, pages: list[Page]):
-        for i, pg in enumerate(pages):
-            d = _Doc(id=i, page=pg, toks=tokenize(pg.text))
+    def _build(self, docs: list, texts: list[str]):
+        for i, (obj, text) in enumerate(zip(docs, texts)):
+            d = _Doc(id=i, obj=obj, toks=tokenize(text))
             self.docs.append(d)
             for t in set(d.toks):
                 self.df[t] += 1
@@ -81,7 +85,6 @@ class BM25Index:
 
     def _score(self, qf: Counter, doc: _Doc) -> float:
         s = 0.0
-        idf_denom = self._n + 1
         for term, q_count in qf.items():
             df = self.df.get(term, 0)
             if df == 0:
@@ -90,16 +93,37 @@ class BM25Index:
             tf = doc.tf.get(term, 0)
             if tf == 0:
                 continue
-            denom = tf + self.k1 * (1 - self.b + self.b * doc.dl / self.avgdl)
+            denom = tf + self.k1 * (1 - b_norm(self.b, doc.dl, self.avgdl))
             s += idf * q_count * tf * (self.k1 + 1) / denom
         return s
 
-    def search(self, query: str, k: int = 3, min_score: float = 0.0) -> list[tuple[Page, float]]:
-        """返回按分降序的 (Page, score)。空语料/无命中返回 []。"""
+    def _tiebreak(self, doc: _Doc):
+        return doc.id
+
+    def search(self, query: str, k: int = 3, min_score: float = 0.0) -> list[tuple[object, float]]:
+        """返回按分降序的 (doc, score)。空语料/无命中返回 []。"""
         if self.empty or not query:
             return []
         qf = Counter(tokenize(query))
         scored = [(d, self._score(qf, d)) for d in self.docs]
         scored = [(d, s) for d, s in scored if s > min_score]
-        scored.sort(key=lambda x: (-x[1], x[0].page.pdf_page))
-        return [(d.page, s) for d, s in scored[:k]]
+        scored.sort(key=lambda x: (-x[1], self._tiebreak(x[0])))
+        return [(d.obj, s) for d, s in scored[:k]]
+
+
+def b_norm(b: float, dl: int, avgdl: float) -> float:
+    """b * dl / avgdl，avgdl 为 0 时退化为 0（空语料保护）。"""
+    return 0.0 if not avgdl else b * dl / avgdl
+
+
+class BM25Index(BM25):
+    """教材页索引（Page 为文档单元），兼容早期调用签名 BM25Index(pages)。"""
+
+    def __init__(self, pages: list[Page], k1: float = 1.5, b: float = 0.75):
+        super().__init__(pages, [p.text for p in pages], k1=k1, b=b)
+
+    def _tiebreak(self, doc: _Doc):
+        return getattr(doc.obj, "pdf_page", doc.id)
+
+    def search(self, query: str, k: int = 3, min_score: float = 0.0) -> list[tuple[Page, float]]:
+        return super().search(query, k=k, min_score=min_score)

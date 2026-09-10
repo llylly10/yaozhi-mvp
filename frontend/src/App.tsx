@@ -1445,7 +1445,9 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
 
 type QAMsg = {
   q: string; a: string
-  citations: { ref: string; chapter: string; book_page: number }[]
+  // 引用来源：textbook=教材页切片，itembank=题库题目解析（双路混合检索，2026-09-10）
+  citations: { ref: string; chapter: string; book_page: number;
+    source?: string; label?: string; code?: string }[]
   refused: boolean; provider: string; note?: string
 }
 
@@ -1516,8 +1518,9 @@ function QAView({ userId, onError }: { userId: string; onError: (m: string) => v
               {m.citations.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-1.5 border-t border-dashed border-line pt-3">
                   {m.citations.map((c) => (
-                    <span key={c.ref} className="rounded-full bg-paper px-2.5 py-1 text-[11px] text-ink-2">
-                      {c.ref} {c.chapter} · p{c.book_page}
+                    <span key={c.ref} className={`rounded-full px-2.5 py-1 text-[11px] ${
+                      c.source === 'itembank' ? 'bg-gold-soft text-ink-2' : 'bg-paper text-ink-2'}`}>
+                      {c.ref} {c.label || `${c.chapter} · p${c.book_page}`}
                     </span>
                   ))}
                 </div>
