@@ -15,7 +15,7 @@
   --color-paper-2: #E8EEE7;
   --color-ink: #142A24;
   --color-ink-2: #45594F;
-  --color-ink-3: #7E918A;
+  --color-ink-3: #576B61; /* 三级文字：加深至正文小字 WCAG AA（原 #7E918A 对比不足难读） */
   --color-line: #DAE3DB;
   --color-line-2: #E7EEE7;
 
@@ -65,18 +65,68 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
   overflow: hidden;
 }
 
-/* ---------- 玻璃拟态（悬浮导航） ---------- */
+/* ---------- 环境光（品牌绿 + 印章金极淡洗，全页氛围，静态零性能监管） ---------- */
+.ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  background:
+    radial-gradient(600px 440px at 10% -6%, rgba(14, 122, 99, 0.12), transparent 65%),
+    radial-gradient(660px 500px at 90% 6%, rgba(185, 138, 46, 0.12), transparent 65%),
+    radial-gradient(760px 580px at 50% 110%, rgba(14, 122, 99, 0.08), transparent 65%);
+}
+
+/* ---------- 液态玻璃（iOS 26 风格的 Web 近似，非官方材质） ----------
+ * 用法：悬浮铬（顶栏 / 侧栏面板 / 浮动 dock / sticky 操作条），内容卡片保持实心白。
+ * 手法 = 高 blur + 饱和提升 + 双层内边框光 + 顶部镜面高光。
+ * 注：Web 近似实现；prefers-reduced-transparency / 不支持 backdrop-filter 时回退实心。 */
 .glass {
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(18px) saturate(160%);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
-  border: 1px solid rgba(255, 255, 255, 0.55);
+  background:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.16) 42%, rgba(223, 237, 230, 0.26)),
+    rgba(255, 255, 255, 0.52);
+  backdrop-filter: blur(24px) saturate(200%);
+  -webkit-backdrop-filter: blur(24px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.65);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.65),
-    0 10px 34px -18px rgba(20, 42, 36, 0.35);
+    inset 0 1px 1px rgba(255, 255, 255, 0.75),
+    inset 0 -1px 1px rgba(20, 42, 36, 0.06),
+    0 12px 36px -18px rgba(20, 42, 36, 0.35);
+}
+/* 浮动液态层（dock / 胶囊操作条）：渐变描边折射 + 顶部高光 sweep。
+ * 注意：本类不设 position（未分层样式会覆盖 Tailwind 分层 utilities 的 fixed/sticky），
+ * 调用处必须自带定位类（fixed / sticky / relative），伪元素锚定其内边距盒。 */
+.liquid::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(140deg,
+    rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.2) 32%,
+    rgba(20, 42, 36, 0.08) 62%, rgba(255, 255, 255, 0.55));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+.liquid::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.3), transparent 34%);
+  pointer-events: none;
 }
 @media (prefers-reduced-transparency: reduce) {
   .glass { background: rgba(255, 255, 255, 0.97); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .liquid::before, .liquid::after { display: none; }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass, .liquid { background: rgba(255, 255, 255, 0.96); }
+  .liquid::before, .liquid::after { display: none; }
 }
 
 /* ---------- 胶囊（药丸母题：双色半圆胶囊） ---------- */
@@ -90,14 +140,64 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
 .capsule.gold { background: linear-gradient(90deg, var(--color-gold) 50%, #EBDDBA 50%); }
 .capsule.white { background: linear-gradient(90deg, #fff 50%, var(--color-primary-soft) 50%); border: 1px solid var(--color-line); }
 
-/* ---------- 聚光边框卡片（Spotlight Border） ---------- */
+/* ---------- 内容卡片体系（液态玻璃 Web 近似） ----------
+ * 性能取舍（skill 6.E）：滚动区卡片不用 backdrop-filter（连续重绘伤移动端帧率），
+ * 用静态渐变模拟液态质感——折射描边 + 顶部镜面高光；真毛玻璃只保留给悬浮铬。
+ * 色板/圆角沿用现有 token；减弱透明度偏好下伪元素全部关闭。 */
+.card {
+  position: relative;
+  background: #fff;
+  border: 1px solid var(--color-line-2);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+/* 液态描边：1px 渐变折射边（mask 镂空术，白→药房绿→印章金） */
+.card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(150deg,
+    rgba(255, 255, 255, 0.95), rgba(14, 122, 99, 0.16) 30%,
+    rgba(20, 42, 36, 0.05) 62%, rgba(185, 138, 46, 0.25));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+/* 顶部镜面高光 */
+.card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.55), transparent 24%);
+  pointer-events: none;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .card::before, .card::after { display: none; }
+}
+
+/* ---------- 聚光边框卡片（Spotlight Border，交互块专用：基类 + 光标聚光） ----------
+ * 悬停上浮 + 光标聚光（--mx/--my 由 App 根单次委托 pointermove 驱动，不进 React render）。
+ * 与 .card 同源质感：内顶光 + 镜面高光；减弱动态偏好下上浮关闭。 */
 .spot-card {
   position: relative;
   background: #fff;
   border: 1px solid var(--color-line-2);
   border-radius: var(--radius-card);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--shadow-card), inset 0 1px 0 rgba(255, 255, 255, 0.9);
   transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s;
+}
+.spot-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.55), transparent 24%);
+  pointer-events: none;
 }
 .spot-card::before {
   content: "";
@@ -110,7 +210,7 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
   transition: opacity 0.25s;
   pointer-events: none;
 }
-.spot-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); }
+.spot-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.9); }
 .spot-card:hover::before { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
   .spot-card:hover { transform: none; }
@@ -174,7 +274,16 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
 }
 .btn:active:not(:disabled) { transform: translateY(1px) scale(0.99); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+/* 键盘焦点可见性（a11y）：只对键盘导航显示，不干扰鼠标点击态 */
+.btn:focus-visible, button:focus-visible, a:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; border-color: var(--color-primary); }
 .btn-primary {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
   background: linear-gradient(160deg, var(--color-primary), var(--color-primary-mid));
   color: #fff;
   padding: 12px 24px;
@@ -184,6 +293,21 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 10px 24px -12px rgba(14, 122, 99, 0.55);
 }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
+/* 悬停扫光（glass 高光语言在按钮上的延续，纯 CSS transform 位移） */
+.btn-primary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(105deg, transparent 42%, rgba(255, 255, 255, 0.38) 50%, transparent 58%);
+  transform: translateX(-130%);
+  transition: transform 0.65s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+}
+.btn-primary:hover:not(:disabled)::after { transform: translateX(130%); }
+@media (prefers-reduced-motion: reduce) {
+  .btn-primary::after { display: none; }
+}
 .btn-primary:disabled {
   background: var(--color-line);
   color: var(--color-ink-3);

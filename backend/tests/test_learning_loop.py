@@ -5,8 +5,12 @@
    不再无限滞留待办（原 bug：题库题做完永不消失/不打勾）。
 2. 种子域错因行须到「掌握」才出列（有训练→复测链路）。
 3. 学习随堂自测：GET quiz（本域未答过的 training/retest 优先），通过(≥60%)
-   触发 material_passed 把该域所有「薄弱」错因行推至「学习中」，今日待办里该错因的
-   「学习材料」任务随之消失；未通过则保持薄弱。
+   触发 material_passed 把该域所有「薄弱」行推至「学习中」；种子域错因今日待办里
+   「学习材料」任务随之消失（仅剩练习），章级行保留 学+练 配对直到达标出列；
+   未通过则保持薄弱。
+4. 一学一练配对（2026-09-10）：章级行（category=None）在薄弱/学习中发
+   学习任务 + 练习任务，不再是光杆练习；章节随堂自测（study-map 口径）通过
+   同样把章级行 薄弱→学习中。
 """
 import sys
 from pathlib import Path
@@ -99,9 +103,9 @@ def test_chapter_initial_mastery_exits_to_done():
     domain_id = _seed_domain_id()
     _insert_mastery(uid, domain_id, None, "薄弱")  # 章级薄弱（category=None）
     plan = client.get(f"/users/{uid}/learning-plan").json()
-    # 章级薄弱：只发练习任务，且不发空材料任务
+    # 章级薄弱：一学一练配对（学习=本章大纲知识点+随堂自测，练习=本章题目）
     tasks = [t for t in plan["tasks"] if t["domain_id"] == domain_id]
-    assert tasks and all(t["type"] == "practice" for t in tasks), f"章级薄弱应只发练习 {tasks}"
+    assert {t["type"] for t in tasks} == {"material", "practice"}, f"章级薄弱应发 学+练 任务对 {tasks}"
     assert all(t.get("guide") for t in tasks), "每个任务都应有下一步引导"
     # 章级题库推进到「初步掌握」后应出列（无复测资产，初步掌握=可达到的最强达标态）
     # 注意：category=NULL 行 ORM UPDATE 会炸（NULL 主键），须原生 UPDATE（同 mastery._apply）
@@ -119,6 +123,57 @@ def test_chapter_initial_mastery_exits_to_done():
         "章级初步掌握应移出待办"
     done = [t for t in plan2["done_tasks"] if t["domain_id"] == domain_id]
     assert done and done[0]["state"] == "初步掌握", f"章级初步掌握应在已完成并标初步掌握 {done}"
+
+
+def _chapter_domain_with_quiz(min_q: int = 3) -> str:
+    """找一个 published 题量充足的章节域（DOM-CH*），供章节自测用例使用。"""
+    from collections import Counter
+
+    db = SessionLocal()
+    try:
+        counts = Counter(db.execute(select(Question.domain_id).where(
+            Question.review_status == "published")).scalars().all())
+        for dom_id, n in counts.items():
+            dom = db.get(DiagnosticDomain, dom_id)
+            if dom and (dom.code or "").startswith("DOM-CH") and n >= min_q:
+                return dom_id
+        raise AssertionError("种子中没有题量充足的章节域")
+    finally:
+        db.close()
+
+
+def test_chapter_learn_practice_pair_and_quiz_advances():
+    """一学一练配对（2026-09-10）：章级薄弱发 学+练 任务对；章节随堂自测通过后
+    章级行 薄弱→学习中，学+练配对保留（学习任务可反复回看）直到达标出列。"""
+    _rebuild()
+    uid = _fresh_user("loop_pair")
+    domain_id = _chapter_domain_with_quiz()
+    _insert_mastery(uid, domain_id, None, "薄弱")
+    plan = client.get(f"/users/{uid}/learning-plan").json()
+    tasks = [t for t in plan["tasks"] if t["domain_id"] == domain_id]
+    assert {t["type"] for t in tasks} == {"material", "practice"}, f"章级薄弱应发 学+练 任务对 {tasks}"
+    assert all(t.get("guide") and t.get("goal") for t in tasks), "配对任务都应有引导与达成路径"
+    # 章节随堂自测（study-map 口径）：全对 → 通过，章级行 薄弱→学习中
+    r = client.get(f"/users/{uid}/study-map/{domain_id}/quiz")
+    assert r.status_code == 200, r.text
+    qids = [q["id"] for q in r.json()["questions"]]
+    assert qids, "章节应有可自测的题目"
+    ans = {q: _answer_of(q) for q in qids}
+    r = client.post(f"/users/{uid}/study-map/{domain_id}/quiz/submit", json={"answers": ans})
+    assert r.status_code == 200, r.text
+    assert r.json()["passed"] is True
+    db = SessionLocal()
+    try:
+        st = db.execute(select(MasteryState).where(
+            MasteryState.user_id == uid, MasteryState.domain_id == domain_id,
+            MasteryState.category.is_(None))).scalar_one()
+        assert st.state == "学习中", f"章节自测通过应推至学习中，实际 {st.state}"
+    finally:
+        db.close()
+    plan2 = client.get(f"/users/{uid}/learning-plan").json()
+    tasks2 = [t for t in plan2["tasks"] if t["domain_id"] == domain_id]
+    assert {t["type"] for t in tasks2} == {"material", "practice"}, f"学习中仍应保留 学+练 配对 {tasks2}"
+    assert all(t["state"] == "学习中" for t in tasks2), f"配对任务徽标应同步为学习中 {tasks2}"
 
 
 def _seed_qid() -> str:

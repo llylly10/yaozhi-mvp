@@ -9,7 +9,8 @@
    （一级错因 + 证据等级低 + 可细化，绝不捏造具体错点）；答对只给解析反馈（无会话）；
    幂等重放同样补反馈并回放原会话 id。
 4. 摸底混卷：真实题库(按章配额 3) + 种子诊断域(2) 混卷；同 user 同卷可回放；题带章信息。
-5. 薄弱语义分层：题库题答错 → 章级薄弱（category=None，只发练习任务）；种子域题答错 → 错因薄弱。
+5. 薄弱语义分层：题库题答错 → 章级薄弱（category=None，一学一练配对：本章大纲学习 + 本章练习）；
+   种子域题答错 → 错因薄弱（学+练配对，学完后学习任务出列）。
 6. 种子题来源锚点：10 题解析绑定教材第5章真实锚点（EV-PENDING-W3 占位作废）。
 """
 import sys
@@ -236,11 +237,11 @@ def test_wrong_tiku_marks_chapter_level_weak():
     m = client.get(f"/users/{uid}/mastery").json()
     t_row = next(x for x in m if x["category"] is None and x["state"] == "薄弱")
     assert t_row["domain_id"], "题库题答错应产生章级薄弱（category=None）"
-    # 章级薄弱的学习路径：只发练习任务，不发空材料任务
+    # 章级薄弱的学习路径：一学一练配对（学习=本章大纲知识点+随堂自测，练习=本章题目）
     plan = client.get(f"/users/{uid}/learning-plan").json()["tasks"]
     t_tasks = [x for x in plan if x["domain_id"] == t_row["domain_id"]]
-    assert t_tasks and all(x["type"] == "practice" for x in t_tasks), \
-        f"章级薄弱只发练习任务，实际 {t_tasks}"
+    assert {x["type"] for x in t_tasks} == {"material", "practice"}, \
+        f"章级薄弱应发 学+练 任务对，实际 {t_tasks}"
     # 种子域题（摸底卷必含 2 道 Q-，此处全答错）→ 错因薄弱：material + practice 双任务
     q_rows = [x for x in m if x["category"] and x["state"] == "薄弱"]
     assert q_rows, "种子域题答错应产生错因级薄弱"

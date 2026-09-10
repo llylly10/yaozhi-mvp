@@ -506,10 +506,14 @@ def diagnosis_feedback(session_id: str, body: FeedbackIn, db: Session = Depends(
 
 @router.get("/users/{user_id}/learning-plan")
 def learning_plan(user_id: str, db: Session = Depends(get_db)):
-    """规则生成的学习路径（v1.1 §12.2）：按掌握状态排序薄弱项，每项生成【学材料 → 练习】任务对。
+    """规则生成的学习路径（v1.1 §12.2）：按掌握状态排序薄弱项，每项生成【学 → 练】任务对。
 
-    2026-09-03 题库接入：章级薄弱（category=None，题库题答错产生）只发练习任务——
-    章级诊断域暂无整理的学习材料（chain/混淆对资产在种子域），不发空材料任务。
+    2026-09-10 一学一练配对（用户反馈：之前章级只有练、没有学）：
+      - 章级行（category=None，题库题答错产生）在「薄弱/学习中」同样发学习任务 +
+        练习任务。学习内容为该章课程大纲知识点树（study-map 明细）+ 随堂自测，
+        前端点「进入学习」打开章节学习页；自测通过（≥60%）把该行推至「学习中」。
+      - 种子域错因行保持原口径：「薄弱」发 学+练，自测通过后学习任务出列、
+        仅剩练习（训练→复测链路接管后续学习）。
 
     2026-09-08 完成口径修正（用户反馈：练习做完不消失/不打勾）：
       - 章级题库行（category=None）无复测资产，状态机最高到「初步掌握」即已「达标」，
@@ -536,16 +540,29 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
         if not domain:
             continue
         is_chapter = r.category is None
-        # 种子域「薄弱」错因才发学习材料任务；学习随堂自测通过后该行离开薄弱，任务自然消失。
+        # 学习任务（一学一练配对）：
+        # - 种子域错因「薄弱」：深图谱学习材料 + 随堂自测，通过后任务出列、进入练习。
+        # - 章级行「薄弱/学习中」：本章大纲知识点 + 随堂自测，通过后该行进「学习中」，
+        #   学习任务保留到达标出列（可反复回看），始终与练习任务配对。
         if (not is_chapter) and r.state == "薄弱":
             tasks.append({"type": "material", "domain_id": r.domain_id, "domain": domain.name,
                           "category": r.category, "state": r.state,
                           "title": f"学习：{domain.name}（{r.category}）",
                           "guide": "先看本域学习材料，再回答随堂自测；自测通过后此任务出列，进入下方练习。",
                           "goal": "自测通过（答对 ≥60%）"})
+        elif is_chapter and r.state in ("薄弱", "学习中"):
+            learn_guide = ("先看本章知识点，再做随堂自测；自测通过（≥60%）后本章进入「学习中」，"
+                           "再用下方练习把正确率打到 70% 即达标出列。"
+                           if r.state == "薄弱" else
+                           "本章自测已通过，可回看知识点复习；用下方练习把正确率打到 70% 即达标出列。")
+            tasks.append({"type": "material", "domain_id": r.domain_id, "domain": domain.name,
+                          "category": None, "state": r.state,
+                          "title": f"学习：{domain.name}",
+                          "guide": learn_guide,
+                          "goal": "自测通过（答对 ≥60%）"})
         if is_chapter:
-            need = {"薄弱": "答对本章 2 道题", "学习中": "再答对本章 1 道题"}.get(r.state, "")
-            guide = (f"本章暂无学习材料，直接练习即可。{need}后达标出列（不再出现在待办）。"
+            need = {"薄弱": "先完成上方学习，再答对本章 2 道题", "学习中": "再答对本章 1 道题"}.get(r.state, "")
+            guide = (f"{need}后达标出列（不再出现在待办）。"
                      if r.state in ("薄弱", "学习中")
                      else "继续巩固本域知识点。")
         else:
@@ -567,7 +584,7 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
         done_tasks.append({"domain_id": r.domain_id, "domain": domain.name, "category": r.category,
                            "state": state_label,
                            "title": f"已完成：{domain.name}" + (f"（{r.category}）" if r.category else "")})
-    note = "路径按「先学后练」规则生成；练到达标态（章节初步掌握 / 错因掌握）即出列，不再滞留待办。"
+    note = "路径按「一学一练」配对生成：每个薄弱项都有学习任务 + 练习任务；练到达标态（章节初步掌握 / 错因掌握）即出列，不再滞留待办。"
     return {"tasks": tasks, "done_tasks": done_tasks, "note": note}
 
 
@@ -753,7 +770,8 @@ def get_study_quiz(user_id: str, domain_id: str, db: Session = Depends(get_db)):
 def submit_study_quiz(user_id: str, domain_id: str, body: MaterialQuizIn,
                       db: Session = Depends(get_db)):
     """随堂摸底判分并写学习进度：≥60% 通过 → 该域 StudyProgress 置「已达标」；
-    若该域已有薄弱错因行则同步 mastery.material_passed（薄弱→学习中）。"""
+    该域「薄弱」掌握行同步 mastery.material_passed（薄弱→学习中）——含章级行
+    （category=None，一学一练配对的学习任务完成后进「学习中」，再用练习达标）。"""
     _active_user(user_id, db)
     d = db.get(DiagnosticDomain, domain_id) or _404()
     correct = total = 0
@@ -776,10 +794,10 @@ def submit_study_quiz(user_id: str, domain_id: str, body: MaterialQuizIn,
         prog.state = "已达标"
         prog.best_score = max(float(prog.best_score or 0), correct / total)
         prog.quiz_total = max(prog.quiz_total or 0, total)
-        # 该域薄弱错因（seed 域概念级）若有 → 薄弱→学习中；章级行不强推（StudyProgress 已标达标）
+        # 该域「薄弱」掌握行（错因级 + 章级）→ 薄弱→学习中；已学习中以上幂等、无副作用。
         weak_rows = db.execute(select(MasteryState).where(
             MasteryState.user_id == user_id, MasteryState.domain_id == domain_id,
-            MasteryState.category.isnot(None), MasteryState.state == "薄弱")).scalars().all()
+            MasteryState.state == "薄弱")).scalars().all()
         for r in weak_rows:
             mastery.transition(db, user_id, domain_id, r.category, "material_passed")
     db.commit()
@@ -1340,6 +1358,94 @@ def get_question(question_id: str, db: Session = Depends(get_db)):
     """演示/摸底取题。正式摸底卷接口 W3 提供（/courses/{id}/assessment）。"""
     q = db.get(Question, question_id) or _404()
     return {"id": q.id, "code": q.code, "stem": q.stem, "options": q.options, "type": q.type}
+
+
+# ---------- 问 AI（课程问答：BM25 教材切片检索 + grounded 生成） ----------
+#
+# 设计说明（v1.1 §5.1 模型任务边界 + 合规红线）：
+# - 只答《药理学》课程问题；用药决策类一律规则前置拒绝（模型不做用药/医疗决策）。
+# - 无检索命中 → 诚实拒答，不调模型；引用只转述/短引，不贴教材原文（版权）。
+# - Provider 独立于全局 model_provider：诊断链路保持 Mock 确定性可回放，
+#   问答单独走 ExternalApiProvider（有 key）；无 key 降级 Mock 摘录（演示/测试可复现）。
+# - 外发给模型的只有去标识化问题 + 课程公开切片（UUID 用户，无学号姓名）；
+#   问答全文记 ModelRun（consent「对话原文」覆盖），audit 只记长度/哈希最小必要字段。
+
+QA_QUESTION_MAXLEN = 500
+QA_SLICE_CHARS = 600
+QA_REFUSE_MEDICATION = ("该吃", "剂量", "怎么吃", "能吃吗", "能不能吃", "处方", "开药",
+                        "替我开", "我孩子", "孕妇", "哺乳", "用药建议", "吃多少",
+                        "停药", "换药", "几天能好", "要不要去医院")
+
+
+class QAIn(BaseModel):
+    question: str = Field(..., max_length=QA_QUESTION_MAXLEN)
+
+
+@router.post("/users/{user_id}/qa/ask")
+def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
+    """问 AI 单轮问答（P0 无历史；多轮为后续项）。"""
+    user = _active_user(user_id, db)
+    if not user.consented:
+        raise HTTPException(403, "请先完成知情同意（含学习数据采集同意）后再使用问 AI")
+    q = (body.question or "").strip()
+    if not q:
+        raise HTTPException(422, "问题不能为空")
+
+    # 1) 用药决策类：规则前置拒绝，不调模型不检索
+    if any(k in q for k in QA_REFUSE_MEDICATION):
+        audit(db, user_id, "qa.refused_medication", f"user:{user_id}", q_len=len(q))
+        db.commit()
+        return {"answer": "这个问题涉及具体用药决策，本系统不提供用药建议。你可以问我课程里的机制、分类与辨析（比如「阿托品为什么会散瞳」），用药问题请咨询医师或药师。",
+                "citations": [], "refused": True, "refuse_reason": "medication",
+                "provider": "rule", "note": "规则前置拒绝，未调用模型。"}
+
+    # 2) 教材切片检索；无命中 → 诚实拒答
+    from .rag import retrieve_top_k
+    hits = retrieve_top_k(q, k=3)
+    if not hits:
+        audit(db, user_id, "qa.refused_no_evidence", f"user:{user_id}", q_len=len(q))
+        db.commit()
+        return {"answer": "课程库里暂时没找到相关内容（35 章大纲 + 教材切片均无命中）。换个问法试试（带上药物名或章节名），也可以先去「今日待办」学对应章节再来问。",
+                "citations": [], "refused": True, "refuse_reason": "no_evidence",
+                "provider": "retriever", "note": "无检索命中，未调用模型。"}
+    refs = [{"ref": f"[{i + 1}]", "chapter": h.chapter, "book_page": h.book_page}
+            for i, h in enumerate(hits)]
+    slices = "\n\n".join(
+        f"[{i + 1}]({h.chapter}·教材 p{h.book_page}) {h.text[:QA_SLICE_CHARS]}"
+        for i, h in enumerate(hits))
+
+    # 3) 生成：有 key 走真模型；无 key/失败走 Mock 摘录
+    try:
+        from .llm.provider import ExternalApiProvider
+        provider = ExternalApiProvider()
+    except Exception as e:  # ProviderError（含无 key）→ 演示降级
+        chaps = "、".join(dict.fromkeys(h.chapter for h in hits))
+        audit(db, user_id, "qa.mock_fallback", f"user:{user_id}",
+              q_len=len(q), reason=str(e)[:80])
+        db.commit()
+        return {"answer": f"（演示模式：真模型未接入）课程库中找到 {len(refs)} 处相关内容（{chaps}）。先去对应章节学习，再带着更具体的问题来问——比如把问题细化到某个药物或某个机制环节。",
+                "citations": refs, "refused": False, "refuse_reason": None,
+                "provider": "mock", "note": "计划态：真模型（GLM）接入后此条由模型 grounded 生成。"}
+
+    from .llm.provider import ProviderError
+    try:
+        r = provider.answer_with_refs(question=q, slices=slices, n_refs=len(refs))
+    except ProviderError as e:
+        audit(db, user_id, "qa.provider_error", f"user:{user_id}", q_len=len(q),
+              reason=str(e)[:80])
+        db.commit()
+        return {"answer": "刚才模型开小差了（已自动降级）。你可以先去对应章节看看材料，稍后再问一次。",
+                "citations": refs, "refused": True, "refuse_reason": "provider_error",
+                "provider": "mock", "note": "真模型调用失败，已降级，引用为本次检索切片。"}
+    cites = [refs[i - 1] for i in r["used_refs"]]
+    audit(db, user_id, "qa.answered", f"user:{user_id}", q_len=len(q),
+          answer_len=len(r["answer"]), used_refs=r["used_refs"], refused=r["refused"])
+    db.commit()
+    return {"answer": r["answer"], "citations": cites,
+            "refused": r["refused"],
+            "refuse_reason": "no_grounding" if r["refused"] else None,
+            "provider": "external_api",
+            "note": "回答由课程资料切片 grounded 生成，仅供学习参考，不保证完全正确；不提供用药建议。"}
 
 
 def _404():

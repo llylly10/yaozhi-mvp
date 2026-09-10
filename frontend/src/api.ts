@@ -45,6 +45,9 @@ export const api = {
 
   learningPlan: (userId: string) => fetch(`/api/users/${userId}/learning-plan`).then(handle),
 
+  qa: (userId: string, question: string) =>
+    fetch(`/api/users/${userId}/qa/ask`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ question }) }).then(handle),
+
   questionAnalysis: (questionId: string) => fetch(`/api/questions/${questionId}/analysis`).then(handle),
 
   materials: (domainId: string) => fetch(`/api/materials/${domainId}`).then(handle),

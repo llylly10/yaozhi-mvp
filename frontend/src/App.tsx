@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, MotionConfig, useReducedMotion, useScroll, useMotionValueEvent } from 'framer-motion'
 import {
-  CheckCircle, Warning, MagnifyingGlass, SkipForward, ArrowRight, Pill,
-  CalendarBlank, ClockCounterClockwise, SquaresFour, Gear, BookOpenText,
+  CheckCircle, XCircle, Warning, MagnifyingGlass, SkipForward, ArrowRight, ArrowUp, CaretDown, Pill,
+  CalendarBlank, ClockCounterClockwise, SquaresFour, Gear, BookOpenText, ChatCircle,
 } from '@phosphor-icons/react'
 import { api, type Diagnosis, type Question, type TikuFeedback } from './api'
 
@@ -30,8 +30,8 @@ function genUUID(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-type Screen = 'register' | 'consent' | 'goal' | 'study' | 'assessment' | 'portrait' | 'list' | 'material' | 'flow' | 'profile'
-type View = 'todo' | 'material' | 'wrongbook' | 'profile'
+type Screen = 'register' | 'consent' | 'goal' | 'study' | 'assessment' | 'portrait' | 'list' | 'material' | 'flow' | 'profile' | 'qa'
+type View = 'todo' | 'material' | 'wrongbook' | 'profile' | 'qa'
 
 const STEPS = ['注册', '同意', '目标', '摸底', '画像', '路径', '学习', '练习', '诊断', '追问', '训练', '复测', '档案'] as const
 
@@ -43,7 +43,7 @@ function stepIndex(screen: Screen, diagnosis: Diagnosis | null): number {
   const map: Record<Screen, number> = {
     register: 0, consent: 1, goal: 2, study: 2, assessment: 3, portrait: 4,
     list: 5, flow: 7, profile: 12,
-    material: 6,
+    material: 6, qa: 5,
   }
   if (screen !== 'flow') return map[screen]
   if (!diagnosis) return 7
@@ -65,10 +65,12 @@ export default function App() {
   const [portrait, setPortrait] = useState<PortraitResult | null>(null)
   const [materialDomain, setMaterialDomain] = useState<string | null>(null)
 
-  // 主壳（可切换视图的页面：今日待办/错题本/档案），全屏子流程(材料/练习/onboarding)不显示底部导航
-  const isShell = screen === 'list' || screen === 'profile'
+  // 主壳（可切换视图的页面：今日待办/错题本/问AI/档案），全屏子流程(材料/练习/onboarding)不显示底部导航
+  const isShell = screen === 'list' || screen === 'profile' || screen === 'qa'
   function goNav(v: View) {
-    setError(null); setView(v); setScreen(v === 'todo' ? 'list' : 'profile'); setActiveQuestion(null)
+    setError(null); setView(v)
+    setScreen(v === 'todo' ? 'list' : v === 'qa' ? 'qa' : 'profile')
+    setActiveQuestion(null)
   }
   // 屏幕/视图切换时清掉上一页残留报错，避免错误条跨页误显示
   const prevNavKey = useRef('')
@@ -100,10 +102,60 @@ export default function App() {
   }, [userId])
 
   const step = stepIndex(screen, diagnosis)
-  const inLearning = ['list', 'flow', 'profile', 'goal', 'study', 'assessment', 'portrait', 'material'].includes(screen)
+  const inLearning = ['list', 'flow', 'profile', 'goal', 'study', 'assessment', 'portrait', 'material', 'qa'].includes(screen)
+
+  // 聚光灯跟随：单次委托 pointermove 写 CSS 变量（--mx/--my），不进 React render，移动端安全
+  useEffect(() => {
+    function onMove(e: PointerEvent) {
+      const t = (e.target as HTMLElement | null)?.closest?.('.spot-card') as HTMLElement | null
+      if (!t) return
+      const r = t.getBoundingClientRect()
+      t.style.setProperty('--mx', `${((e.clientX - r.left) / r.width) * 100}%`)
+      t.style.setProperty('--my', `${((e.clientY - r.top) / r.height) * 100}%`)
+    }
+    window.addEventListener('pointermove', onMove, { passive: true })
+    return () => window.removeEventListener('pointermove', onMove)
+  }, [])
+
+  // 顶部步骤轨点击跳转：注册/同意/目标/摸底/画像/路径/学习/练习/诊断/追问/训练/复测/档案
+  function goStep(i: number) {
+    setError(null)
+    if (i === 0) { setActiveQuestion(null); setView('todo'); setScreen('register'); window.scrollTo(0, 0); return }
+    if (!userId) return
+    if (i === 1) { setScreen('consent') }
+    else if (i === 2) { setActiveQuestion(null); setScreen('goal') }
+    else if (i === 3) { setActiveQuestion(null); setDiagnosis(null); setScreen('assessment') }
+    else if (i === 4) { if (portrait) setScreen('portrait'); else setScreen('assessment') }
+    else if (i === 5) { setActiveQuestion(null); setView('todo'); setScreen('list') }
+    else if (i === 6) {
+      if (materialDomain) setScreen('material')
+      else { setView('todo'); setScreen('list') }
+    } else if (i >= 7 && i <= 11) {
+      if (activeQuestion) setScreen('flow')
+      else { setView('todo'); setScreen('list') }
+    } else if (i === 12) { setActiveQuestion(null); setView('profile'); setScreen('profile') }
+    window.scrollTo(0, 0)
+  }
+  function stepHint(i: number): string {
+    if (i === 0) return '去注册 / 登录'
+    if (!userId) return '请先登录'
+    const hints: Record<number, string> = {
+      1: '去知情同意', 2: '去学习目标', 3: '去摸底测试', 4: portrait ? '去摸底画像' : '完成摸底后可看画像',
+      5: '去今日待办（学习路径）', 6: materialDomain ? '去学习材料' : '去今日待办选一节学习材料',
+      7: activeQuestion ? '去练习作答' : '去今日待办选一题开始练习',
+      8: activeQuestion ? '去诊断结论' : '去今日待办选一题进入诊断',
+      9: activeQuestion ? '去追问诊断' : '去今日待办选一题进入追问',
+      10: activeQuestion ? '去靶向训练' : '去今日待办选一题进入训练',
+      11: activeQuestion ? '去迁移复测' : '去今日待办选一题进入复测',
+      12: '去学习档案',
+    }
+    return hints[i] ?? ''
+  }
 
   return (
+    <MotionConfig reducedMotion="user">
     <div className="relative min-h-[100dvh]">
+      <div className="ambient" aria-hidden />
       <MolField />
 
       {/* 顶栏品牌 + 通栏步骤轨 */}
@@ -118,17 +170,27 @@ export default function App() {
               </div>
               <button onClick={logout} className="btn rounded-full px-3 py-1 text-xs text-ink-3 hover:bg-paper-2 hover:text-ink">退出账号</button>
             </div>
-            <div className="mx-auto flex w-full max-w-[1140px] items-center gap-0.5 overflow-x-auto py-1.5">
-              {STEPS.map((s, i) => (
-                <span key={s} className="flex items-center">
-                  {i > 0 && <span className="mx-0.5 text-[9px] text-line">▸</span>}
-                  <span className={`relative flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs
-                    ${i === step ? 'bg-primary font-semibold text-white' : 'text-ink-3'}`}>
-                    <span className={`size-1.5 rounded-full ${i <= step ? (i === step ? 'bg-white' : 'bg-primary') : 'bg-line'}`} />
-                    {s}
+            <div className="mx-auto flex w-full max-w-[1140px] flex-nowrap items-center gap-0.5 overflow-x-auto py-1.5
+              [mask-image:linear-gradient(90deg,transparent,#000_28px,#000_calc(100%-28px),transparent)]">
+              {STEPS.map((s, i) => {
+                const enabled = i === 0 || !!userId
+                return (
+                  <span key={s} className="flex flex-none items-center">
+                    {i > 0 && <span className="mx-0.5 text-[9px] text-line">▸</span>}
+                    <button onClick={() => goStep(i)} disabled={!enabled} title={stepHint(i)}
+                      className={`relative flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] transition-colors
+                        ${i === step ? 'font-semibold text-white' : 'text-ink-3 hover:bg-paper-2 hover:text-primary'}
+                        ${!enabled ? 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-ink-3' : ''}`}>
+                      {i === step && (
+                        <motion.span layoutId="step-pill" transition={spring}
+                          className="absolute inset-0 rounded-full bg-primary" aria-hidden />
+                      )}
+                      <span className={`relative z-10 size-1.5 rounded-full ${i <= step ? (i === step ? 'bg-white' : 'bg-primary') : 'bg-line'}`} />
+                      <span className="relative z-10">{s}</span>
+                    </button>
                   </span>
-                </span>
-              ))}
+                )
+              })}
             </div>
           </div>
         </div>
@@ -169,7 +231,7 @@ export default function App() {
                 onMaterial={(domainId) => { setMaterialDomain(domainId); setScreen('material') }} />
             )}
             {screen === 'material' && materialDomain && userId && (
-              <MaterialView key={materialDomain} userId={userId} domainId={materialDomain} onError={setError}
+              <MaterialRoute key={materialDomain} userId={userId} domainId={materialDomain} goal={goal} onError={setError}
                 onPractice={(q) => { setActiveQuestion(q); setScreen('flow'); setDiagnosis(null) }}
                 onBack={() => { setScreen('list'); setView('todo') }} />
             )}
@@ -185,6 +247,9 @@ export default function App() {
             {screen === 'profile' && userId && view === 'wrongbook' && (
               <WrongBook key="wrongbook" userId={userId} onGoTodo={() => goNav('todo')} />
             )}
+            {screen === 'qa' && userId && view === 'qa' && (
+              <QAView key="qa" userId={userId} onError={setError} />
+            )}
 
           </AnimatePresence>
         </div>
@@ -197,7 +262,9 @@ export default function App() {
           <MobileTab current={{ screen, view }} onNav={goNav} />
         </>
       )}
+      <BackToTop />
     </div>
+    </MotionConfig>
   )
 }
 
@@ -215,6 +282,7 @@ function Hex({ size, className, style }: { size: number; className?: string; sty
 
 /* 苯环分子背景：退到左右页缘的点缀，不再满屏平铺，避免干扰内容阅读 */
 function MolField() {
+  const reduce = useReducedMotion()
   // 左上角簇（top-left）与右下角簇（bottom-right），尺寸递减、更淡
   const tl = [
     { left: -30, top: -24, size: 150 }, { left: 44, top: 60, size: 78 }, { left: -14, top: 108, size: 58 },
@@ -228,7 +296,7 @@ function MolField() {
       left: 'left' in c ? `${c.left}%` : undefined, top: 'top' in c ? `${c.top}%` : undefined,
       right: 'right' in c ? `${c.right}%` : undefined, bottom: 'bottom' in c ? `${c.bottom}%` : undefined,
     }}
-      animate={{ y: [0, -7, 0], rotate: [0, flip ? 5 : -5, 0] }}
+      animate={reduce ? undefined : { y: [0, -7, 0], rotate: [0, flip ? 5 : -5, 0] }}
       transition={{ duration: 13 + (i % 4) * 3, repeat: Infinity, ease: 'easeInOut', delay: i * 0.8 }}>
       <Hex size={c.size} className="opacity-90" />
     </motion.div>
@@ -246,20 +314,25 @@ function MolField() {
 function Sidebar({ view, onNav }: { view: View; onNav: (v: View) => void }) {
   const item = (v: View, label: string, icon: React.ReactNode, disabled = false) => (
     <button key={v + label} disabled={disabled} onClick={() => onNav(v)}
-      className={`btn !justify-start w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm
-        ${!disabled && view === v ? 'bg-primary-soft font-semibold text-primary' : 'text-ink-2 hover:bg-paper-2'}
+      className={`btn relative !justify-start w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm
+        ${!disabled && view === v ? 'font-semibold text-primary' : 'text-ink-2 hover:bg-paper-2'}
         ${disabled ? 'opacity-45' : ''}`}>
-      {icon}{label}
-      {disabled && <span className="ml-auto text-[10px] text-ink-3">W3</span>}
+      {!disabled && view === v && (
+        <motion.span layoutId="side-active" transition={spring}
+          className="absolute inset-0 rounded-xl bg-primary-soft" aria-hidden />
+      )}
+      <span className="relative z-10 flex items-center gap-2.5">{icon}{label}</span>
+      {disabled && <span className="relative z-10 ml-auto text-[10px] text-ink-3">W3</span>}
     </button>
   )
   return (
-    <aside className="hidden w-[190px] flex-none lg:block">
-      <div className="sticky top-[118px] space-y-6">
+    <aside className="hidden w-[212px] flex-none lg:block">
+      <div className="glass liquid sticky top-[118px] space-y-5 rounded-[20px] p-3">
         <div>
           <p className="mb-1.5 px-3.5 text-[11px] font-semibold text-ink-3">学习</p>
           {item('todo', '今日待办', <CalendarBlank size={15} />)}
           {item('wrongbook', '错题本', <ClockCounterClockwise size={15} />)}
+          {item('qa', '问AI', <ChatCircle size={15} />)}
         </div>
         <div>
           <p className="mb-1.5 px-3.5 text-[11px] font-semibold text-ink-3">能力</p>
@@ -281,20 +354,47 @@ function MobileTab({ current, onNav }: { current: { screen: Screen; view: View }
   const active = (screen: Screen, view: View) => current.screen === screen && current.view === view
   const tab = (v: View, label: string, icon: React.ReactNode, screen: Screen, on = false) => (
     <button onClick={() => onNav(v)} disabled={on}
-      className={`flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl py-1.5 text-[11px] font-medium transition-colors
+      className={`relative flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl py-1.5 text-[11px] font-medium transition-colors
         ${active(screen, v) ? 'text-primary' : 'text-ink-3 hover:text-ink-2'} ${on ? 'opacity-45' : ''}`}>
-      {icon}
-      <span className="truncate">{label}</span>
+      {active(screen, v) && (
+        <motion.span layoutId="mtab-pill" transition={spring}
+          className="absolute inset-0 rounded-xl bg-primary-soft" aria-hidden />
+      )}
+      <span className="relative z-10 flex flex-col items-center gap-0.5">{icon}
+        <span className="truncate">{label}</span>
+      </span>
     </button>
   )
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-white/85 px-3 py-1.5 backdrop-blur-lg lg:hidden">
+    <nav className="glass liquid fixed inset-x-3 bottom-3 z-40 rounded-[26px] px-2 pt-2 lg:hidden"
+      style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
       <div className="mx-auto flex w-full max-w-[560px] items-center gap-1">
         {tab('todo', '今日待办', <CalendarBlank size={19} />, 'list')}
+        {tab('qa', '问AI', <ChatCircle size={19} />, 'qa')}
         {tab('wrongbook', '错题本', <ClockCounterClockwise size={19} />, 'profile')}
         {tab('profile', '学习档案', <SquaresFour size={19} />, 'profile')}
       </div>
     </nav>
+  )
+}
+
+/* 全局回顶：滚动超一屏出现，玻璃圆钮；滚动感知走 useScroll（不直接监听 scroll 事件） */
+function BackToTop() {
+  const { scrollY } = useScroll()
+  const [show, setShow] = useState(false)
+  const reduce = useReducedMotion()
+  useMotionValueEvent(scrollY, 'change', (v) => setShow(v > 600))
+  return (
+    <AnimatePresence>
+      {show && (
+        <motion.button initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }}
+          onClick={() => window.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' })}
+          title="回到顶部" aria-label="回到顶部"
+          className="glass liquid fixed bottom-24 right-4 z-40 grid size-11 place-items-center rounded-full text-primary lg:bottom-6 lg:right-6">
+          <ArrowUp size={18} weight="bold" />
+        </motion.button>
+      )}
+    </AnimatePresence>
   )
 }
 
@@ -769,7 +869,11 @@ function ChapterStudy({ userId, node, goal, onError, onDone }: {
 
         {res ? (
           <div className={`rounded-2xl border p-5 text-sm ${res.passed ? 'border-ok/40 bg-[var(--color-ok-soft)]' : 'border-cat-red/40 bg-[var(--color-cat-red-soft)]'}`}>
-            <p className="font-semibold">{res.passed ? `✅ 本章达标（${res.correct}/${res.total}）` : `❌ 未通过（${res.correct}/${res.total}）`}</p>
+            <p className="flex items-center gap-1.5 font-semibold">
+              {res.passed
+                ? <><CheckCircle size={16} weight="fill" className="flex-none text-ok" />本章达标（{res.correct}/{res.total}）</>
+                : <><XCircle size={16} weight="fill" className="flex-none text-cat-red" />未通过（{res.correct}/{res.total}）</>}
+            </p>
             <p className="mt-1 text-ink-2">{res.passed ? '很棒，本章知识点已掌握到可进入练习的程度。' : '还有薄弱点：回到上方知识点再看一遍，再试一次。'}</p>
           </div>
         ) : quiz && quiz.length > 0 ? (
@@ -779,13 +883,13 @@ function ChapterStudy({ userId, node, goal, onError, onDone }: {
                 <p className="mb-3 text-sm font-medium leading-relaxed">{i + 1}. {q.stem}</p>
                 <div className="space-y-2.5">
                   {q.options.map((o) => (
-                    <button key={o.key} onClick={() => setPicks({ ...picks, [q.id]: o.key })}
+                    <motion.button key={o.key} whileTap={{ scale: 0.99 }} onClick={() => setPicks({ ...picks, [q.id]: o.key })}
                       className={`relative w-full rounded-xl border px-4 py-2.5 text-left text-sm
                         ${picks[q.id] === o.key ? 'border-primary bg-primary-soft/50' : 'border-line bg-white hover:border-ink-3/40'}`}>
                       <span className={`mr-2 inline-grid size-5 items-center justify-center rounded-full border text-[11px] font-bold
                         ${picks[q.id] === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2'}`}>{o.key}</span>
                       {o.text}
-                    </button>
+                    </motion.button>
                   ))}
                 </div>
               </div>
@@ -936,9 +1040,12 @@ function Assessment({ userId, onDone, onError, onBack }: {
 
       {questions && (
         <div className="sticky bottom-4 mt-6 flex justify-center">
-          <button onClick={submit} disabled={submitting || answered < questions.length} className="btn btn-primary !px-8 !py-3.5 shadow-[var(--shadow-lg)]">
-            交卷并生成画像（{answered}/{questions.length}）
-          </button>
+          <div className="glass liquid relative flex items-center gap-3 rounded-full py-2 pl-5 pr-2">
+            <span className="text-xs font-medium text-ink-2">已答 {answered}/{questions.length}</span>
+            <button onClick={submit} disabled={submitting || answered < questions.length} className="btn btn-primary !px-7 !py-2.5 shadow-[var(--shadow-lg)]">
+              交卷并生成画像
+            </button>
+          </div>
         </div>
       )}
     </motion.div>
@@ -1005,6 +1112,7 @@ function Portrait({ result, onEnter }: { result: PortraitResult; onEnter: () => 
 
   const catTotal = judged.length
   const pendingNote = pending.length
+  const [showAllWrong, setShowAllWrong] = useState(false)
 
   return (
     <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="pt-4">
@@ -1123,7 +1231,7 @@ function Portrait({ result, onEnter }: { result: PortraitResult; onEnter: () => 
         {wrong === 0 && <p className="py-8 text-center text-sm text-ink-3">本轮没有错题——可以去题库挑几道更难的做做看。</p>}
         {wrong > 0 && (
           <div className="space-y-2.5">
-            {result.weak.map((w, i) => {
+            {(showAllWrong ? result.weak : result.weak.slice(0, 4)).map((w, i) => {
               const isPending = !w.category || w.category === '待诊断'
               return (
                 <div key={`${w.question_code}-${i}`} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-line px-3.5 py-3">
@@ -1137,6 +1245,13 @@ function Portrait({ result, onEnter }: { result: PortraitResult; onEnter: () => 
               )
             })}
           </div>
+        )}
+        {wrong > 4 && (
+          <button onClick={() => setShowAllWrong(!showAllWrong)}
+            className="btn mt-3 items-center gap-1 rounded-full border border-line px-4 py-1.5 text-xs text-ink-2 hover:border-primary hover:text-primary">
+            {showAllWrong ? '收起' : `展开全部 ${wrong} 道`}
+            <CaretDown size={13} weight="bold" className={`transition-transform duration-200 ${showAllWrong ? 'rotate-180' : ''}`} />
+          </button>
         )}
       </div>
 
@@ -1162,6 +1277,7 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
 
   const load = useCallback(() => {
     setRefreshing(true)
@@ -1180,14 +1296,32 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
 
   const hasTasks = plan.tasks.length > 0
   const doneTasks = plan.done_tasks ?? []
+  // 按 域×错因 分组（一组 = 一学一练配对）；分组头可折叠，长待办不再一屏到底
+  const groups: { key: string; domain_id: string; domain: string; items: PlanTask[] }[] = []
+  for (const t of plan.tasks) {
+    const key = `${t.domain_id}::${t.category ?? ''}`
+    let g = groups.find((x) => x.key === key)
+    if (!g) { g = { key, domain_id: t.domain_id, domain: t.domain, items: [] }; groups.push(g) }
+    g.items.push(t)
+  }
+  const allShut = groups.length > 0 && groups.every((g) => collapsed[g.key])
   return (
     <motion.div key="plan" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <p className="text-xs font-semibold tracking-[0.18em] text-gold">STEP 6 · 学习路径</p>
       <h2 className="display mt-2 text-[26px]">今日待办</h2>
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <p className="text-sm text-ink-2">{plan.note}</p>
+        <p className="text-sm leading-relaxed text-ink-2">{plan.note}</p>
+        {hasTasks && (
+          <button onClick={() => {
+              if (allShut) setCollapsed({})
+              else setCollapsed(Object.fromEntries(groups.map((g) => [g.key, true])))
+            }}
+            className="btn ml-auto items-center gap-1 rounded-full border border-line px-3 py-1 text-xs text-ink-3 hover:border-primary hover:text-primary">
+            {allShut ? '全部展开' : '全部收起'}
+          </button>
+        )}
         <button onClick={() => load()} disabled={refreshing}
-          className="btn ml-auto items-center gap-1 rounded-full border border-line px-3 py-1 text-xs text-ink-3 hover:border-primary hover:text-primary">
+          className={`btn items-center gap-1 rounded-full border border-line px-3 py-1 text-xs text-ink-3 hover:border-primary hover:text-primary ${hasTasks ? '' : 'ml-auto'}`}>
           <ClockCounterClockwise size={12} weight="bold" />{refreshing ? '刷新中…' : '刷新'}
         </button>
       </div>
@@ -1211,22 +1345,25 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
 
       {hasTasks && (
         <div className="relative mt-6 space-y-4 before:absolute before:left-[19px] before:top-3 before:bottom-3 before:w-px before:bg-line">
-          {/* 按域分组：每张卡片=「一域一个薄弱点 → 学(可选) → 练」的一一对应引导 */}
-          {(() => {
-            const groups: { domain_id: string; domain: string; items: PlanTask[] }[] = []
-            for (const t of plan.tasks) {
-              // 学与练按 域×错因 配对成一组；无错因的章级练习按域自成一组的练习
-              let target = groups.find((x) => x.domain_id === t.domain_id && (x.items[0]?.category ?? null) === (t.category ?? null))
-              if (!target) { target = { domain_id: t.domain_id, domain: t.domain, items: [] }; groups.push(target) }
-              target.items.push(t)
-            }
-            return groups.map((g, gi) => (
-              <motion.div key={g.domain_id + gi} initial={{ opacity: 0, x: -14 }}
+          {/* 按域分组：每组=「一域一个薄弱点 → 学 + 练」的一一配对引导，分组头点击折叠 */}
+          {groups.map((g, gi) => {
+            const shut = !!collapsed[g.key]
+            return (
+              <motion.div key={g.key} initial={{ opacity: 0, x: -14 }}
                 animate={{ opacity: 1, x: 0 }} transition={{ ...spring, delay: gi * 0.08 }}
                 className="relative">
-                <div className="z-10 mb-2 ml-9 flex items-center gap-2 text-[11px] font-medium text-ink-3">
+                <button onClick={() => setCollapsed({ ...collapsed, [g.key]: !shut })}
+                  aria-expanded={!shut} title={shut ? '展开该组' : '收起该组'}
+                  className="z-10 mb-2 ml-9 flex items-center gap-1.5 rounded-full py-0.5 pr-2 text-xs font-medium text-ink-2 transition-colors hover:text-primary">
                   <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />{g.domain} · 逐个突破
-                </div>
+                  <span className="rounded-full bg-paper-2 px-1.5 text-[10px] text-ink-3">{g.items.length} 项</span>
+                  <CaretDown size={13} weight="bold" className={`text-ink-3 transition-transform duration-200 ${shut ? '-rotate-90' : ''}`} />
+                </button>
+                <AnimatePresence initial={false}>
+                  {!shut && (
+                    <motion.div key="body" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+                      className="overflow-hidden">
                 <div className="space-y-3">
                   {g.items.map((t) => {
                     const isLearn = t.type === 'material'
@@ -1236,11 +1373,11 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
                           ${isLearn ? 'bg-gold-soft text-gold' : 'bg-primary-soft text-primary'}`}>
                           {isLearn ? '学' : '练'}
                         </span>
-                        <div className="card flex-1 p-4">
+                        <div className="spot-card flex-1 p-4">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div>
-                              <p className="text-sm font-medium">{t.title}</p>
-                              {isLearn && <p className="mt-0.5 text-[11px] text-gold">先学本域材料，再做随堂自测，最后练习</p>}
+                              <p className="text-[15px] font-medium leading-snug">{t.title}</p>
+                              {isLearn && <p className="mt-0.5 text-xs text-gold">先学本域材料，再做随堂自测，最后练习</p>}
                             </div>
                             <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium
                               ${t.state === '薄弱' ? 'bg-cat-red-soft text-cat-red' : t.state === '学习中' ? 'bg-gold-soft text-gold' : 'bg-primary-soft text-primary'}`}>
@@ -1248,7 +1385,7 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
                             </span>
                           </div>
                           {/* 明确引导：这一步该做什么、做完会怎样 */}
-                          {t.guide && <p className="mt-2 rounded-lg bg-paper px-3 py-2 text-[12px] leading-relaxed text-ink-2">{t.guide}</p>}
+                          {t.guide && <p className="mt-2 rounded-lg bg-paper px-3 py-2 text-[13px] leading-relaxed text-ink-2">{t.guide}</p>}
                           <div className="mt-2.5 flex flex-wrap items-center gap-2">
                             {isLearn ? (
                               <button onClick={() => onMaterial(t.domain_id)}
@@ -1263,16 +1400,19 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
                                 </button>
                               )
                             )}
-                            {t.goal && <span className="text-[11px] text-ink-3">达成：{t.goal}</span>}
+                            {t.goal && <span className="text-xs text-ink-3">达成：{t.goal}</span>}
                           </div>
                         </div>
                       </div>
                     )
                   })}
                 </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </motion.div>
-            ))
-          })()}
+            )
+          })}
         </div>
       )}
 
@@ -1296,7 +1436,184 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
           </div>
         </div>
       )}
-      <p className="mt-6 text-xs text-ink-3">演示账号 {userId.slice(0, 8)} · 路径按「先学后练」规则生成 · 本系统不提供用药建议</p>
+      <p className="mt-6 text-xs text-ink-3">演示账号 {userId.slice(0, 8)} · 路径按「一学一练」配对生成 · 本系统不提供用药建议</p>
+    </motion.div>
+  )
+}
+
+/* ---------- 问 AI（课程问答：BM25 教材切片 grounded，有引用才答） ---------- */
+
+type QAMsg = {
+  q: string; a: string
+  citations: { ref: string; chapter: string; book_page: number }[]
+  refused: boolean; provider: string; note?: string
+}
+
+const QA_EXAMPLES = [
+  '阿托品为什么会散瞳？',
+  '去甲肾上腺素和异丙肾上腺素有什么区别？',
+  '为什么闭角型青光眼禁用阿托品？',
+]
+
+function QAView({ userId, onError }: { userId: string; onError: (m: string) => void }) {
+  const [msgs, setMsgs] = useState<QAMsg[]>([])
+  const [input, setInput] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => { window.scrollTo(0, 0) }, [])
+
+  async function ask(text: string) {
+    const question = text.trim().slice(0, 500)
+    if (!question || busy) return
+    setBusy(true)
+    setInput('')
+    try {
+      const r = await api.qa(userId, question)
+      setMsgs((m) => [...m, {
+        q: question, a: r.answer, citations: r.citations ?? [],
+        refused: !!r.refused, provider: r.provider ?? '', note: r.note,
+      }])
+    } catch (e) { onError(String(e)) } finally { setBusy(false) }
+  }
+
+  return (
+    <motion.div key="qa" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <p className="text-xs font-semibold tracking-[0.18em] text-gold">课程问答 · 问AI</p>
+      <h2 className="display mt-2 text-[26px]">有不会的，直接问</h2>
+      <p className="mt-2 text-sm leading-relaxed text-ink-2">
+        只讲《药理学》课程内容：先检索教材切片，有依据才回答，并标出引用章节。
+        检索不到会直说不知道；用药决策类问题会拒绝（本系统不提供用药建议）。
+      </p>
+
+      {msgs.length === 0 && (
+        <div className="card mt-6 p-6">
+          <p className="mb-3 text-sm font-semibold">试试这样问</p>
+          <div className="flex flex-wrap gap-2">
+            {QA_EXAMPLES.map((ex) => (
+              <button key={ex} onClick={() => ask(ex)} disabled={busy}
+                className="btn rounded-full border border-line px-4 py-2 text-[13px] text-ink-2 hover:border-primary hover:text-primary">
+                {ex}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="mt-6 space-y-4">
+        {msgs.map((m, i) => (
+          <motion.div key={i} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={spring}>
+            <div className="ml-auto w-fit max-w-[90%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm text-white">
+              {m.q}
+            </div>
+            <div className={`card mt-2 p-5 ${m.refused ? 'border-gold/40' : ''}`}>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${m.provider === 'external_api' ? 'bg-primary-soft text-primary' : 'bg-paper-2 text-ink-3'}`}>
+                  {m.provider === 'external_api' ? '真模型回答' : m.provider === 'rule' || m.provider === 'retriever' ? '规则回复' : '演示模式'}
+                </span>
+                {m.refused && <span className="rounded-full bg-gold-soft px-2 py-0.5 text-[11px] font-medium text-gold">暂未回答</span>}
+              </div>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink">{m.a}</p>
+              {m.citations.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-1.5 border-t border-dashed border-line pt-3">
+                  {m.citations.map((c) => (
+                    <span key={c.ref} className="rounded-full bg-paper px-2.5 py-1 text-[11px] text-ink-2">
+                      {c.ref} {c.chapter} · p{c.book_page}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </motion.div>
+        ))}
+        {busy && <div className="space-y-3"><div className="skeleton h-14" /><div className="skeleton h-32" /></div>}
+      </div>
+
+      <div className="sticky bottom-4 mt-6">
+        <div className="glass liquid flex items-center gap-2 rounded-full py-2 pl-5 pr-2">
+          <input value={input} onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(input) } }}
+            placeholder="问一个药理学问题（500字内），回车发送"
+            maxLength={500} disabled={busy}
+            className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-3" />
+          <button onClick={() => ask(input)} disabled={busy || !input.trim()} className="btn btn-primary flex-none !px-5 !py-2">
+            {busy ? '思考中…' : '发送'}
+          </button>
+        </div>
+      </div>
+      <p className="mt-4 text-xs leading-relaxed text-ink-3">
+        回答由课程资料切片 grounded 生成，仅供学习参考，引用不保证完全正确；本系统不提供用药建议。对话按知情同意约定保存，可随时撤回并删除。
+      </p>
+    </motion.div>
+  )
+}
+
+/* ---------- 学习材料路由（一学一练：种子域走深图谱，章节走大纲学习） ---------- */
+
+/* 今日待办「进入学习 · 随堂自测」的统一入口：
+ * 先查 study-map 明细判来源 —— 种子域（顾问深图谱）渲染 MaterialView；
+ * 章节渲染 ChapterStudy（大纲知识点树 + 随堂自测 + 去本章练习），保证每个薄弱项
+ * 都有对等的「学」内容可点，不再出现只有练、没有学的分组。 */
+function MaterialRoute({ userId, domainId, goal, onPractice, onBack, onError }: {
+  userId: string; domainId: string; goal: string
+  onPractice: (q: Question) => void; onBack: () => void; onError: (m: string) => void
+}) {
+  type RouteDetail = {
+    source: 'seed' | 'syllabus' | 'none'; is_seed: boolean
+    domain_id: string; code: string; title: string; book_chapter_no: number | null
+    chapter?: { title: string } | null
+  }
+  const [detail, setDetail] = useState<RouteDetail | null>(null)
+  const [qBusy, setQBusy] = useState(false)
+
+  useEffect(() => {
+    setDetail(null)
+    window.scrollTo(0, 0)
+    api.studyDetail(userId, domainId).then(setDetail).catch((e) => onError(String(e)))
+  }, [userId, domainId])
+
+  async function goPractice() {
+    if (qBusy) return
+    setQBusy(true)
+    try {
+      const list: Question[] = await api.questions()
+      const q = list.find((x) => x.domain_id === domainId) ?? list[0]
+      if (q) onPractice(q)
+      else onError('该域暂无练习题，请从今日待办选择其他任务。')
+    } catch (e) { onError(String(e)) } finally { setQBusy(false) }
+  }
+
+  if (!detail) return <div className="space-y-3 pt-4">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-20" />)}</div>
+
+  if (detail.is_seed) {
+    return (
+      <MaterialView key={domainId} userId={userId} domainId={domainId} onError={onError}
+        onPractice={onPractice} onBack={onBack} />
+    )
+  }
+
+  const node: StudyNode = {
+    domain_id: detail.domain_id, code: detail.code, is_seed: false,
+    title: detail.chapter?.title ?? detail.title,
+    book_chapter_no: detail.book_chapter_no, source: detail.source,
+    q_published: 0, objective: '', studied: null, mastery: null,
+  }
+  return (
+    <motion.div key={`mr-${domainId}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="mb-4">
+        <button onClick={onBack}
+          className="btn items-center gap-1 rounded-full border border-line bg-white px-3 py-1.5 text-xs text-ink-2 hover:border-primary hover:text-primary">
+          <ArrowRight size={12} className="rotate-180" />返回今日待办
+        </button>
+      </div>
+      <ChapterStudy userId={userId} node={node} goal={goal} onError={onError} onDone={() => {}} />
+      <div className="mt-6 flex flex-wrap items-center gap-3">
+        <button onClick={goPractice} disabled={qBusy} className="btn btn-primary">
+          {qBusy ? '进入中…' : '学完了，去本章练习'}<ArrowRight size={15} weight="bold" />
+        </button>
+        <button onClick={onBack} className="btn rounded-full border border-line bg-white px-5 py-3 text-sm font-medium text-ink-2 hover:border-primary hover:text-primary">
+          返回今日待办
+        </button>
+      </div>
     </motion.div>
   )
 }
@@ -1437,8 +1754,10 @@ function MaterialView({ userId, domainId, onPractice, onBack, onError }: {
 
         {quizResult ? (
           <div className={`rounded-2xl border p-5 text-sm ${quizResult.passed ? 'border-ok/40 bg-[var(--color-ok-soft)]' : 'border-cat-red/40 bg-[var(--color-cat-red-soft)]'}`}>
-            <p className="font-semibold">
-              {quizResult.passed ? `✅ 自测通过（${quizResult.correct}/${quizResult.total}）` : `❌ 未通过（${quizResult.correct}/${quizResult.total}）`}
+            <p className="flex items-center gap-1.5 font-semibold">
+              {quizResult.passed
+                ? <><CheckCircle size={16} weight="fill" className="flex-none text-ok" />自测通过（{quizResult.correct}/{quizResult.total}）</>
+                : <><XCircle size={16} weight="fill" className="flex-none text-cat-red" />未通过（{quizResult.correct}/{quizResult.total}）</>}
             </p>
             <p className="mt-1 text-ink-2">
               {quizResult.passed
@@ -1460,13 +1779,13 @@ function MaterialView({ userId, domainId, onPractice, onBack, onError }: {
                 <p className="mb-3 text-sm font-medium leading-relaxed">{i + 1}. {q.stem}</p>
                 <div className="space-y-2.5">
                   {q.options.map((o) => (
-                    <button key={o.key} onClick={() => setQuizPicks({ ...quizPicks, [q.id]: o.key })}
+                    <motion.button key={o.key} whileTap={{ scale: 0.99 }} onClick={() => setQuizPicks({ ...quizPicks, [q.id]: o.key })}
                       className={`relative w-full rounded-xl border px-4 py-2.5 text-left text-sm
                         ${quizPicks[q.id] === o.key ? 'border-primary bg-primary-soft/50' : 'border-line bg-white hover:border-ink-3/40'}`}>
                       <span className={`mr-2 inline-grid size-5 items-center justify-center rounded-full border text-[11px] font-bold
                         ${quizPicks[q.id] === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2'}`}>{o.key}</span>
                       {o.text}
-                    </button>
+                    </motion.button>
                   ))}
                 </div>
               </div>
@@ -2091,6 +2410,22 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
 
   async function refresh(id: string) { pushDiagnosis(await api.diagnosis(id)) }
 
+  // 键盘答题：选项键直选 + 回车提交；输入框聚焦 / 已出结论时不劫持
+  const submitRef = useRef(submit)
+  submitRef.current = submit
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT')) return
+      if (diagnosis || tikuFeedback || submitting) return
+      const hit = question.options.find((o) => o.key.toUpperCase() === e.key.toUpperCase())
+      if (hit) { setSelected(hit.key); return }
+      if (e.key === 'Enter' && selected) { e.preventDefault(); submitRef.current() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+
   async function startTraining() {
     if (!diagnosis) return
     try {
@@ -2155,6 +2490,11 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
             ))}
           </div>
 
+          {!diagnosis && !tikuFeedback && question.options.every((o) => /^[A-Za-z0-9]$/.test(o.key)) && (
+            <p className="mt-4 text-xs text-ink-3">
+              键盘答题：按 {question.options.map((o) => o.key).join(' / ')} 快速选择，回车提交
+            </p>
+          )}
           <label className="mb-1.5 mt-7 block text-[13px] font-semibold text-ink-2">你的解题思路（选填）</label>
           <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} rows={2}
             placeholder="写下你的推理，例如它作用于哪类受体、产生了什么效应。写得越清楚，归因越准。"
