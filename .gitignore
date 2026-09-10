@@ -11,3 +11,6 @@ corpus/ocr_textbook9e/chapter_index.json
 session/
 # 浏览器走查截图（体积大、按需本地保留，不入版本控制）
 corpus/tools/shots/
+
+# 服务运行日志（uvicorn 等），仅本地保留
+*.log
