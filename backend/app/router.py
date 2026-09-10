@@ -1372,7 +1372,7 @@ def get_question(question_id: str, db: Session = Depends(get_db)):
 
 QA_QUESTION_MAXLEN = 500
 QA_SLICE_CHARS = 700   # 每条切片喂模型的上限（教材为页内窗口，题库为题干+答案+解析）
-QA_TOP_K = 4           # 双路混合召回条数（教材 + 题库各留至少 1 条）
+QA_TOP_K = 6           # 双路混合召回条数（对比/求同类问题需要多条切片才能归纳）
 QA_REFUSE_MEDICATION = ("该吃", "剂量", "怎么吃", "能吃吗", "能不能吃", "处方", "开药",
                         "替我开", "我孩子", "孕妇", "哺乳", "用药建议", "吃多少",
                         "停药", "换药", "几天能好", "要不要去医院")
