@@ -2,7 +2,8 @@
 
 双 Provider 设计（技术架构 v0.5 · 附录 D「当前实现状态」）：
 - MockProvider   （model_provider=mock）        ：确定性输出，保证单题闭环可测、评测可回放；作为评测基线。
-- ExternalApiProvider（model_provider=external_api）：接 DashScope OpenAI 兼容接口（Qwen），做"真推理归因"。
+- ExternalApiProvider（model_provider=external_api）：接 OpenAI 兼容接口做"真推理归因"
+  （2026-09-10 起默认 GLM-5.2 · 智谱 BigModel，见 settings.external_*）。
   归因真推理：题干 + 学生作答理由 + 所选错误项 + 正确答案 → LLM 输出四分类错因 + 证据等级 + 简短依据。
   （对应评审意见③：学生为什么错，由真模型给出可解释归因，而非 Mock 关键词匹配。）
 
@@ -25,8 +26,8 @@ from ..db import SessionLocal
 
 log = logging.getLogger("yaozhi.provider")
 
-# DashScope OpenAI 兼容端点（阿里云百炼）
-DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+# 兜底 base_url（仅当 external_/qwen_ 均为空时；正常应由 settings.external_base_url 覆盖）
+DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 
 # 受控四分类错因（与需求 FR-C3 / 引擎 GENERIC_CATS 一致，顺序即目录）
 CATEGORIES = ["审题与应用失误", "机制理解不足", "知识遗忘", "概念混淆"]
@@ -51,7 +52,7 @@ class TimeoutError(ProviderError):
 def _run_with_deadline(fn, timeout: float):
     """在独立线程里执行同步 LLM 调用，硬超时保护（W2 ④，2026-09-08）。
 
-    场景：DashScope 偶发挂起/慢响应时，即便 openai client 设了 timeout，
+    场景：外部接口偶发挂起/慢响应时，即便 openai client 设了 timeout，
     仍可能卡在传输层；这里再套一层墙钟硬超时，超时即抛 TimeoutError →
     调用方（诊断引擎）降级 Mock，保证演示永不因一次挂起而整个请求崩溃。
     注意：线程无法强制杀正在运行的 socket 阻塞，超时后主流程继续并抛错，
@@ -137,21 +138,26 @@ class MockProvider(_BaseProvider):
 
 
 class ExternalApiProvider(_BaseProvider):
-    """Qwen 真推理 Provider（DashScope OpenAI 兼容）。
+    """外部真推理 Provider（OpenAI 兼容接口；2026-09-10 起默认 GLM-5.2 · 智谱 BigModel）。
 
     归因：题干 + 选项 + 学生作答理由 + 所选/正确答案 → LLM JSON 输出受控四分类 + 证据等级 + 依据。
-    rerank / judge_open_answer 同步升级为真实模型，行为与 Mock 语义一致但基于语义判断。
+    rerank / judge_open_answer / answer_with_refs 同步升级为真实模型，行为与 Mock 语义一致。
+    配置优先级：显式传参 > external_*（YAOZHI_EXTERNAL_*）> 旧 qwen_*（YAOZHI_QWEN_*）。
     """
     name = "external_api"
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
                  model: str | None = None, timeout: int = 40, max_retries: int = 2):
         from ..config import settings
-        self.model = model or settings.qwen_model
-        self._api_key = api_key or settings.qwen_api_key or os.environ.get("YAOZHI_QWEN_API_KEY", "")
+        self.model = (model or settings.external_model
+                      or settings.qwen_model or "glm-5.2")
+        self._api_key = (api_key or settings.external_api_key
+                         or settings.qwen_api_key
+                         or os.environ.get("YAOZHI_QWEN_API_KEY", ""))
         if not self._api_key:
-            raise ProviderError("ExternalApiProvider 未配置 QWEN_API_KEY")
-        self._base_url = base_url or settings.qwen_base_url or DEFAULT_BASE_URL
+            raise ProviderError("ExternalApiProvider 未配置 API Key（YAOZHI_EXTERNAL_API_KEY）")
+        self._base_url = (base_url or settings.external_base_url
+                          or settings.qwen_base_url or DEFAULT_BASE_URL)
         # openai 客户端超时/重试（传输层）
         self._timeout = timeout or settings.model_call_timeout
         self._max_retries = max_retries or settings.model_max_retries
@@ -177,7 +183,7 @@ class ExternalApiProvider(_BaseProvider):
         self._fail_count += 1
         if self._fail_count >= self._cb_threshold:
             self._open_until = time.time() + self._cb_cooldown
-            log.warning("Qwen 连续失败 %s 次，熔断开启 %.0fs，期间降级 Mock",
+            log.warning("外部模型连续失败 %s 次，熔断开启 %.0fs，期间降级 Mock",
                         self._fail_count, self._cb_cooldown)
 
     def _get_client(self):
@@ -188,12 +194,14 @@ class ExternalApiProvider(_BaseProvider):
         return self._client
 
     # ---- LLM 原始调用（带硬超时 + 熔断，W2 ④）----
+    # 思考模型（GLM-5.2）说明：简单问题也要烧 ~700 reasoning tokens，max_tokens 预算
+    # 必须留出推理余量，否则 finish=length 导致空内容；默认 2000。
     def _chat_json(self, system: str, user: str, temperature: float = 0.0,
-                   max_tokens: int = 600) -> dict:
+                   max_tokens: int = 2000) -> dict:
         # 熔断门：处于冷却期 → 不开真请求，直接降级
         if self._circuit_open():
             raise CircuitOpenError(
-                f"Qwen 熔断冷却中（剩余 {max(0.0, self._open_until - time.time()):.0f}s）")
+                f"外部模型熔断冷却中（剩余 {max(0.0, self._open_until - time.time()):.0f}s）")
         try:
             def _call() -> str:
                 client = self._get_client()
@@ -227,10 +235,10 @@ class ExternalApiProvider(_BaseProvider):
             raise
         except json.JSONDecodeError as e:
             self._record_failure()
-            raise ProviderError(f"Qwen 返回非 JSON：{e}") from e
+            raise ProviderError(f"外部模型返回非 JSON：{e}") from e
         except Exception as e:  # openai APIError / APIConnectionError / Timeout
             self._record_failure()
-            raise ProviderError(f"Qwen 调用失败：{type(e).__name__}: {e}") from e
+            raise ProviderError(f"外部模型调用失败：{type(e).__name__}: {e}") from e
 
     # ---- 归因真推理（评审意见③核心） ----
     def attribute_misconception(self, *, question_stem: str, options_text: str,
@@ -278,6 +286,37 @@ class ExternalApiProvider(_BaseProvider):
         self.log_run("attribute_misconception", {"payload": {"stem_len": len(question_stem),
                                                              "has_rationale": bool(student_rationale)},
                                                  "result": out}, latency)
+        return out
+
+    # ---- 问 AI grounded 生成（课程问答：只依据给定切片回答，引用可验）----
+    def answer_with_refs(self, *, question: str, slices: str, n_refs: int) -> dict:
+        """slices: 已编号的资料串（如 "[1](第5章·p61) …… [2]……"）。
+        返回 {"answer": str(≤800字), "used_refs": [1-based int], "refused": bool}。
+        失败抛 ProviderError，调用方降级 Mock 摘录（问答链路永不因模型崩溃）。"""
+        system = (
+            "你是药知课程助教，只讲授《药理学》课程内容。规则："
+            "1) 只能依据【课程资料切片】回答，切片没有的信息必须说不知道，不得编造；"
+            "2) 先给一句话结论，再列 2-4 个要点，总长度≤300字，用自己的话转述，不要复制原文整句；"
+            "3) 每条结论后标注引用序号如[1][2]，序号只能来自给定切片编号；"
+            "4) 涉及具体患者用药决策（吃不吃、剂量、换药停药等）一律拒绝并提示咨询医师/药师；"
+            '5) 只输出 JSON：{"answer": "...", "used_refs": [1], "refused": false}。'
+            '若切片不足以回答，输出 {"answer": "课程资料里没有足够依据，建议换个问法或先学对应章节。", '
+            '"used_refs": [], "refused": true}。'
+        )
+        user = f"【学生问题】{question}\n【课程资料切片】\n{slices}\n只输出 JSON。"
+        t0 = time.time()
+        result = self._chat_json(system, user, temperature=0.2, max_tokens=2000)
+        latency = int((time.time() - t0) * 1000)
+        answer = str(result.get("answer") or "")[:800]
+        used = [i for i in (result.get("used_refs") or [])
+                if isinstance(i, int) and 1 <= i <= max(n_refs, 0)]
+        out = {"answer": answer, "used_refs": used, "refused": bool(result.get("refused"))}
+        self.log_run("qa_answer", {"payload": {"q_len": len(question),
+                                               "slices_len": len(slices),
+                                               "n_refs": n_refs},
+                                   "result": {"answer_len": len(answer),
+                                              "used_refs": used,
+                                              "refused": out["refused"]}}, latency)
         return out
 
     # ---- 候选重排（真模型：按语义贴合度在候选内排序）----
