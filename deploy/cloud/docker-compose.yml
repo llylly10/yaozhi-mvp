@@ -21,10 +21,12 @@ services:
       # env 前缀必须是 YAOZHI_（Settings.env_prefix），否则 config 回退默认库
       - YAOZHI_DATABASE_URL=sqlite:////srv/data/yaozhi_w1.db
     # 宿主机 DNS 走 systemd-resolved stub(127.0.0.53)，容器继承后无法解析外网域名
-    # （表现为调外部模型报 Connection error / name resolution failure）→ 显式指定公共 DNS
+    # （表现为调外部模型报 Connection error / name resolution failure）。
+    # 且公共 DNS(223.5.5.5/8.8.8.8) 从容器 bridge 网络 UDP:53 不可达，
+    # 必须用宿主机实际的阿里云内网 DNS（见 resolvectl status）。
     dns:
-      - 223.5.5.5
-      - 119.29.29.29
+      - 100.100.2.136
+      - 100.100.2.138
     volumes:
       - backend_data:/srv/data   # 仅持久化 SQLite，不遮蔽镜像 /srv 代码
     expose:
