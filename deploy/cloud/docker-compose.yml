@@ -20,6 +20,11 @@ services:
       # db 放独立数据目录 /srv/data（named volume 挂载点），避免 volume 遮蔽镜像代码
       # env 前缀必须是 YAOZHI_（Settings.env_prefix），否则 config 回退默认库
       - YAOZHI_DATABASE_URL=sqlite:////srv/data/yaozhi_w1.db
+    # 宿主机 DNS 走 systemd-resolved stub(127.0.0.53)，容器继承后无法解析外网域名
+    # （表现为调外部模型报 Connection error / name resolution failure）→ 显式指定公共 DNS
+    dns:
+      - 223.5.5.5
+      - 119.29.29.29
     volumes:
       - backend_data:/srv/data   # 仅持久化 SQLite，不遮蔽镜像 /srv 代码
     expose:
