@@ -83,6 +83,11 @@ class BM25:
     def empty(self) -> bool:
         return self._n == 0
 
+    @property
+    def n(self) -> int:
+        """文档数（供上层计算文档频率 / 稀有词）。"""
+        return self._n
+
     def _score(self, qf: Counter, doc: _Doc) -> float:
         s = 0.0
         for term, q_count in qf.items():

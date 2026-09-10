@@ -33,6 +33,10 @@ _item_init_attempted = False
 # 页内滑窗：教材单页常达千字且双栏串行，整页喂模型噪声大 → 取最佳窗口
 WINDOW_CHARS = 320
 WINDOW_STRIDE = 120
+# 教材路相关性门槛：只考核「稀有词」（在 <20% 教材页出现的问题 2-gram，如"阿司/匹林/头孢"），
+# 过滤掉"作用/药物/机制"这类通用词带来的伪相关页，名额让给题库路。
+TEXTBOOK_MIN_COVER = 0.50
+RARE_DF_RATIO = 0.20
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 
 
@@ -116,6 +120,31 @@ def _query_grams(query: str) -> set[str]:
     return {zh[i:i + 2] for i in range(len(zh) - 1)}
 
 
+def _rare_grams(idx: BM25, qg: set[str]) -> set[str]:
+    """问题 2-gram 中的稀有部分（文档频率 < RARE_DF_RATIO 的页才出现）。
+
+    "作用/药物/机制"这类高频 gram 几乎每页都有，拿它们算覆盖率会把无关页判成相关；
+    药名、专有机制词才是真正的区分信号。
+    """
+    if not qg or not idx.n:
+        return set()
+    # 注意：df=0 的 gram（语料里根本没有）要排除——它不是"稀有"，而是检索不到，
+    # 计入分母会无谓拉低覆盖率，把本该保留的页也过滤掉。
+    return {g for g in qg
+            if 0 < idx.df.get(g, 0) / idx.n < RARE_DF_RATIO}
+
+
+def coverage(text: str, qg: set[str]) -> float:
+    """文本覆盖了多少问题的中文 2-gram（0~1）。用于过滤教材路的"高频词误召回"。"""
+    if not qg or not text:
+        return 1.0
+    zh = "".join(_CJK.findall(text))
+    if len(zh) < 2:
+        return 0.0
+    grams = {zh[i:i + 2] for i in range(len(zh) - 1)}
+    return len(qg & grams) / len(qg)
+
+
 def best_window(text: str, query: str, size: int = WINDOW_CHARS) -> str:
     """在长文本里挑与问题最贴近的窗口（整页 OCR 双栏串行的降噪手段）。
 
@@ -141,12 +170,22 @@ def best_window(text: str, query: str, size: int = WINDOW_CHARS) -> str:
     return text[best_i:best_i + size]
 
 
-def _textbook_hits(query: str, k: int, ocr_dir: str | None) -> list[Hit]:
+def _textbook_hits(query: str, k: int, ocr_dir: str | None,
+                   min_cover: float = TEXTBOOK_MIN_COVER) -> list[Hit]:
+    """教材路召回。整页覆盖率低于门槛的页视为噪声丢弃（名额让给题库路）。
+
+    说明：只从 BM25 top-k 里筛，不做候选扩大——实测把候选放大到 3k 会让"刚好过门槛"
+    的弱相关页回填进来，反而稀释证据（见 2026-09-10 六问复评）。
+    """
     idx = _build_index(ocr_dir)
     if idx.empty:
         return []
+    qg = _query_grams(query)
+    key = _rare_grams(idx, qg) or qg   # 稀有词为空（问题过于通用）时退化为全量
     out = []
     for page, score in idx.search(query, k=k, min_score=0.0):
+        if coverage(page.text, key) < min_cover:
+            continue
         out.append(Hit(
             source="textbook",
             text=best_window(page.text, query),
@@ -156,6 +195,8 @@ def _textbook_hits(query: str, k: int, ocr_dir: str | None) -> list[Hit]:
             book_page=page.book_page,
             label=f"教材 {page.chapter} p{page.book_page}".replace("  ", " ").strip(),
         ))
+        if len(out) >= k:
+            break
     return out
 
 

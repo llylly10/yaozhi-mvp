@@ -90,7 +90,7 @@ def test_mixed_retrieval_finds_itembank_only_term(env):
 def test_mixed_covers_both_sources(env):
     """k=4 且两路都有命中时，结果必须同时包含教材与题库（跨源互补保底）。"""
     db, ocr = env
-    hits = retrieve_mixed("阿托品散瞳与毛果芸香碱缩瞳的区别", k=4, db=db, ocr_dir=ocr)
+    hits = retrieve_mixed("阿托品阻断胆碱受体为什么引起散瞳", k=4, db=db, ocr_dir=ocr)
     sources = {h.source for h in hits}
     assert "textbook" in sources, sources
     # 教材两页都命中时，题库路仍要被保底带入
@@ -122,6 +122,25 @@ def test_best_window_picks_relevant_span():
     win = best_window(text, "利多卡因酰胺类局麻药", size=200)
     assert "利多卡因" in win
     assert len(win) <= 200
+
+
+def test_noise_textbook_page_filtered(tmp_path):
+    """通用词（药物/作用/机制）在多数页都出现 → 不应把噪声页当证据；
+    只有含药名（稀有词）的那些页才算命中。"""
+    d = tmp_path / "ocr_noise"
+    d.mkdir()
+    for i in range(1, 10):
+        (d / f"body_{i:03d}.txt").write_text(
+            f"药物作用机制与临床应用第{i}节。药物可作用于受体，产生药理作用，"
+            f"临床用于治疗相关疾病。", encoding="utf-8")
+    (d / "body_010.txt").write_text(
+        "青霉素的作用机制是抑制细菌细胞壁合成，头孢菌素与之相同。", encoding="utf-8")
+    reset_for_tests()
+    hits = retrieve_mixed("青霉素的作用机制是什么", k=4, db=None, ocr_dir=str(d))
+    assert hits, "应召回到含药名的那一页"
+    pages = [h.page for h in hits if h.source == "textbook"]
+    assert pages and all(p == 10 for p in pages), f"噪声页应被过滤，实际={pages}"
+    reset_for_tests()
 
 
 def test_retrieve_top_k_backward_compatible(env):
