@@ -88,3 +88,33 @@ def test_graph_grounded_not_fabricated():
                   if x["source"]["type"] == "药物"} | {
         x["target"]["name"] for x in r["knowledge_relations"] if x["target"]["type"] == "药物"}
     assert seen_drugs <= known, f"图谱出现教材外药物节点 {seen_drugs - known}"
+
+
+def test_relations_carry_textbook_evidence():
+    """图谱边必须挂教材出处（2026-09-11）：此前 11 条边全是"裸断言"，无法回答凭什么成立。"""
+    rels = client.get(f"/materials/{domain_id()}").json()["knowledge_relations"]
+    with_ev = [r for r in rels if r.get("evidence")]
+    assert len(with_ev) >= 9, f"至少 9 条边应有教材证据，实际 {len(with_ev)}"
+    for r in with_ev:
+        ev = r["evidence"]
+        assert {"source", "book_page", "chapter", "text"} <= set(ev), \
+            f"证据字段不完整: {set(ev)}"
+        assert ev["book_page"] and ev["text"], "页码与原文摘录不能为空"
+
+
+def test_unverified_relation_keeps_evidence_null():
+    """教材里找不到依据的边必须保持 null——宁可显示"待补教材依据"，也不挂不相关页。"""
+    rels = client.get(f"/materials/{domain_id()}").json()["knowledge_relations"]
+    missing = {(r["source"]["name"], r["edge"], r["target"]["name"])
+               for r in rels if not r.get("evidence")}
+    # 阿托品→前列腺肥大、毛果芸香碱→哮喘：OCR 538 页中未检索到可靠表述
+    assert ("阿托品", "禁忌用于", "前列腺肥大") in missing or not missing, \
+        f"未核验边应保持 evidence=null，实际缺失集合 {missing}"
+
+
+def test_confusion_pairs_carry_evidence():
+    """混淆对辨析同样要挂出处（此前 confusion_pair_evidence 表 0 行，辨析内容无背书）。"""
+    pairs = client.get(f"/materials/{domain_id()}").json()["confusion_pairs"]
+    assert pairs, "种子域应有混淆对"
+    for p in pairs:
+        assert p.get("evidence"), f"混淆对 {p['drug_a']} vs {p['drug_b']} 缺教材证据"

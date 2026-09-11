@@ -300,12 +300,27 @@ def _apply_knowledge_edges(db):
         return 0
 
 
+def _apply_knowledge_evidence(db):
+    """图谱证据锚点幂等回填（2026-09-11）：给边/混淆对挂教材原文出处。
+
+    必须在 _apply_knowledge_edges 之后调用（边先存在）。未找到教材依据的边保持
+    evidence=None（见 seed_knowledge_evidence.UNVERIFIED），不拿不相关页凑数。
+    """
+    try:
+        from seed.seed_knowledge_evidence import apply_knowledge_evidence
+        return apply_knowledge_evidence(db)
+    except Exception as e:  # noqa: BLE001
+        print(f"[seed][WARN] 图谱证据锚点回填跳过: {type(e).__name__}: {e}")
+        return 0, 0
+
+
 def seed(db):
     """幂等：以 code 判重。全部内容 review_status=draft（待药理顾问审校）。"""
     _restore_course_assets(db)  # 课程资产（题库/大纲/章节映射）幂等恢复，reset-demo 后自动还原
     _apply_case_evidence(db)  # 给既有错因目录回填教材事实案例（幂等，新库/旧库都覆盖）
     # 结构化知识关系（FR-A2 图谱最小落地）：旧库（域已存在）在此补回；新库域稍后建，末段再补
     _apply_knowledge_edges(db)
+    _apply_knowledge_evidence(db)  # 图谱证据锚点（旧库：边已存在，此处补教材出处）
     if db.execute(select(DiagnosticDomain).where(DiagnosticDomain.code == DOMAIN["code"])).scalar_one_or_none():
         return
     domain = DiagnosticDomain(**DOMAIN, status="published")  # 域本身已定稿
@@ -364,6 +379,7 @@ def seed(db):
     audit(db, "seed", "content.seeded", domain.code, questions=len(QUESTIONS),
           followups=len(FOLLOWUPS), misconceptions=len(MISCONCEPTIONS))
     _apply_knowledge_edges(db)  # 新库域刚建，补 FR-A2 图谱边（幂等）
+    _apply_knowledge_evidence(db)  # 边已存在，补教材证据锚点（幂等）
     db.commit()
 
 

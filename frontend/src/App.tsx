@@ -710,7 +710,7 @@ function ChapterStudy({ userId, node, goal, onError, onDone }: {
   onDone: (passed: boolean, score: number, total: number) => void
 }) {
   type Detail =
-    | { source: 'seed'; graph: { chain: { level: number; title: string; summary: string }[]; relations: { source: { type: string; name: string }; edge: string; target: { type: string; name: string }; note?: string }[]; confusion: { drug_a: string; drug_b: string; distinction: string }[] } }
+    | { source: 'seed'; graph: { chain: { level: number; title: string; summary: string }[]; relations: { source: { type: string; name: string }; edge: string; target: { type: string; name: string }; note?: string; evidence?: KgEvidence; review_status?: string }[]; confusion: { drug_a: string; drug_b: string; distinction: string; evidence?: KgEvidence }[] } }
     | { source: 'syllabus'; chapter: { no: number; title: string; objectives: Record<string, string[]> | Record<string, string>; key_points: string[]; difficulties: string[]; sections: { title: string; points: string[] }[] } }
     | { source: 'none'; chapter: null }
   const [detail, setDetail] = useState<Detail | null>(null)
@@ -770,13 +770,16 @@ function ChapterStudy({ userId, node, goal, onError, onDone }: {
             </div>
             {detail.graph.relations.length > 0 && (
               <>
-                <p className="mb-3 mt-5 text-sm font-semibold">药效关系（源—边→目标）</p>
-                <div className="flex flex-wrap gap-2">
+                <p className="mb-3 mt-5 text-sm font-semibold">药效关系（源—边→目标，含教材出处）</p>
+                <div className="grid gap-2 sm:grid-cols-2">
                   {detail.graph.relations.map((r, i) => (
-                    <div key={i} className="flex items-center gap-1.5 rounded-lg border border-line-2 bg-white px-2 py-1 text-[11px]">
-                      <NodeChip type={r.source.type} name={r.source.name} />
-                      <span className="rounded-full bg-paper-2 px-1.5 py-0.5 font-semibold text-ink-3">{r.edge}</span>
-                      <NodeChip type={r.target.type} name={r.target.name} />
+                    <div key={i} className="rounded-lg border border-line-2 bg-white px-2.5 py-2">
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                        <NodeChip type={r.source.type} name={r.source.name} />
+                        <span className="rounded-full bg-paper-2 px-1.5 py-0.5 font-semibold text-ink-3">{r.edge}</span>
+                        <NodeChip type={r.target.type} name={r.target.name} />
+                      </div>
+                      <EvidenceNote ev={r.evidence ?? null} reviewStatus={r.review_status} />
                     </div>
                   ))}
                 </div>
@@ -1626,9 +1629,10 @@ function MaterialRoute({ userId, domainId, goal, onPractice, onBack, onError }: 
 type MaterialData = {
   domain: { code: string; name: string; chapter_ref: string }
   chain: { level: number; title: string; summary: string }[]
-  confusion_pairs: { drug_a: string; drug_b: string; distinction: string }[]
+  confusion_pairs: { drug_a: string; drug_b: string; distinction: string; evidence?: KgEvidence }[]
   knowledge_relations?: {
     source: { type: string; name: string }; edge: string; target: { type: string; name: string }; note: string
+    evidence?: KgEvidence; review_status?: string
   }[]
   evidence: { ref: string; text: string }[]
 }
@@ -1705,6 +1709,7 @@ function MaterialView({ userId, domainId, onPractice, onBack, onError }: {
                   <span className="text-gold">{p.drug_b}</span>
                 </p>
                 <p className="mt-1.5 text-[13px] leading-relaxed text-ink-2">{p.distinction}</p>
+                <EvidenceNote ev={p.evidence ?? null} reviewStatus="published" />
               </div>
             ))}
           </div>
@@ -1718,17 +1723,22 @@ function MaterialView({ userId, domainId, onPractice, onBack, onError }: {
             <h3 className="text-sm font-semibold"><span className="capsule gold" />药效关系图谱 · 错题背后的知识点关系</h3>
           </div>
           <p className="mb-4 text-xs text-ink-3">把这道域内的药物/靶点/效应/禁忌关系画成一条条边，帮你看清「错因」所在的一环。</p>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid gap-2.5 sm:grid-cols-2">
             {(mat.knowledge_relations ?? []).map((r, i) => (
-              <div key={i} className="flex items-center gap-2 rounded-xl border border-line-2 bg-white px-3 py-2">
-                <NodeChip type={r.source.type} name={r.source.name} />
-                <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] font-semibold text-ink-3">{r.edge}</span>
-                <NodeChip type={r.target.type} name={r.target.name} />
-                {r.note && <span className="text-[11px] text-ink-3">· {r.note}</span>}
+              <div key={i} className="rounded-xl border border-line-2 bg-white px-3 py-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <NodeChip type={r.source.type} name={r.source.name} />
+                  <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] font-semibold text-ink-3">{r.edge}</span>
+                  <NodeChip type={r.target.type} name={r.target.name} />
+                </div>
+                {r.note && <p className="mt-1 text-[11px] text-ink-3">{r.note}</p>}
+                <EvidenceNote ev={r.evidence ?? null} reviewStatus={r.review_status} />
               </div>
             ))}
           </div>
-          <p className="mt-3 text-[11px] text-ink-3">种子域关系由教材事实转写；全章节铺开前由药理顾问逐条审校后发布。</p>
+          <p className="mt-3 text-[11px] text-ink-3">
+            每条关系均标注教材出处页码；标注「待顾问审校」的条目尚未经药理顾问审校，全章节铺开后统一发布。
+          </p>
         </div>
       )}
 
@@ -1839,8 +1849,8 @@ type RecallData = {
   misconception: { code: string; name: string; category: string } | null
   case_evidence: { scenario: string; lesson: string; source: string } | null
   evidence_level: string | null
-  relations: { source: { type: string; name: string }; edge: string; target: { type: string; name: string }; note?: string }[]
-  confusion_pairs: { drug_a: string; drug_b: string; distinction: string }[]
+  relations: { source: { type: string; name: string }; edge: string; target: { type: string; name: string }; note?: string; evidence?: KgEvidence; review_status?: string }[]
+  confusion_pairs: { drug_a: string; drug_b: string; distinction: string; evidence?: KgEvidence }[]
   textbook_anchors: { chapter: string; page: number; book_page: number; score: number; text: string; source_ref: string }[]
   trained: boolean
 }
@@ -1962,7 +1972,12 @@ function Profile({ userId, onGoTodo }: { userId: string; onGoTodo: () => void })
           <p className="mb-3 text-xs text-ink-3">错题集中在哪里、是哪种错因 · 数字 = 累计答错题数</p>
 
           {cells.length === 0 && (
-            <p className="py-10 text-center text-sm text-ink-3">还没有错题——去「今日待办」练几道题后，这里会标出你最该补的薄弱点。</p>
+            <div className="flex flex-col items-center gap-3 py-8 text-center">
+              <p className="text-sm text-ink-2">还没有错题记录，这里会标出你最该补的薄弱点</p>
+              <button onClick={onGoTodo} className="btn btn-primary !px-5 !py-2 text-[13px]">
+                去今日待办练几道<ArrowRight size={13} weight="bold" />
+              </button>
+            </div>
           )}
 
           {/* A. 数据稀疏：优先给「该补哪里」的清单（demo 现态） */}
@@ -2041,7 +2056,7 @@ function Profile({ userId, onGoTodo }: { userId: string; onGoTodo: () => void })
           </p>
           {arch.domain_stats.length === 0 && <p className="py-10 text-center text-sm text-ink-3">还没有作答记录。</p>}
           {arch.domain_stats.length > 0 && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               {arch.domain_stats.map((d) => {
                 const reliable = d.attempts >= 5
                 const low = reliable && d.rate < 0.7
@@ -2066,12 +2081,12 @@ function Profile({ userId, onGoTodo }: { userId: string; onGoTodo: () => void })
                         style={{ width: `${pct}%`,
                           background: !reliable ? 'var(--color-ink-3)' : low ? 'var(--color-cat-red)' : 'var(--color-ok)' }} />
                     </div>
-                    <p className="mt-1 text-[10px] text-ink-3">
-                      {!reliable ? `只答了 ${d.attempts} 题，再多练几题才知道这域的真实水平` : low ? '低于达标线 → 今日待办会带你补这块' : '已达 70% 达标线，保持即可'}
-                    </p>
                   </div>
                 )
               })}
+              <p className="border-t border-dashed border-line pt-2 text-[11px] leading-relaxed text-ink-3">
+                标灰表示该域答题不足 5 题，正确率仅供参考——多练几题后画像才准；低于 70% 的域今日待办会自动带你补。
+              </p>
             </div>
           )}
         </div>
@@ -2206,52 +2221,97 @@ function WrongBook({ userId, onGoTodo }: { userId: string; onGoTodo: () => void 
             </div>
           )}
           {wrong && wrong.length > 0 && (
-            <div className="space-y-3">
-              {wrong.map((w) => (
-                <div key={w.attempt_id} className="card p-5">
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <span className="text-xs text-ink-3">{w.question_code}</span>
-                    {w.misconception ? <CategoryTag category={w.misconception.category} /> : null}
-                    {w.evidence_level && (
-                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${w.evidence_level === '低' ? 'bg-gold-soft text-gold' : 'bg-primary-soft text-primary'}`}>
-                        证据 · {w.evidence_level}
-                      </span>
-                    )}
-                    <span className="ml-auto text-xs text-ink-3">选 {w.selected} · 正确 {w.answer}</span>
-                  </div>
-                  <p className="mt-2.5 text-sm leading-relaxed">{w.stem}</p>
-                  {w.misconception && <p className="mt-2 text-xs text-ink-2">归因：{w.misconception.name}</p>}
-                  {w.case_evidence && (
-                    <div className="mt-3 rounded-xl border border-line-2 bg-paper px-4 py-3">
-                      <p className="flex items-center gap-1.5 text-[11px] font-semibold text-gold">
-                        <Pill size={12} weight="fill" />临床案例 · 助记
-                      </p>
-                      <p className="mt-1 text-[13px] leading-relaxed text-ink-2">{w.case_evidence.scenario}</p>
-                      <p className="mt-1 text-[13px] font-medium leading-relaxed text-ink">要点：{w.case_evidence.lesson}</p>
-                      <p className="mt-1.5 text-[11px] text-ink-3">来源：{w.case_evidence.source}</p>
-                    </div>
-                  )}
-                  <button onClick={() => toggleRecall(w.attempt_id)}
-                    className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-line px-3.5 py-1.5 text-xs text-ink-3 transition hover:border-primary hover:text-primary">
-                    <span aria-hidden>◎</span>
-                    {openId === w.attempt_id ? '收起错因图谱 · 记忆助记' : '看这张错题的图谱 & 临床助记'}
-                  </button>
-                  {openId === w.attempt_id && (
-                    <div className="mt-3 rounded-xl border border-primary/20 bg-primary-soft/40 px-4 py-4">
-                      {loadingRecall === w.attempt_id
-                        ? <p className="text-xs text-ink-3">正在生成错题记忆卡…</p>
-                        : !recallMap[w.attempt_id]
-                          ? <p className="text-xs text-ink-3">记忆卡加载失败，请稍后再试。</p>
-                          : <RecallCardView data={recallMap[w.attempt_id]!} />}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
+            <WrongGroups wrong={wrong} openId={openId}
+              loadingRecall={loadingRecall} recallMap={recallMap} onToggle={toggleRecall} />
           )}
         </section>
       </div>
     </motion.div>
+  )
+}
+
+/* 错题分组（按错因归档：同类错因归一组，可折叠；待归因沉底） */
+function WrongGroups({ wrong, openId, loadingRecall, recallMap, onToggle }: {
+  wrong: WrongRow[]; openId: string | null; loadingRecall: string | null
+  recallMap: Record<string, RecallData | null>; onToggle: (id: string) => void
+}) {
+  const groups: { key: string; label: string | null; items: WrongRow[] }[] = []
+  for (const w of wrong) {
+    const key = w.misconception?.category ?? '待归因'
+    let g = groups.find((x) => x.key === key)
+    if (!g) { g = { key, label: w.misconception?.category ?? null, items: [] }; groups.push(g) }
+    g.items.push(w)
+  }
+  groups.sort((a, b) => (a.key === '待归因' ? 1 : 0) - (b.key === '待归因' ? 1 : 0))
+  const [shut, setShut] = useState<Record<string, boolean>>({})
+  return (
+    <div className="space-y-6">
+      {groups.map((g) => {
+        const closed = !!shut[g.key]
+        return (
+          <section key={g.key}>
+            <button onClick={() => setShut({ ...shut, [g.key]: !closed })} aria-expanded={!closed}
+              title={closed ? '展开该类' : '收起该类'}
+              className="mb-3 flex items-center gap-2 rounded-full py-0.5 pr-2 transition-opacity hover:opacity-80">
+              {g.label
+                ? <CategoryTag category={g.label} />
+                : <span className="rounded-full bg-line-2 px-3.5 py-1.5 text-xs font-semibold text-ink-3">待归因</span>}
+              <span className="text-xs text-ink-3">{g.items.length} 道</span>
+              <CaretDown size={13} weight="bold" className={`text-ink-3 transition-transform duration-200 ${closed ? '-rotate-90' : ''}`} />
+            </button>
+            <AnimatePresence initial={false}>
+              {!closed && (
+                <motion.div key="body" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+                  className="overflow-hidden">
+                  <div className="space-y-3">
+                    {g.items.map((w) => (
+                      <div key={w.attempt_id} className="card p-5">
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <span className="text-xs text-ink-3">{w.question_code}</span>
+                          {w.evidence_level && (
+                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${w.evidence_level === '低' ? 'bg-gold-soft text-gold' : 'bg-primary-soft text-primary'}`}>
+                              证据 · {w.evidence_level}
+                            </span>
+                          )}
+                          <span className="ml-auto text-xs text-ink-3">选 {w.selected} · 正确 {w.answer}</span>
+                        </div>
+                        <p className="mt-2.5 text-[15px] font-medium leading-relaxed">{w.stem}</p>
+                        {w.misconception && <p className="mt-1.5 text-xs text-ink-2">归因：{w.misconception.name}</p>}
+                        {w.case_evidence && (
+                          <div className="mt-3 rounded-xl border border-line-2 bg-paper px-4 py-3">
+                            <p className="flex items-center gap-1.5 text-[11px] font-semibold text-gold">
+                              <Pill size={12} weight="fill" />临床案例 · 助记
+                            </p>
+                            <p className="mt-1 text-[13px] leading-relaxed text-ink-2">{w.case_evidence.scenario}</p>
+                            <p className="mt-1 text-[13px] font-medium leading-relaxed text-ink">要点：{w.case_evidence.lesson}</p>
+                            <p className="mt-1.5 text-[11px] text-ink-3">来源：{w.case_evidence.source}</p>
+                          </div>
+                        )}
+                        <button onClick={() => onToggle(w.attempt_id)}
+                          className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-line px-3.5 py-1.5 text-xs text-ink-3 transition hover:border-primary hover:text-primary">
+                          <BookOpenText size={13} />
+                          {openId === w.attempt_id ? '收起错因图谱 · 记忆助记' : '看这张错题的图谱 & 临床助记'}
+                        </button>
+                        {openId === w.attempt_id && (
+                          <div className="mt-3 rounded-xl border border-primary/20 bg-primary-soft/40 px-4 py-4">
+                            {loadingRecall === w.attempt_id
+                              ? <p className="text-xs text-ink-3">正在生成错题记忆卡…</p>
+                              : !recallMap[w.attempt_id]
+                                ? <p className="text-xs text-ink-3">记忆卡加载失败，请稍后再试。</p>
+                                : <RecallCardView data={recallMap[w.attempt_id]!} />}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </section>
+        )
+      })}
+    </div>
   )
 }
 
@@ -2290,6 +2350,35 @@ function NodeChip({ type, name }: { type: string; name: string }) {
   )
 }
 
+/* 图谱证据锚点（2026-09-11）：每条边/每组辨析挂一条教材原文出处；无依据时如实标注，不伪造出处 */
+type KgEvidence = { source?: string; book_page?: number; chapter?: string; text?: string } | null
+
+function EvidenceNote({ ev, reviewStatus }: { ev: KgEvidence; reviewStatus?: string }) {
+  const reviewed = reviewStatus === 'published'
+  if (!ev || !ev.text) {
+    return (
+      <p className="mt-1 text-[11px] leading-relaxed text-ink-3">
+        <span className="mr-1 rounded bg-paper-2 px-1.5 py-0.5 text-[10px] font-semibold text-ink-3">无教材依据</span>
+        该条关系暂未在教材原文中检索到直接表述，保留待药理顾问核实后补充。
+      </p>
+    )
+  }
+  return (
+    <div className="mt-1 text-[11px] leading-relaxed">
+      <p className="flex flex-wrap items-center gap-1 text-ink-3">
+        <span className="rounded bg-[var(--color-gold-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-gold">
+          教材 P{ev.book_page ?? '—'}
+        </span>
+        {ev.chapter && <span>{ev.chapter}</span>}
+        {!reviewed && (
+          <span className="rounded bg-paper-2 px-1.5 py-0.5 text-[10px] font-semibold text-ink-3">待顾问审校</span>
+        )}
+      </p>
+      <p className="mt-0.5 text-ink-2">「{ev.text}」</p>
+    </div>
+  )
+}
+
 /* 错题记忆卡：图谱 + 临床/教材助记（wrong/{id}/recall 数据） */
 function RecallCardView({ data }: { data: RecallData }) {
   const rels = data.relations ?? []
@@ -2310,12 +2399,15 @@ function RecallCardView({ data }: { data: RecallData }) {
           <span className="capsule" />错因背后的知识关系图谱{!hasGraph && '（该章关系表待扩充）'}
         </p>
         {hasGraph ? (
-          <div className="mt-2.5 space-y-1.5">
+          <div className="mt-2.5 space-y-2">
             {rels.map((r, i) => (
-              <div key={i} className="flex flex-wrap items-center gap-1.5">
-                <NodeChip type={r.source.type} name={r.source.name} />
-                <span className="text-[11px] font-medium text-primary">─{r.edge}→</span>
-                <NodeChip type={r.target.type} name={r.target.name} />
+              <div key={i} className="rounded-lg bg-paper/60 px-2.5 py-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <NodeChip type={r.source.type} name={r.source.name} />
+                  <span className="text-[11px] font-medium text-primary">─{r.edge}→</span>
+                  <NodeChip type={r.target.type} name={r.target.name} />
+                </div>
+                <EvidenceNote ev={r.evidence ?? null} reviewStatus={r.review_status} />
               </div>
             ))}
           </div>
@@ -2333,6 +2425,7 @@ function RecallCardView({ data }: { data: RecallData }) {
               <div key={i} className="rounded-lg bg-paper px-3 py-2 text-[12px] text-ink-2">
                 <span className="font-semibold text-ink">{p.drug_a}</span> × <span className="font-semibold text-ink">{p.drug_b}</span>
                 <p className="mt-0.5 leading-relaxed">{p.distinction}</p>
+                <EvidenceNote ev={p.evidence ?? null} reviewStatus="published" />
               </div>
             ))}
           </div>

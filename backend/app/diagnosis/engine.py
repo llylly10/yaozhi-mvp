@@ -11,9 +11,10 @@ from sqlalchemy.orm import Session
 from ..llm.provider import get_provider
 from ..misconceptions.service import route_intervention
 from ..models import (
-    Attempt, ChainNode, DiagnosisCandidate, DiagnosisEvidence, DiagnosisSession,
-    DiagnosticDomain, FollowupTurn, FollowupNode, Misconception, MisconceptionFollowup,
-    Question, QuestionEvidence, TrainingSession, TrainingSessionQuestion, audit,
+    Attempt, ChainNode, ConfusionPair, DiagnosisCandidate, DiagnosisEvidence,
+    DiagnosisSession, DiagnosticDomain, FollowupTurn, FollowupNode, Misconception,
+    MisconceptionFollowup, Question, QuestionEvidence, TrainingSession,
+    TrainingSessionQuestion, audit,
 )
 from ..mastery import engine as mastery
 MAX_FOLLOWUP_ROUNDS = 3
@@ -507,7 +508,18 @@ def start_training(db: Session, session: DiagnosisSession):
     else:
         sig = [q for q in pool
                if misconception.code in [(s or {}).get("misconception") for s in (q.distractor_signals or {}).values()]]
-        if mode == "情境拆解":
+        if mode == "混淆对变式":
+            # 图谱驱动选题（2026-09-11）：此前"概念混淆"类错因的变式训练完全没用上
+            # 混淆对（混淆对只在"记忆卡"形态被消费），题库物化题又无 distractor_signals，
+            # 结果 ordered 为空 → 退化成随机抽 3 道同域题，与"围绕易混点训练"的意图不符。
+            # 改为：优先选题干涉及本域易混药对的题，让图谱真正参与训练决策。
+            pairs = db.execute(select(ConfusionPair).where(
+                ConfusionPair.domain_id == question.domain_id)).scalars().all()
+            drugs = {d for p in pairs for d in (p.drug_a, p.drug_b) if d}
+            conf = [q for q in pool
+                    if any(d in (q.stem or "") for d in drugs)] if drugs else []
+            ordered = conf + [q for q in sig if q not in conf]
+        elif mode == "情境拆解":
             ctx = [q for q in pool if q.condition_type != "normal"]
             ordered = ([q for q in sig if q in ctx]
                        + [q for q in ctx if q not in sig]

@@ -91,6 +91,9 @@ class ConfusionPair(Base):
     drug_b: Mapped[str] = mapped_column(String(64))
     distinction_text: Mapped[str] = mapped_column(Text)
     variant_template: Mapped[str] = mapped_column(_enum("variant_template", "正向", "反向", "情境"), default="正向")
+    # 教材证据锚点（2026-09-11）：每条辨析挂 1 条教材原文出处，避免"辨析内容无出处"。
+    # 结构同 Misconception.case_evidence：{source, book_page, chapter, text}
+    evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class Misconception(Base):
@@ -143,6 +146,10 @@ class KnowledgeRelation(Base):
     edge: Mapped[str] = mapped_column(String(32))        # 作用于/表现为/禁忌用于/适应证/与…相互作用/属于
     target: Mapped[dict] = mapped_column(JSON)          # {"type": …, "name": …}
     note: Mapped[str] = mapped_column(String(256), default="")
+    # 教材证据锚点（2026-09-11）：每条边挂 1 条教材原文出处，让"关系"可回溯而非凭空断言。
+    # 由 seed_knowledge_evidence 从人卫 9e OCR 检索 + 人工核验后写入；结构：
+    # {"source": 来源署名, "book_page": 教材页码, "chapter": 章节, "text": 原文摘录}
+    evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     author: Mapped[str] = mapped_column(String(64), default="待药理顾问确认")
     review_status: Mapped[str] = mapped_column(_enum("asset_status", "draft", "in_review", "published", "deprecated"),
                                                default="draft")  # 试用前置 published

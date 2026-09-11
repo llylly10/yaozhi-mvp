@@ -266,6 +266,21 @@ def wrong_book(user_id: str, db: Session = Depends(get_db)):
     return out
 
 
+def _filter_relations_by_question(rels, text: str):
+    """按错题文本过滤图谱边：命中源/目标实体名的边优先返回。
+
+    此前诊断卡把本域全部边无条件返回（种子域即全部 11 条），与本次错题无关的边
+    也一并展示 —— 名为"错题图谱"，实为"章节图谱全量"。改为按题干/选项文本过滤，
+    无命中时回退全量，避免过滤后变空导致前端失去该模块。
+    """
+    if not text or not rels:
+        return list(rels)
+    hits = [r for r in rels
+            if ((r.source or {}).get("name") and (r.source["name"] in text))
+            or ((r.target or {}).get("name") and (r.target["name"] in text))]
+    return hits or list(rels)
+
+
 @router.get("/wrong/{attempt_id}/recall")
 def wrong_recall(attempt_id: str, db: Session = Depends(get_db)):
     """错题记忆卡：对单条错题聚合「图谱 + 临床/教材助记 + 归因」，供错题本点开展示。
@@ -305,12 +320,18 @@ def wrong_recall(attempt_id: str, db: Session = Depends(get_db)):
         if domain:
             rels = db.execute(select(KnowledgeRelation).where(
                 KnowledgeRelation.domain_id == domain.id)).scalars().all()
+            # 图谱驱动（2026-09-11）：只留与本题相关的边，并带出教材出处与审校状态
+            qtext = " ".join([q.stem or ""] + [
+                (o.get("text") or "") for o in (q.options or []) if isinstance(o, dict)])
+            rels = _filter_relations_by_question(rels, qtext)
             relations = [{"source": r.source, "edge": r.edge, "target": r.target,
-                          "note": r.note} for r in rels]
+                          "note": r.note, "evidence": r.evidence,
+                          "review_status": r.review_status} for r in rels]
             cps = db.execute(select(ConfusionPair).where(
                 ConfusionPair.domain_id == domain.id)).scalars().all()
             pairs = [{"drug_a": p.drug_a, "drug_b": p.drug_b,
-                      "distinction": p.distinction_text} for p in cps]
+                      "distinction": p.distinction_text,
+                      "evidence": p.evidence} for p in cps]
     card["relations"] = relations
     card["confusion_pairs"] = pairs
 
@@ -733,9 +754,11 @@ def study_detail(user_id: str, domain_id: str, db: Session = Depends(get_db)):
                 "graph": {"chain": [{"level": c.level, "title": c.title, "summary": c.summary}
                                     for c in chain],
                           "relations": [{"source": r.source, "edge": r.edge, "target": r.target,
-                                         "note": r.note} for r in rels],
+                                         "note": r.note, "evidence": r.evidence,
+                                         "review_status": r.review_status} for r in rels],
                           "confusion": [{"drug_a": p.drug_a, "drug_b": p.drug_b,
-                                         "distinction": p.distinction_text} for p in pairs]}}
+                                         "distinction": p.distinction_text,
+                                         "evidence": p.evidence} for p in pairs]}}
     sy = db.execute(select(SyllabusChapter).where(
         SyllabusChapter.book_chapter_no == no)).scalar_one_or_none() if no else None
     if sy is not None:
@@ -833,9 +856,12 @@ def get_materials(domain_id: str, db: Session = Depends(get_db)):
     return {"domain": {"code": domain.code, "name": domain.name, "chapter_ref": domain.chapter_ref},
             "chain": [{"level": c.level, "title": c.title, "summary": c.summary} for c in chain],
             "confusion_pairs": [{"drug_a": p.drug_a, "drug_b": p.drug_b,
-                                 "distinction": p.distinction_text} for p in pairs],
+                                 "distinction": p.distinction_text,
+                                 "evidence": p.evidence} for p in pairs],
+            # evidence=教材证据锚点（2026-09-11）：无教材依据时为 null，前端显示"待补教材依据"
             "knowledge_relations": [{"source": r.source, "edge": r.edge, "target": r.target,
-                                     "note": r.note} for r in rels],
+                                     "note": r.note, "evidence": r.evidence,
+                                     "review_status": r.review_status} for r in rels],
             "evidence": evidence[:6]}
 
 
@@ -1228,6 +1254,14 @@ def get_training(session_id: str, db: Session = Depends(get_db)):
         out["cards"] = [{"front": f"{c.title}（L{c.level}）", "back": c.summary} for c in chain] + \
                        [{"front": f"{p.drug_a} 与 {p.drug_b} 的区别？", "back": p.distinction_text} for p in pairs]
         out["questions"] = []
+    # 混淆对变式：图谱驱动（2026-09-11）。训练题已由 engine 按本域易混药对优先选取，
+    # 这里补出辨析卡 + 教材出处，先看清"两者区别在哪"再做变式题。
+    if mode == "混淆对变式":
+        pairs = db.execute(select(ConfusionPair).where(
+            ConfusionPair.domain_id == m.domain_id)).scalars().all()
+        out["confusion_cards"] = [{"drug_a": p.drug_a, "drug_b": p.drug_b,
+                                   "distinction": p.distinction_text,
+                                   "evidence": p.evidence} for p in pairs]
     # 断环重讲形态：断环环节的讲解
     if mode == "断环重讲":
         node = db.execute(select(ChainNode).where(

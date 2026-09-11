@@ -88,6 +88,30 @@ def test_confusion_pair_variant_mode_returns_three_questions():
     assert len(t["questions"]) == 3
 
 
+def test_confusion_variant_is_driven_by_graph_pairs():
+    """概念混淆类训练必须真的用上混淆对（2026-09-11）。
+
+    此前"混淆对变式"形态完全没消费 ConfusionPair——只在"记忆卡"形态用过，
+    而题库物化题又无 distractor_signals，导致 ordered 为空、退化成随机抽 3 道
+    同域题，与"围绕易混点做变式"的产品意图不符。本测试锁住两点：
+      1. 接口返回辨析卡（学生先看清区别再做题）
+      2. 选题优先围绕易混药对，而不是随机同域题
+    """
+    t = training_for("Q-ANS-01", "A")
+    assert t["mode"] == "混淆对变式"
+    cards = t.get("confusion_cards")
+    assert cards, "混淆对变式形态必须返回辨析卡"
+    assert all({"drug_a", "drug_b", "distinction"} <= set(c) for c in cards)
+
+    drugs = {d for c in cards for d in (c["drug_a"], c["drug_b"]) if d}
+    stems = [q["stem"] for q in t["questions"]]
+    pool_has_pair_question = any(any(d in s for d in drugs) for s in stems)
+    # 池里若存在涉及易混药对的题，就必须被排在最前；池里一本都没有时才允许回退
+    if pool_has_pair_question:
+        assert any(d in stems[0] for d in drugs), \
+            f"首题未围绕易混药对 {drugs}，实际首题：{stems[0][:40]}"
+
+
 def test_chain_reteach_mode_returns_chain_node_summary():
     """机制理解类 → 先给断环环节的讲解文本，再练变式。"""
     t = training_for("Q-ANS-01", "D")  # MIS-ANS-03 机制理解不足

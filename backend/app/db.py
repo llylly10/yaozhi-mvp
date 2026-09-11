@@ -58,3 +58,12 @@ def migrate():
     if "case_evidence" not in existing_m:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE misconceptions ADD COLUMN case_evidence TEXT"))
+    # 图谱证据锚点列（2026-09-11，旧库补列）：知识关系边 + 混淆对辨析的教材出处
+    for tbl in ("knowledge_relations", "confusion_pairs"):
+        try:
+            existing_g = {c["name"] for c in inspect(engine).get_columns(tbl)}
+        except Exception:  # noqa: BLE001 表尚不存在（全新库）时跳过，create_all 会带出
+            continue
+        if "evidence" not in existing_g:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN evidence TEXT"))
