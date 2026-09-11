@@ -13,31 +13,35 @@ $Backend = Join-Path $Root "backend"
 $Frontend = Join-Path $Root "frontend"
 # 解析后端 python：优先 backend/.venv；缺失时尝试自动建 venv 并装依赖；
 # 再否则回退到 PATH 中能 import fastapi 的 python（依赖已预装的场景）。
-$VenvPy = Join-Path $Root "backend\.venv\Scripts\python.exe"
+$VenvPy1 = Join-Path $Root ".venv\Scripts\python.exe"
+$VenvPy2 = Join-Path $Root "backend\.venv\Scripts\python.exe"
 $Py = $null
-if (Test-Path $VenvPy) {
-    $Py = $VenvPy
+if (Test-Path $VenvPy1) {
+    $Py = $VenvPy1
+} elseif (Test-Path $VenvPy2) {
+    $Py = $VenvPy2
 } else {
     try {
-        Write-Host "未检测到 backend/.venv，尝试自动创建虚拟环境并安装依赖..."
+        Write-Host "未检测到 .venv，尝试自动创建虚拟环境并安装依赖..."
         & python -m venv (Join-Path $Root "backend\.venv") 2>&1 | Out-Null
-        & $VenvPy -m pip install -q -r (Join-Path $Backend "requirements.txt") 2>&1 | Out-Null
+        & $VenvPy2 -m pip install -q -r (Join-Path $Backend "requirements.txt") 2>&1 | Out-Null
     } catch { Write-Warning "自动创建 venv 失败：$_" }
-    if (Test-Path $VenvPy) { $Py = $VenvPy }
+    if (Test-Path $VenvPy2) { $Py = $VenvPy2 }
 }
 if (-not $Py) {
     try { $Py = (python -c "import sys,fastapi; print(sys.executable)" 2>$null) } catch { $Py = $null }
     if (-not $Py) { $Py = "python" }
-    Write-Warning "未使用 backend/.venv，回退到：$Py（请确保已 pip install -r backend/requirements.txt）"
+    Write-Warning "未使用虚拟环境，回退到：$Py（请确保已 pip install -r backend/requirements.txt）"
 }
 # 预检：所选 python 必须能导入 fastapi，否则明确报错而非静默失败
 try {
     & $Py -c "import fastapi" 2>$null
     if ($LASTEXITCODE -ne 0) { throw "fastapi 未安装" }
 } catch {
-    Write-Error "后端 python（$Py）缺少 fastapi 等依赖。请先执行：python -m venv backend/.venv 并 pip install -r backend/requirements.txt"; exit 1
+    Write-Error "后端 python（$Py）缺少 fastapi 等依赖。请先执行：python -m venv .venv 并 pip install -r backend/requirements.txt"; exit 1
 }
-$Npm = "C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2-2\npm.cmd"
+$NpmFound = (Get-Command npm.cmd, npm -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1)
+$Npm = if ($NpmFound) { $NpmFound } else { "npm.cmd" }
 
 function Test-Port($port) {
     try {
@@ -52,7 +56,7 @@ if (Test-Port 8000) { Write-Warning "8000 端口已被占用，请先关闭旧�
 if (Test-Port 5173) { Write-Warning "5173 端口已被占用，请先关闭旧的前端进程" }
 
 # 1) 启动后端
-Start-Process -FilePath $Py -ArgumentList "-m","uvicorn","app.main:app","--host","127.0.0.1","--port","8000" `
+Start-Process -FilePath $Py -ArgumentList "-m","uvicorn","app.main:app","--host","127.0.0.1","--port","8000","--reload" `
     -WorkingDirectory $Backend -WindowStyle Normal | Out-Null
 Write-Host "后端启动中..."
 

@@ -13,7 +13,7 @@ from .db import get_db
 from .models import (
     Attempt, ChainNode, ConfusionPair, DiagnosticDomain, DiagnosisCandidate, DiagnosisEvidence,
     DiagnosisSession, DemoUser, FollowupNode, FollowupTurn, KnowledgeRelation, MasteryState,
-    Misconception, Question, QuestionEvidence, StudyProgress, SyllabusChapter,
+    Misconception, Question, QuestionEvidence, RetestSchedule, StudyProgress, SyllabusChapter,
     TrainingSession, TrainingSessionQuestion, audit, now,
 )
 from .diagnosis import engine as dx
@@ -88,6 +88,7 @@ def _purge_user_data(db: Session, user_id: str) -> int:
             db.execute(delete(DiagnosisSession).where(DiagnosisSession.id.in_(sess_ids)))
         db.execute(delete(Attempt).where(Attempt.user_id == user_id))
     db.execute(delete(MasteryState).where(MasteryState.user_id == user_id))
+    db.execute(delete(RetestSchedule).where(RetestSchedule.user_id == user_id))
     return n
 
 
@@ -243,27 +244,390 @@ class AttemptIn(BaseModel):
     idempotency_key: str
 
 
+def _diff_hours(dt1: datetime | None, dt2: datetime | None) -> float:
+    if not dt1 or not dt2:
+        return 72.0
+    t1 = dt1.replace(tzinfo=None) if dt1.tzinfo else dt1
+    t2 = dt2.replace(tzinfo=None) if dt2.tzinfo else dt2
+    return max((t1 - t2).total_seconds() / 3600.0, 0.0)
+
+
 @router.get("/users/{user_id}/wrong-book")
 def wrong_book(user_id: str, db: Session = Depends(get_db)):
-    """错题本：答错的作答 + 已出具的诊断结论。"""
+    """错题本：答错的作答 + 已出具的诊断结论 + 艾宾浩斯记忆衰退度（ADR-Retest-01）。"""
     _active_user(user_id, db)
     rows = db.execute(select(Attempt).where(
         Attempt.user_id == user_id, Attempt.is_correct == False)).scalars().all()  # noqa: E712
     out = []
+    import math
+    current_time = now()
     for a in rows:
         q = db.get(Question, a.question_id)
         s = db.execute(select(DiagnosisSession).where(
             DiagnosisSession.attempt_id == a.id)).scalar_one_or_none()
         mis = db.get(Misconception, s.hypothesis_id) if s and s.hypothesis_id else None
+
+        sched = db.execute(select(RetestSchedule).where(
+            RetestSchedule.user_id == user_id,
+            RetestSchedule.source_attempt_id == a.id
+        )).scalar_one_or_none()
+        if not sched and q:
+            sched = db.execute(select(RetestSchedule).where(
+                RetestSchedule.user_id == user_id,
+                RetestSchedule.domain_id == q.domain_id
+            ).order_by(RetestSchedule.due_at.desc())).scalar_one_or_none()
+
+        ref_time = sched.last_reviewed_at if sched else a.created_at
+        elapsed_hours = _diff_hours(current_time, ref_time)
+        stage = sched.stage if sched else 1
+        half_life = 24.0 if stage == 1 else (72.0 if stage == 2 else 168.0)
+        r_val = math.exp(-elapsed_hours / half_life)
+        retention_pct = int(max(18, min(98, round(r_val * 100))))
+        decay_level = "fresh" if retention_pct >= 75 else ("warning" if retention_pct >= 40 else "critical")
+        days_since = round(elapsed_hours / 24.0, 1)
+
         out.append({
-            "attempt_id": a.id, "question_code": q.code, "stem": q.stem,
-            "selected": a.selected_option, "answer": q.answer,
+            "attempt_id": a.id, "question_id": q.id if q else None,
+            "question_code": q.code if q else "", "stem": q.stem if q else "",
+            "selected": a.selected_option, "answer": q.answer if q else "",
             "misconception": {"name": mis.name, "category": mis.category} if mis else None,
             "case_evidence": mis.case_evidence if mis else None,
             "evidence_level": s.evidence_level if s else None,
             "mastery_state": None,
+            "retention_pct": retention_pct,
+            "decay_level": decay_level,
+            "days_since": days_since,
+            "stage": stage,
+            "schedule_id": sched.id if sched else None,
         })
     return out
+
+
+class AwakenIn(BaseModel):
+    attempt_id: str
+
+
+@router.post("/users/{user_id}/wrong-book/awaken")
+def awaken_wrong(user_id: str, body: AwakenIn, db: Session = Depends(get_db)):
+    """场景二：错题本一键抗遗忘唤醒。拉取该错题对应的变式强化题。"""
+    _active_user(user_id, db)
+    att = db.get(Attempt, body.attempt_id) or _404()
+    q = db.get(Question, att.question_id)
+    domain = db.get(DiagnosticDomain, q.domain_id) if q else None
+    s = db.execute(select(DiagnosisSession).where(DiagnosisSession.attempt_id == att.id)).scalar_one_or_none()
+    mis = db.get(Misconception, s.hypothesis_id) if s and s.hypothesis_id else None
+
+    # 寻找本章节内不同于原题的练习题
+    candidates = db.execute(select(Question).where(
+        Question.domain_id == q.domain_id,
+        Question.id != q.id
+    )).scalars().all()
+    variant_q = candidates[0] if candidates else q
+
+    return {
+        "concept_name": mis.name if mis else (domain.name if domain else "核心考点"),
+        "question": _q_public(db, variant_q),
+        "hint": f"针对「{mis.name if mis else '核心机制'}」，重点注意区别相似药物的受体亲和力与临床禁忌证。",
+    }
+
+
+# ---------- 艾宾浩斯长时记忆复测模块（ADR-Retest-01） ----------
+
+@router.get("/users/{user_id}/retest-capsule")
+def get_retest_capsule(user_id: str, db: Session = Depends(get_db)):
+    """场景一：今日待办顶部的艾宾浩斯遗忘预警胶囊。"""
+    _active_user(user_id, db)
+    current_time = now()
+    cur_naive = current_time.replace(tzinfo=None)
+
+    # 查找所有 pending 排期，Python 层比较兼容 SQLite 无时区
+    scheds = db.execute(select(RetestSchedule).where(
+        RetestSchedule.user_id == user_id,
+        RetestSchedule.status == "pending"
+    )).scalars().all()
+    due_scheds = [
+        s for s in scheds
+        if s.due_at and (s.due_at.replace(tzinfo=None) if s.due_at.tzinfo else s.due_at) <= cur_naive
+    ]
+    sched = sorted(due_scheds, key=lambda s: (s.due_at.replace(tzinfo=None) if s.due_at and s.due_at.tzinfo else cur_naive))[0] if due_scheds else None
+
+    # 如果没有排期，自动为演示账号注入一条典型传出神经混淆对临界排期
+    if not sched:
+        dom = db.execute(select(DiagnosticDomain)).scalars().first()
+        if dom:
+            existing = db.execute(select(RetestSchedule).where(RetestSchedule.user_id == user_id)).scalars().first()
+            if not existing:
+                pair = db.execute(select(ConfusionPair).where(ConfusionPair.domain_id == dom.id)).scalars().first()
+                sched = RetestSchedule(
+                    user_id=user_id,
+                    domain_id=dom.id,
+                    confusion_pair_id=pair.id if pair else None,
+                    misconception_category="概念混淆",
+                    stage=2,
+                    due_at=current_time - timedelta(hours=2),
+                    last_reviewed_at=current_time - timedelta(hours=74),
+                    status="pending"
+                )
+                db.add(sched)
+                db.commit()
+                db.refresh(sched)
+
+    if not sched:
+        return {"has_capsule": False}
+
+    domain = db.get(DiagnosticDomain, sched.domain_id)
+    pair = db.get(ConfusionPair, sched.confusion_pair_id) if sched.confusion_pair_id else None
+    pair_name = f"{pair.drug_a} vs {pair.drug_b}" if pair else (sched.misconception_category or "核心机制辨析")
+
+    # 获取该域的复测题（排除旧错题，优先 training/retest）
+    qs = db.execute(select(Question).where(
+        Question.domain_id == sched.domain_id,
+        Question.usage.in_(["training", "retest", "diagnostic"])
+    )).scalars().all()
+    if sched.source_attempt_id:
+        src_att = db.get(Attempt, sched.source_attempt_id)
+        if src_att:
+            qs = [q for q in qs if q.id != src_att.question_id]
+
+    selected_qs = qs[:2] if len(qs) >= 2 else qs
+    if not selected_qs:
+        selected_qs = db.execute(select(Question)).scalars().all()[:2]
+
+    # 计算记忆存留度
+    ref_time = sched.last_reviewed_at or (sched.due_at - timedelta(hours=72))
+    elapsed_hours = _diff_hours(current_time, ref_time)
+    half_life = 24.0 if sched.stage == 1 else (72.0 if sched.stage == 2 else 168.0)
+    import math
+    r_val = math.exp(-elapsed_hours / half_life)
+    retention_pct = int(max(18, min(80, round(r_val * 100))))
+
+    stage_names = {1: "24小时初阶加固", 2: "72小时临界防遗忘", 3: "7天长时记忆封顶"}
+    return {
+        "has_capsule": True,
+        "schedule_id": sched.id,
+        "domain_id": sched.domain_id,
+        "domain_name": domain.name if domain else "药理学核心章节",
+        "chapter_ref": domain.chapter_ref if domain else "",
+        "concept_name": pair_name,
+        "stage": sched.stage,
+        "stage_name": stage_names.get(sched.stage, f"第{sched.stage}阶段"),
+        "retention_pct": retention_pct,
+        "questions": [_q_public(db, q) for q in selected_qs],
+    }
+
+
+class RetestCapsuleSubmitIn(BaseModel):
+    schedule_id: str
+    answers: dict[str, str]
+
+
+@router.post("/users/{user_id}/retest-capsule/submit")
+def submit_retest_capsule(user_id: str, body: RetestCapsuleSubmitIn, db: Session = Depends(get_db)):
+    """提交今日预警胶囊复测作答并触发艾宾浩斯长时记忆跃迁。"""
+    _active_user(user_id, db)
+    sched = db.get(RetestSchedule, body.schedule_id) or _404()
+    correct = 0
+    total = 0
+    for qid, opt in body.answers.items():
+        q = db.get(Question, qid)
+        if not q:
+            continue
+        total += 1
+        if opt == q.answer:
+            correct += 1
+
+    passed = total > 0 and (correct / total >= 0.5)
+    current_time = now()
+    sched.last_reviewed_at = current_time
+
+    if passed:
+        if sched.stage == 1:
+            sched.stage = 2
+            sched.due_at = current_time + timedelta(hours=72)
+            sched.status = "pending"
+            next_due_days = 3
+            next_stage_desc = "第2阶段 · 72小时临界复测"
+            memory_boost = 92
+        elif sched.stage == 2:
+            sched.stage = 3
+            sched.due_at = current_time + timedelta(hours=168)
+            sched.status = "pending"
+            next_due_days = 7
+            next_stage_desc = "第3阶段 · 7天稳态复测"
+            memory_boost = 96
+        else:
+            sched.stage = 4
+            sched.status = "mastered"
+            next_due_days = 0
+            next_stage_desc = "长时专业记忆 · 稳定掌握"
+            memory_boost = 100
+            try:
+                if sched.misconception_category:
+                    mastery.transition(db, user_id, sched.domain_id, sched.misconception_category, "retest_passed")
+            except Exception:
+                pass
+    else:
+        sched.stage = 1
+        sched.due_at = current_time + timedelta(hours=24)
+        sched.status = "pending"
+        next_due_days = 1
+        next_stage_desc = "复测未通过，重置为24小时再巩固"
+        memory_boost = 48
+        try:
+            if sched.misconception_category:
+                mastery.transition(db, user_id, sched.domain_id, sched.misconception_category, "retest_failed")
+        except Exception:
+            pass
+
+    db.commit()
+    audit(db, user_id, "retest_capsule.completed", sched.id, passed=passed, correct=correct, total=total, new_stage=sched.stage)
+    return {
+        "passed": passed,
+        "score": round(correct / max(total, 1), 2),
+        "correct": correct,
+        "total": total,
+        "new_stage": sched.stage,
+        "status": sched.status,
+        "next_due_days": next_due_days,
+        "next_stage_desc": next_stage_desc,
+        "memory_boost": memory_boost,
+        "message": "恭喜通过复测！已成功阻断遗忘曲线并建立长时专业记忆！" if passed else "建议查看解析并回顾知识点，系统将在24小时后再次安排复测加固。"
+    }
+
+
+# ---------- 场景三：章节学习前置温故知新微测 ----------
+
+@router.get("/users/{user_id}/chapters/{domain_id}/warmup")
+def chapter_warmup(user_id: str, domain_id: str, db: Session = Depends(get_db)):
+    """场景三：章节学习前置温故知新微测。
+    检查用户在该章或前置受体章节是否存在历史错题或记忆衰退。
+    若存在，提供 1 道热身题唤醒记忆；若无则返回 has_warmup: False。
+    """
+    _active_user(user_id, db)
+    domain = db.get(DiagnosticDomain, domain_id) or _404()
+
+    # 查找该域的错题记录
+    wrong_att = db.execute(select(Attempt).join(Question).where(
+        Attempt.user_id == user_id,
+        Attempt.is_correct == False,
+        Question.domain_id == domain_id
+    )).scalars().first()
+
+    # 如果本域无错题，检查传出神经（DOM-PHARMO-ANS）等基础受体章节
+    base_wrong = None
+    if not wrong_att:
+        base_wrong = db.execute(select(Attempt).join(Question).where(
+            Attempt.user_id == user_id,
+            Attempt.is_correct == False,
+            Question.domain_id == "DOM-PHARMO-ANS"
+        )).scalars().first()
+
+    target_att = wrong_att or base_wrong
+    if not target_att:
+        q = db.execute(select(Question).where(Question.domain_id == domain_id)).scalars().first()
+        if not q:
+            return {"has_warmup": False}
+        return {
+            "has_warmup": True,
+            "title": f"课前温故知新 · {domain.name}",
+            "reason": f"在开启「{domain.name}」新知识前，先做 1 道热身题快速激活思维状态！",
+            "question": _q_public(db, q)
+        }
+
+    target_q = db.get(Question, target_att.question_id)
+    candidates = db.execute(select(Question).where(
+        Question.domain_id == target_q.domain_id,
+        Question.id != target_q.id
+    )).scalars().all()
+    warm_q = candidates[0] if candidates else target_q
+
+    return {
+        "has_warmup": True,
+        "title": f"课前温故知新 · {domain.name}",
+        "reason": "本章涉及前序核心药理机制。检测到您此前在此处遇到过易混淆点，先用 1 道题唤醒长时记忆！",
+        "question": _q_public(db, warm_q)
+    }
+
+
+class WarmupSubmitIn(BaseModel):
+    question_id: str
+    selected_option: str
+
+
+@router.post("/users/{user_id}/chapters/{domain_id}/warmup/submit")
+def submit_chapter_warmup(user_id: str, domain_id: str, body: WarmupSubmitIn, db: Session = Depends(get_db)):
+    """提交温故知新热身微测作答。"""
+    _active_user(user_id, db)
+    q = db.get(Question, body.question_id) or _404()
+    is_correct = (body.selected_option.strip().upper() == (q.answer or "").strip().upper())
+    audit(db, user_id, "chapter.warmup_submitted", domain_id, question_id=q.id, is_correct=is_correct)
+    return {
+        "is_correct": is_correct,
+        "correct_answer": q.answer,
+        "message": "太棒了！长时记忆已被激活，现在开始学习本章核心内容吧！" if is_correct else f"热身完毕！正确答案是 {q.answer}。带着对这一机制的关注，开始本章学习吧！"
+    }
+
+
+
+def _relations_of(db, domain_id: str):
+    """本域全部图谱边（标准序列化），供材料/学习地图/图谱接口复用。"""
+    rels = db.execute(select(KnowledgeRelation).where(
+        KnowledgeRelation.domain_id == domain_id)).scalars().all()
+    return [{"source": r.source, "edge": r.edge, "target": r.target,
+             "note": r.note, "evidence": r.evidence,
+             "review_status": r.review_status} for r in rels]
+
+
+@router.get("/domains/{domain_id}/graph")
+def domain_graph(domain_id: str, depth: int = Query(2, ge=1, le=3),
+                 entity: str | None = None, db: Session = Depends(get_db)):
+    """域图谱遍历接口（2026-09-11 全量版）。
+
+    - 无 entity：返回本域全图（nodes/edges，供前端可视化）。
+    - 有 entity：以该实体为种子做 depth 跳 BFS，返回子图 + 路径。
+    """
+    from . import graph as g
+    d = db.get(DiagnosticDomain, domain_id)
+    if not d:
+        raise HTTPException(404, "域不存在")
+    if entity:
+        sub = g.traverse(db, domain_id, [entity], depth=depth)
+        return {"domain_id": domain_id, "code": d.code, "seed": entity, **sub}
+    rels = db.execute(select(KnowledgeRelation).where(
+        KnowledgeRelation.domain_id == domain_id)).scalars().all()
+    nodes: dict[str, str] = {}
+    edges = []
+    for r in rels:
+        e = {"source": r.source, "edge": r.edge, "target": r.target,
+             "note": r.note, "evidence": r.evidence,
+             "review_status": r.review_status}
+        edges.append(e)
+        for n in (r.source, r.target):
+            name = (n or {}).get("name", "")
+            if name and name not in nodes:
+                nodes[name] = (n or {}).get("type", "")
+    return {"domain_id": domain_id, "code": d.code,
+            "nodes": [{"name": n, "type": t} for n, t in sorted(nodes.items())],
+            "edges": edges}
+
+
+@router.get("/graph/search")
+def graph_search(q: str = Query(..., min_length=2),
+                 db: Session = Depends(get_db)):
+    """跨章实体检索：该实体在哪些章节出现过（跨章复用/迁移提示）。"""
+    from . import graph as g
+    return {"query": q, "domains": g.cross_domain_hit(db, q)}
+
+
+@router.get("/users/{user_id}/wrong-graph")
+def wrong_graph(user_id: str, db: Session = Depends(get_db)):
+    """错题关联图谱（2026-09-12）：题目为节点，章节/药物/错因为枢纽。
+
+    同一枢纽连出的题目即有联系（同章/同药/同错因），供错题本顶部可视化；
+    取最近 24 道错题，超出截断并如实告知。"""
+    _active_user(user_id, db)
+    from . import graph as g
+    return g.build_wrong_graph(db, user_id)
 
 
 def _filter_relations_by_question(rels, text: str):
@@ -314,26 +678,44 @@ def wrong_recall(attempt_id: str, db: Session = Depends(get_db)):
 
     # 2) 知识关系图谱（FR-A2）+ 混淆对（按错题所属域；题库章节域暂无 relations 时诚实为空）
     relations, pairs = [], []
+    linked, subgraph = [], None
     if q:
-        from .models import ConfusionPair, KnowledgeRelation
-        domain = db.get(DiagnosticDomain, q.domain_id)
+        domain = db.get(DiagnosticDomain, q.domain_id) if q.domain_id else None
         if domain:
-            rels = db.execute(select(KnowledgeRelation).where(
-                KnowledgeRelation.domain_id == domain.id)).scalars().all()
-            # 图谱驱动（2026-09-11）：只留与本题相关的边，并带出教材出处与审校状态
             qtext = " ".join([q.stem or ""] + [
                 (o.get("text") or "") for o in (q.options or []) if isinstance(o, dict)])
-            rels = _filter_relations_by_question(rels, qtext)
-            relations = [{"source": r.source, "edge": r.edge, "target": r.target,
-                          "note": r.note, "evidence": r.evidence,
-                          "review_status": r.review_status} for r in rels]
+            try:
+                from . import graph as _g
+                sub = _g.question_subgraph(db, domain.id, qtext, depth=2, max_edges=40)
+                linked, subgraph = sub.get("linked", []), sub
+                relations = sub.get("edges", [])
+            except Exception:
+                linked, subgraph = [], None
+                rels = db.execute(select(KnowledgeRelation).where(
+                    KnowledgeRelation.domain_id == domain.id)).scalars().all()
+                rels = _filter_relations_by_question(rels, qtext)
+                relations = [{"source": r.source, "edge": r.edge, "target": r.target,
+                              "note": r.note, "evidence": r.evidence,
+                              "review_status": r.review_status} for r in rels]
             cps = db.execute(select(ConfusionPair).where(
                 ConfusionPair.domain_id == domain.id)).scalars().all()
+            linked_names = {x.get("name") for x in (linked or []) if x.get("name")}
+            scored = []
+            for p in cps:
+                hit = bool(linked_names and (p.drug_a in linked_names or p.drug_b in linked_names))
+                scored.append((0 if hit else 1, p.drug_a, p.drug_b, p, hit))
+            scored.sort(key=lambda t: (t[0], t[1], t[2]))
             pairs = [{"drug_a": p.drug_a, "drug_b": p.drug_b,
                       "distinction": p.distinction_text,
-                      "evidence": p.evidence} for p in cps]
+                      "evidence": p.evidence, "relevant": hit}
+                     for _, _, _, p, hit in scored]
     card["relations"] = relations
     card["confusion_pairs"] = pairs
+    card["linked_entities"] = linked
+    if subgraph is not None:
+        card["subgraph"] = {"nodes": subgraph.get("nodes", []),
+                            "edges": subgraph.get("edges", []),
+                            "fallback": subgraph.get("fallback", False)}
 
     # 3) 教材记忆锚点：按题干实时 RAG
     anchors = []
@@ -764,12 +1146,21 @@ def study_detail(user_id: str, domain_id: str, db: Session = Depends(get_db)):
     if sy is not None:
         def clean(x):  # 规整大纲 JSON（可能多层字符串）
             return _json_field(sy, x)
+        rels = db.execute(select(KnowledgeRelation).where(
+            KnowledgeRelation.domain_id == d.id)).scalars().all()
+        pairs = db.execute(select(ConfusionPair).where(ConfusionPair.domain_id == d.id)).scalars().all()
         return {**base, "source": "syllabus",
                 "chapter": {"no": sy.book_chapter_no, "title": sy.title,
                             "objectives": clean("objectives") or {},
                             "key_points": clean("key_points") or [],
                             "difficulties": clean("difficulties") or [],
-                            "sections": clean("sections") or []}}
+                            "sections": clean("sections") or []},
+                "relations": [{"source": r.source, "edge": r.edge, "target": r.target,
+                               "note": r.note, "evidence": r.evidence,
+                               "review_status": r.review_status} for r in rels],
+                "confusion": [{"drug_a": p.drug_a, "drug_b": p.drug_b,
+                               "distinction": p.distinction_text,
+                               "evidence": p.evidence} for p in pairs]}
     return {**base, "source": "none", "chapter": None}
 
 
@@ -1040,9 +1431,9 @@ def submit_assessment(user_id: str, body: dict, db: Session = Depends(get_db)):
         picked = answers.get(q.id)
         ok = picked == q.answer
         key = q.domain_id
-        st = domain_stats.setdefault(key, {"correct": 0, "total": 0})
-        st["total"] += 1
-        st["correct"] += int(ok)
+        dst = domain_stats.setdefault(key, {"correct": 0, "total": 0})
+        dst["total"] += 1
+        dst["correct"] += int(ok)
         if not ok:
             sig = (q.distractor_signals or {}).get(picked or "") or {}
             cat = None
@@ -1056,15 +1447,30 @@ def submit_assessment(user_id: str, body: dict, db: Session = Depends(get_db)):
                          "category": cat or "待诊断"})
             if _is_tiku_bridged(q) and not sig:
                 # 题库物化题答错 → 章级薄弱（无错因标注不硬归因；category=None 驱动章级练习）
-                mastery.transition(db, user_id, q.domain_id, None, "misdiagnosed")
+                mst = db.get(MasteryState, (user_id, q.domain_id, None))
+                if mst is None or mst.state == "未评估":
+                    try:
+                        mastery.transition(db, user_id, q.domain_id, None, "misdiagnosed")
+                    except Exception:
+                        pass
             elif cat:  # 域题答错 → 该错因类别标记薄弱（驱动错因路径）；已薄弱则幂等跳过
-                from .models import MasteryState
-                st = db.get(MasteryState, (user_id, q.domain_id, cat))
-                if st is None or st.state == "未评估":
-                    mastery.transition(db, user_id, q.domain_id, cat, "misdiagnosed")
-        attempt = Attempt(user_id=user_id, question_id=q.id, selected_option=picked or "",
-                          is_correct=ok, idempotency_key=f"assess-{user_id}-{q.id}")
-        db.add(attempt)
+                mst = db.get(MasteryState, (user_id, q.domain_id, cat))
+                if mst is None or mst.state == "未评估":
+                    try:
+                        mastery.transition(db, user_id, q.domain_id, cat, "misdiagnosed")
+                    except Exception:
+                        pass
+        
+        attempt_key = f"assess-{user_id}-{q.id}"
+        dup_att = db.execute(select(Attempt).where(Attempt.idempotency_key == attempt_key)).scalar_one_or_none()
+        if dup_att:
+            dup_att.selected_option = picked or ""
+            dup_att.is_correct = ok
+            dup_att.created_at = now()
+        else:
+            attempt = Attempt(user_id=user_id, question_id=q.id, selected_option=picked or "",
+                              is_correct=ok, idempotency_key=attempt_key)
+            db.add(attempt)
     db.commit()
     domains_out = [{"domain_id": k, "domain": domain_map.get(k, k), "correct": v["correct"],
                     "total": v["total"], "rate": round(v["correct"] / v["total"], 3)} for k, v in domain_stats.items()]

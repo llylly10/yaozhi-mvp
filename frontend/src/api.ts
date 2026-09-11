@@ -29,6 +29,8 @@ export const api = {
 
   wrongRecall: (attemptId: string) => fetch(`/api/wrong/${attemptId}/recall`).then(handle),
 
+  wrongGraph: (userId: string) => fetch(`/api/users/${userId}/wrong-graph`).then(handle),
+
   mastery: (userId: string) => fetch(`/api/users/${userId}/mastery`).then(handle),
 
   assessment: (userId: string) => fetch(`/api/users/${userId}/assessment`).then(handle),
@@ -96,6 +98,21 @@ export const api = {
 
   submitTraining: (trainingId: string, answers: Record<string, string>) =>
     fetch(`/api/training/${trainingId}/submit`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answers }) }).then(handle),
+
+  // 艾宾浩斯抗遗忘长时记忆复测模块（ADR-Retest-01）
+  retestCapsule: (userId: string) => fetch(`/api/users/${userId}/retest-capsule`).then(handle),
+
+  submitRetestCapsule: (userId: string, body: { schedule_id: string; answers: Record<string, string> }) =>
+    fetch(`/api/users/${userId}/retest-capsule/submit`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }).then(handle),
+
+  awakenWrong: (userId: string, attemptId: string) =>
+    fetch(`/api/users/${userId}/wrong-book/awaken`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ attempt_id: attemptId }) }).then(handle),
+
+  chapterWarmup: (userId: string, domainId: string) =>
+    fetch(`/api/users/${userId}/chapters/${domainId}/warmup`).then(handle),
+
+  submitChapterWarmup: (userId: string, domainId: string, body: { question_id: string; selected_option: string }) =>
+    fetch(`/api/users/${userId}/chapters/${domainId}/warmup/submit`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }).then(handle),
 }
 
 export type Diagnosis = {
@@ -133,3 +150,34 @@ export type TikuFeedback = {
   chapter_ref: string
   chapter_name: string
 }
+
+export type RetestCapsuleData = {
+  has_capsule: boolean
+  schedule_id?: string
+  domain_id?: string
+  domain_name?: string
+  chapter_ref?: string
+  concept_name?: string
+  stage?: number
+  stage_name?: string
+  retention_pct?: number
+  questions?: Question[]
+}
+
+export type WrongBookItem = {
+  attempt_id: string
+  question_id?: string
+  question_code: string
+  stem: string
+  selected: string
+  answer: string
+  misconception?: { name: string; category: string } | null
+  case_evidence?: string | null
+  evidence_level?: string | null
+  retention_pct?: number
+  decay_level?: 'fresh' | 'warning' | 'critical'
+  days_since?: number
+  stage?: number
+  schedule_id?: string | null
+}
+

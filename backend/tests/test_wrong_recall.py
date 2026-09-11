@@ -128,3 +128,94 @@ def test_recall_fields_present_for_every_wrong():
         for k in ("question", "misconception", "case_evidence", "evidence_level",
                   "relations", "confusion_pairs", "textbook_anchors", "trained"):
             assert k in d, f"缺少字段 {k}"
+
+
+def test_recall_tiku_question_has_deep_subgraph():
+    """章域题库题错题卡：子图须是 2 跳邻域（不是 depth=1 的药物→章节星形），
+    混淆对带 relevant 标记且含本题实体的对排在前面。"""
+    from app.models import DiagnosticDomain
+    db = SessionLocal()
+    try:
+        codes = [q.code for q in db.execute(
+            select(Question).where(Question.code.like("T%"),
+                                   Question.review_status == "published")).scalars()]
+    finally:
+        db.close()
+    assert codes, "测试库应有物化题库题"
+    u = fresh_user()
+    got = None
+    for code in codes[:8]:
+        aid = wrong_attempt(u, code)
+        d = client.get(f"/wrong/{aid}/recall").json()
+        if d.get("linked_entities"):
+            got = d
+            break
+    assert got, "章域题应至少有一道能链接到图谱实体"
+    # 2 跳邻域：边数应超过"每实体一条属于边"的星形规模（含章节结构边）
+    assert len(got["relations"]) >= len(got["linked_entities"]) + 1, \
+        f"子图太稀疏（疑似 depth=1 星形）：{len(got['relations'])} 边 / {len(got['linked_entities'])} 实体"
+    assert got["subgraph"]["fallback"] is False
+    # 混淆对人人带 relevant 标记
+    for p in got["confusion_pairs"]:
+        assert "relevant" in p, f"混淆对缺 relevant 标记: {p}"
+    linked = {e["name"] for e in got["linked_entities"]}
+    first = got["confusion_pairs"][0]
+    assert first["relevant"] == bool(
+        first["drug_a"] in linked or first["drug_b"] in linked), "首对排序与标记不一致"
+
+
+def _same_chapter_t_codes() -> list[str]:
+    """取同一章节的两道物化题库题（保证共享章节枢纽）。"""
+    from collections import defaultdict
+    db = SessionLocal()
+    try:
+        by_dom: dict[str, list[str]] = defaultdict(list)
+        for q in db.execute(select(Question).where(
+                Question.code.like("T%"),
+                Question.review_status == "published")).scalars():
+            by_dom[q.domain_id].append(q.code)
+    finally:
+        db.close()
+    for codes in by_dom.values():
+        if len(codes) >= 2:
+            return codes[:2]
+    raise AssertionError("测试库无同章双题")
+
+
+def test_wrong_graph_empty_for_clean_user():
+    """无错题用户：关联图谱返回空节点（前端隐藏该区）。"""
+    u = fresh_user()
+    d = client.get(f"/users/{u}/wrong-graph").json()
+    assert d["nodes"] == [] and d["edges"] == []
+
+
+def test_wrong_graph_shares_chapter_and_drug_hubs():
+    """错题关联图谱：同章两题共享章节枢纽，同药两题共享药物枢纽；
+    题目节点带回跳 attempt 映射，无归因的题库题没有归因边。"""
+    codes = _same_chapter_t_codes()
+    u = fresh_user()
+    for code in codes:
+        wrong_attempt(u, code)
+    d = client.get(f"/users/{u}/wrong-graph").json()
+    by_type: dict[str, list] = {}
+    for n in d["nodes"]:
+        by_type.setdefault(n["type"], []).append(n["name"])
+    assert len(by_type.get("题目", [])) >= 2
+    assert by_type.get("章节"), "应有章节枢纽"
+    # 枢纽复用：至少一个枢纽连出 ≥2 道题（同章/同药的联系真实存在）
+    from collections import Counter
+    hub_uses: Counter = Counter()
+    for e in d["edges"]:
+        if e["target"]["type"] in ("章节", "药物", "错因"):
+            hub_uses[e["target"]["name"]] += 1
+    assert any(v >= 2 for v in hub_uses.values()), f"无共享枢纽：{hub_uses.most_common(5)}"
+    # 边类型受控 + 派生证据诚实（不冒充教材页码）
+    assert {e["edge"] for e in d["edges"]} <= {"属于", "涉及", "归因"}
+    for e in d["edges"]:
+        ev = e.get("evidence") or {}
+        assert ev.get("source") == "做题关联" and "book_page" not in ev
+    # 回跳映射：题目节点能找到 attempt（枢纽节点除外）
+    qnames = set(by_type.get("题目", []))
+    assert qnames <= set(d["meta"]), "题目节点应有映射"
+    for name in qnames:
+        assert d["meta"][name].get("attempt_ids"), f"{name} 无作答映射"

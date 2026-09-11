@@ -75,8 +75,8 @@ def test_materials_expose_relations():
     # 阿托品 与…相互作用 碘解磷定
     inter = [x["target"]["name"] for x in by_edge.get("与…相互作用", [])]
     assert "碘解磷定" in inter, "阿托品与碘解磷定应存在相互作用关系"
-    # 边类型受控：不允许落入 FR-A2 之外的自造边类型
-    allowed = {"作用于", "表现为", "禁忌用于", "适应证", "与…相互作用", "属于"}
+    # 边类型受控：FR-A2 六种 + 全量版新增"包含"（大纲结构边）
+    allowed = {"作用于", "表现为", "禁忌用于", "适应证", "与…相互作用", "属于", "包含"}
     assert set(by_edge) <= allowed, f"存在 FR-A2 之外的边类型 {set(by_edge) - allowed}"
 
 
@@ -91,10 +91,16 @@ def test_graph_grounded_not_fabricated():
 
 
 def test_relations_carry_textbook_evidence():
-    """图谱边必须挂教材出处（2026-09-11）：此前 11 条边全是"裸断言"，无法回答凭什么成立。"""
+    """图谱边必须挂教材出处（2026-09-11）：此前 11 条边全是"裸断言"，无法回答凭什么成立。
+
+    全量版区分：机制边（作用于/表现为/禁忌用于/适应证/与…相互作用）须挂
+    教材页码证据；结构边（包含/属于）挂大纲/题库共现证据（source+chapter+text）。
+    """
     rels = client.get(f"/materials/{domain_id()}").json()["knowledge_relations"]
-    with_ev = [r for r in rels if r.get("evidence")]
-    assert len(with_ev) >= 9, f"至少 9 条边应有教材证据，实际 {len(with_ev)}"
+    mech = [r for r in rels if r["edge"] in
+            {"作用于", "表现为", "禁忌用于", "适应证", "与…相互作用"}]
+    with_ev = [r for r in mech if r.get("evidence")]
+    assert len(with_ev) >= 9, f"至少 9 条机制边应有教材证据，实际 {len(with_ev)}"
     for r in with_ev:
         ev = r["evidence"]
         assert {"source", "book_page", "chapter", "text"} <= set(ev), \
@@ -118,3 +124,97 @@ def test_confusion_pairs_carry_evidence():
     assert pairs, "种子域应有混淆对"
     for p in pairs:
         assert p.get("evidence"), f"混淆对 {p['drug_a']} vs {p['drug_b']} 缺教材证据"
+
+
+# ---------- 全量版（2026-09-11）：35 章覆盖 + 实体链接 + 遍历 ----------
+
+def _all_domains():
+    db = SessionLocal()
+    try:
+        return db.execute(select(DiagnosticDomain)).scalars().all()
+    finally:
+        db.close()
+
+
+def test_chapter_domains_have_graph():
+    """章级域全覆盖：每个 DOM-CH 域都有结构边（包含/属于），不再是空图谱。"""
+    for d in _all_domains():
+        if not d.code.startswith("DOM-CH"):
+            continue
+        n = client.get(f"/domains/{d.id}/graph").json()
+        assert n["edges"], f"{d.code} 应有图谱边"
+        by_edge = {e["edge"] for e in n["edges"]}
+        assert by_edge <= {"作用于", "表现为", "禁忌用于", "适应证",
+                           "与…相互作用", "属于", "包含"}, f"{d.code} 边类型越界 {by_edge}"
+
+
+def test_structural_edges_carry_source():
+    """结构边诚实：包含/属于边挂大纲/题库共现出处，不冒充教材页码。"""
+    for d in _all_domains():
+        if not d.code.startswith("DOM-CH"):
+            continue
+        n = client.get(f"/domains/{d.id}/graph").json()
+        struct = [e for e in n["edges"] if e["edge"] in ("包含", "属于")]
+        assert struct, f"{d.code} 应有结构边"
+        for e in struct[:5]:
+            ev = e.get("evidence") or {}
+            assert {"source", "chapter", "text"} <= set(ev), \
+                f"{d.code} 结构边证据缺字段: {set(ev)}"
+            assert ev["source"] in ("教学大纲", "题库共现"), \
+                f"{d.code} 结构边来源非法: {ev['source']}"
+        break  # 抽一章验格式即可，全章格式同一管线生成
+
+
+def test_no_mechanism_edges_outside_seed():
+    """不虚构机制断言：章级域不得出现作用于/禁忌用于等机制边。"""
+    for d in _all_domains():
+        if not d.code.startswith("DOM-CH"):
+            continue
+        n = client.get(f"/domains/{d.id}/graph").json()
+        mech = [e["edge"] for e in n["edges"] if e["edge"] in
+                {"作用于", "表现为", "禁忌用于", "适应证", "与…相互作用"}]
+        assert not mech, f"{d.code} 出现未审校机制边 {mech}"
+
+
+def test_entity_link_and_traverse():
+    """实体链接 + BFS：以本章药物为种子能走出子图。"""
+    from app import graph as g
+    db = SessionLocal()
+    try:
+        for d in _all_domains():
+            if not d.code.startswith("DOM-CH"):
+                continue
+            drugs = [r.source["name"] for r in db.execute(
+                select(KnowledgeRelation).where(
+                    KnowledgeRelation.domain_id == d.id)).scalars()
+                if (r.source or {}).get("type") == "药物"]
+            if not drugs:
+                continue
+            seed = drugs[0]
+            sub = g.traverse(db, d.id, [seed], depth=1)
+            assert sub["edges"], f"{d.code} 以 {seed} 为种子应走出边"
+            assert any(n["name"] == seed for n in sub["nodes"])
+            # 长词优先：链接不应把已命中长词再拆成短词
+            linked = g.link_entities(db, d.id, f"患者服用{seed}后血压下降")
+            assert linked and linked[0]["name"] == seed
+            break
+    finally:
+        db.close()
+
+
+def test_graph_search_cross_domain():
+    """跨章检索：常见药应命中多个章节。"""
+    r = client.get("/graph/search", params={"q": "阿托品"})
+    assert r.status_code == 200
+    assert r.json()["domains"], "阿托品应跨章命中"
+
+
+def test_chapter_graph_seed_idempotent():
+    """幂等：重跑章图谱抽取不新增行。"""
+    from seed.seed_chapter_graphs import apply_chapter_graphs
+    db = SessionLocal()
+    try:
+        out = apply_chapter_graphs(db)
+    finally:
+        db.close()
+    assert out["relations"] == 0 and out["pairs"] == 0, f"重放应零新增，实际 {out}"

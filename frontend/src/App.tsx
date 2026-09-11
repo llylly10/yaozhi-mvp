@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import * as echarts from 'echarts'
 import { motion, AnimatePresence, MotionConfig, useReducedMotion, useScroll, useMotionValueEvent } from 'framer-motion'
 import {
   CheckCircle, XCircle, Warning, MagnifyingGlass, SkipForward, ArrowRight, ArrowUp, CaretDown, Pill,
   CalendarBlank, ClockCounterClockwise, SquaresFour, Gear, BookOpenText, ChatCircle,
+  Lightning, Hourglass, Sparkle,
 } from '@phosphor-icons/react'
-import { api, type Diagnosis, type Question, type TikuFeedback } from './api'
+import { api, type Diagnosis, type Question, type TikuFeedback, type RetestCapsuleData } from './api'
 
 /*
  * 药知 · 「现代药房 × 分子美学」
@@ -33,7 +35,7 @@ function genUUID(): string {
 type Screen = 'register' | 'consent' | 'goal' | 'study' | 'assessment' | 'portrait' | 'list' | 'material' | 'flow' | 'profile' | 'qa'
 type View = 'todo' | 'material' | 'wrongbook' | 'profile' | 'qa'
 
-const STEPS = ['注册', '同意', '目标', '摸底', '画像', '路径', '学习', '练习', '诊断', '追问', '训练', '复测', '档案'] as const
+const STEPS = ['注册', '同意', '目标', '地图', '摸底', '画像', '路径', '学习', '练习', '诊断', '追问', '训练', '复测', '档案'] as const
 
 const spring = { type: 'spring', stiffness: 120, damping: 20 } as const
 const Rconst = 52
@@ -41,17 +43,17 @@ const Cconst = 2 * Math.PI * Rconst
 
 function stepIndex(screen: Screen, diagnosis: Diagnosis | null): number {
   const map: Record<Screen, number> = {
-    register: 0, consent: 1, goal: 2, study: 2, assessment: 3, portrait: 4,
-    list: 5, flow: 7, profile: 12,
-    material: 6, qa: 5,
+    register: 0, consent: 1, goal: 2, study: 3, assessment: 4, portrait: 5,
+    list: 6, flow: 8, profile: 13,
+    material: 7, qa: 6,
   }
   if (screen !== 'flow') return map[screen]
-  if (!diagnosis) return 7
-  if (diagnosis.state === 'diagnosed') return 8
-  if (diagnosis.state === 'followup_required') return 9
-  if (diagnosis.state === 'training') return 10
-  if (diagnosis.state === 'retesting') return 11
-  return 7
+  if (!diagnosis) return 8
+  if (diagnosis.state === 'diagnosed') return 9
+  if (diagnosis.state === 'followup_required') return 10
+  if (diagnosis.state === 'training') return 11
+  if (diagnosis.state === 'retesting') return 12
+  return 8
 }
 
 export default function App() {
@@ -124,30 +126,32 @@ export default function App() {
     if (!userId) return
     if (i === 1) { setScreen('consent') }
     else if (i === 2) { setActiveQuestion(null); setScreen('goal') }
-    else if (i === 3) { setActiveQuestion(null); setDiagnosis(null); setScreen('assessment') }
-    else if (i === 4) { if (portrait) setScreen('portrait'); else setScreen('assessment') }
-    else if (i === 5) { setActiveQuestion(null); setView('todo'); setScreen('list') }
-    else if (i === 6) {
+    else if (i === 3) { setActiveQuestion(null); setScreen('study') }
+    else if (i === 4) { setActiveQuestion(null); setDiagnosis(null); setScreen('assessment') }
+    else if (i === 5) { if (portrait) setScreen('portrait'); else setScreen('assessment') }
+    else if (i === 6) { setActiveQuestion(null); setView('todo'); setScreen('list') }
+    else if (i === 7) {
       if (materialDomain) setScreen('material')
       else { setView('todo'); setScreen('list') }
-    } else if (i >= 7 && i <= 11) {
+    } else if (i >= 8 && i <= 12) {
       if (activeQuestion) setScreen('flow')
       else { setView('todo'); setScreen('list') }
-    } else if (i === 12) { setActiveQuestion(null); setView('profile'); setScreen('profile') }
+    } else if (i === 13) { setActiveQuestion(null); setView('profile'); setScreen('profile') }
     window.scrollTo(0, 0)
   }
   function stepHint(i: number): string {
     if (i === 0) return '去注册 / 登录'
     if (!userId) return '请先登录'
     const hints: Record<number, string> = {
-      1: '去知情同意', 2: '去学习目标', 3: '去摸底测试', 4: portrait ? '去摸底画像' : '完成摸底后可看画像',
-      5: '去今日待办（学习路径）', 6: materialDomain ? '去学习材料' : '去今日待办选一节学习材料',
-      7: activeQuestion ? '去练习作答' : '去今日待办选一题开始练习',
-      8: activeQuestion ? '去诊断结论' : '去今日待办选一题进入诊断',
-      9: activeQuestion ? '去追问诊断' : '去今日待办选一题进入追问',
-      10: activeQuestion ? '去靶向训练' : '去今日待办选一题进入训练',
-      11: activeQuestion ? '去迁移复测' : '去今日待办选一题进入复测',
-      12: '去学习档案',
+      1: '去知情同意', 2: '去学习目标', 3: '去学习地图（知识图谱）', 4: '去摸底测试',
+      5: portrait ? '去摸底画像' : '完成摸底后可看画像',
+      6: '去今日待办（学习路径）', 7: materialDomain ? '去学习材料' : '去今日待办选一节学习材料',
+      8: activeQuestion ? '去练习作答' : '去今日待办选一题开始练习',
+      9: activeQuestion ? '去诊断结论' : '去今日待办选一题进入诊断',
+      10: activeQuestion ? '去追问诊断' : '去今日待办选一题进入追问',
+      11: activeQuestion ? '去靶向训练' : '去今日待办选一题进入训练',
+      12: activeQuestion ? '去迁移复测' : '去今日待办选一题进入复测',
+      13: '去学习档案',
     }
     return hints[i] ?? ''
   }
@@ -597,7 +601,7 @@ function GoalPicker({ onNext, goal, onBack }: { onNext: (g: string) => void; goa
       </div>
       <div className="mt-7 flex items-center gap-3">
         <button onClick={() => onNext(picked)} className="btn btn-primary">
-          保存目标，开始摸底<ArrowRight size={15} weight="bold" />
+          保存目标，开启学习地图<ArrowRight size={15} weight="bold" />
         </button>
         <button onClick={onBack} className="btn rounded-full border border-line bg-white px-5 py-3 text-sm font-medium text-ink-2 hover:bg-paper">上一步</button>
       </div>
@@ -622,12 +626,64 @@ type StudyMapData = {
   note: string
 }
 
-/* 概览：课程知识图谱 = 各药理系统「组」节点 → 章节节点，星形/放射排布，状态着色 */
+/* 概览：课程知识图谱 = 全景交互星轨图谱 + 各药理系统分组清单 */
 function CourseGraph({ data, goal, onOpen, onSkip, onProceed }: {
   data: StudyMapData; goal: string
   onOpen: (n: StudyNode) => void; onSkip: () => void; onProceed: () => void
 }) {
+  const [viewMode, setViewMode] = useState<'graph' | 'list'>('graph')
+  const [selectedChapter, setSelectedChapter] = useState<StudyNode | null>(null)
+
   const doneCount = data.groups.reduce((acc, g) => acc + g.nodes.filter((n) => n.studied?.passed).length, 0)
+
+  // 构建课程全景图谱的宏观节点与拓扑关系
+  const { macroNodes, macroEdges, allChaptersMap } = useMemo(() => {
+    const rootName = '药理学课程'
+    const edges: KgEdgeT[] = []
+    const nodes: KgNodeT[] = [{ name: rootName, type: '核心' }]
+    const chMap = new Map<string, StudyNode>()
+
+    for (const g of data.groups) {
+      nodes.push({ name: g.name, type: '系统' })
+      edges.push({
+        source: { type: '核心', name: rootName },
+        edge: '包含',
+        target: { type: '系统', name: g.name },
+      })
+      for (const n of g.nodes) {
+        chMap.set(n.title, n)
+        const isPassed = n.studied?.passed
+        const nodeType = isPassed ? '已达标' : n.is_seed ? '示范' : '章节'
+        nodes.push({ name: n.title, type: nodeType })
+        edges.push({
+          source: { type: '系统', name: g.name },
+          edge: '包含',
+          target: { type: nodeType, name: n.title },
+          note: `${g.name} · ${n.is_seed ? '顾问深度示范章' : '全国统编教学大纲'}${isPassed ? '（已随堂达标）' : ''}`,
+        })
+      }
+    }
+    return { macroNodes: nodes, macroEdges: edges, allChaptersMap: chMap }
+  }, [data])
+
+  // 全景图谱顶部切换标签
+  const macroTabs: KgTabDef[] = useMemo(() => [
+    { k: 'all', label: `全景 ${data.total_domains}章`, match: () => true },
+    { k: 'featured', label: '示范与重点', match: (e) => e.source.type === '核心' || e.target.type === '示范' || data.recommended.some((id) => allChaptersMap.get(e.target.name)?.domain_id === id) },
+    ...data.groups.map((g) => ({
+      k: g.key,
+      label: g.name.replace('系统药理', '').replace('及代谢系统', '').replace('药物', ''),
+      match: (e: KgEdgeT) => (e.source.name === '药理学课程' && e.target.name === g.name) || e.source.name === g.name,
+    })),
+  ], [data, allChaptersMap])
+
+  const handleNodeClick = (name: string) => {
+    const ch = allChaptersMap.get(name)
+    if (ch) {
+      setSelectedChapter(ch)
+    }
+  }
+
   const node = (n: StudyNode) => {
     const done = n.studied?.passed
     const rec = data.recommended.includes(n.domain_id)
@@ -639,11 +695,12 @@ function CourseGraph({ data, goal, onOpen, onSkip, onProceed }: {
         <span className={`size-2 flex-none rounded-full ${done ? 'bg-ok' : seed ? 'bg-gold' : rec ? 'bg-primary' : 'bg-line'}`} />
         <span className="leading-tight text-ink">{n.title}</span>
         {done && <CheckCircle size={12} weight="fill" className="ml-auto flex-none text-ok" />}
-        {!done && seed && <span className="ml-auto flex-none rounded-full bg-gold px-1.5 text-[9px] font-semibold text-gold">示范深挖</span>}
+        {!done && seed && <span className="ml-auto flex-none rounded-full bg-gold px-1.5 text-[9px] font-semibold text-white">示范深挖</span>}
         {!done && !seed && rec && <span className="ml-auto flex-none text-[9px] font-semibold text-primary">建议</span>}
       </button>
     )
   }
+
   return (
     <motion.div key="study-overview" initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={spring}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -651,8 +708,7 @@ function CourseGraph({ data, goal, onOpen, onSkip, onProceed }: {
           <p className="text-xs font-semibold tracking-[0.18em] text-gold">目标驱动 · 学习地图</p>
           <h2 className="display mt-1 text-[26px]">课程知识图谱</h2>
           <p className="mt-2 max-w-[640px] text-sm leading-relaxed text-ink-2">
-            {goal}的下一站：按药理系统，把《药理学》拆成一棵棵「章节知识点树」。先学一课，再做这棵树的
-            随堂摸底，达标后再进入正式摸底，效果更好。
+            {goal}的下一站：按药理系统，把《药理学》拆成全景拓扑星轨。先在全景中了解章节脉络，点击章节可直接进入该章自学、查看知识图谱与完成随堂摸底。
           </p>
         </div>
         <div className="rounded-2xl border border-line bg-white px-4 py-3 text-center">
@@ -661,35 +717,112 @@ function CourseGraph({ data, goal, onOpen, onSkip, onProceed }: {
         </div>
       </div>
 
-      {/* 图例 */}
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-ink-3">
-        <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-primary" />建议先学</span>
-        <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-gold" />顾问深图谱（示范）</span>
-        <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-ok" />已达标</span>
-        <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-line" />待学（题库先行）</span>
+      {/* 视图切换与图例 */}
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+        <div className="flex items-center gap-1 rounded-xl bg-paper-2 p-1">
+          <button onClick={() => setViewMode('graph')}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${viewMode === 'graph' ? 'bg-white text-primary shadow-sm' : 'text-ink-3 hover:text-ink'}`}>
+            <Sparkle size={14} weight={viewMode === 'graph' ? 'fill' : 'regular'} />
+            全景拓扑星轨
+          </button>
+          <button onClick={() => setViewMode('list')}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${viewMode === 'list' ? 'bg-white text-primary shadow-sm' : 'text-ink-3 hover:text-ink'}`}>
+            <SquaresFour size={14} weight={viewMode === 'list' ? 'fill' : 'regular'} />
+            系统章节清单 ({data.groups.length}个药理系统)
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-3">
+          <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-[#1d4ed8]" />药理系统</span>
+          <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-gold" />顾问深图谱（示范）</span>
+          <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-ok" />已达标</span>
+          <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-primary" />大纲章节</span>
+        </div>
       </div>
 
-      <div className="mt-6 space-y-4">
-        {data.groups.map((g, gi) => {
-          const gDone = g.nodes.filter((n) => n.studied?.passed).length
-          return (
-            <motion.div key={g.key} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-              transition={{ ...spring, delay: gi * 0.05 }} className="spot-card p-5">
-              <div className="mb-4 flex flex-wrap items-center gap-3">
-                <span className="capsule" />
-                <p className="text-sm font-semibold">{g.name}</p>
-                <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] text-ink-3">
-                  {gDone}/{g.nodes.length} 达标
+      {/* 视图区 */}
+      {viewMode === 'graph' ? (
+        <div className="mt-4 space-y-4">
+          <KnowledgeGraphView
+            title="药理学全景课程拓扑星轨"
+            nodes={macroNodes}
+            edges={macroEdges}
+            tabDefs={macroTabs}
+            height={440}
+            onNodeClick={handleNodeClick}
+          />
+
+          {/* 选中章节卡片 */}
+          {selectedChapter ? (
+            <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-primary/40 bg-primary-soft/60 p-4 shadow-sm">
+              <div className="flex items-center gap-3">
+                <span className="grid size-9 place-items-center rounded-xl bg-primary text-white shadow">
+                  <Pill size={20} weight="fill" />
                 </span>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-bold text-ink">{selectedChapter.title}</p>
+                    {selectedChapter.is_seed ? (
+                      <span className="rounded-full bg-gold px-2 py-0.5 text-[10px] font-semibold text-white">专家示范深挖</span>
+                    ) : (
+                      <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[10px] text-ink-3">大纲标准章节</span>
+                    )}
+                    {selectedChapter.studied?.passed && (
+                      <span className="flex items-center gap-1 text-[11px] font-medium text-ok">
+                        <CheckCircle size={13} weight="fill" />随堂已达标 ({selectedChapter.studied.score}/{selectedChapter.studied.total})
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-ink-3 mt-0.5">支持查看本章知识关系图谱、易混药对辨析及随堂摸底</p>
+                </div>
               </div>
-              {/* 图谱：组节点为「中轴」，章节节点放射挂接（结构即图谱） */}
-              <div className="flex flex-wrap gap-2">
-                {g.nodes.map((n) => node(n))}
-              </div>
+              <button onClick={() => onOpen(selectedChapter)} className="btn btn-primary py-2 px-4 text-xs font-semibold shadow">
+                进入本章自学与随堂测<ArrowRight size={14} weight="bold" />
+              </button>
             </motion.div>
-          )
-        })}
-      </div>
+          ) : (
+            <div className="flex items-center gap-2 rounded-xl border border-line-2 bg-paper/50 px-4 py-2 text-xs text-ink-3">
+              <Sparkle size={14} className="text-primary flex-none" />
+              <span>提示：在上方全景图谱中点击任意「章节」节点，或切换系统标签聚焦相应分类，即可直接进入该章自学。</span>
+            </div>
+          )}
+
+          {/* 示范与推荐快捷通道 */}
+          <div className="rounded-2xl border border-line bg-white p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="capsule" />
+                <p className="text-xs font-semibold text-ink">示范深挖与建议先学（快捷通道）</p>
+              </div>
+              <span className="text-[11px] text-ink-3">点击任意卡片直接开启自学</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {data.groups.flatMap((g) => g.nodes).filter((n) => n.is_seed || data.recommended.includes(n.domain_id)).map((n) => node(n))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-6 space-y-4">
+          {data.groups.map((g, gi) => {
+            const gDone = g.nodes.filter((n) => n.studied?.passed).length
+            return (
+              <motion.div key={g.key} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+                transition={{ ...spring, delay: gi * 0.05 }} className="spot-card p-5">
+                <div className="mb-4 flex flex-wrap items-center gap-3">
+                  <span className="capsule" />
+                  <p className="text-sm font-semibold">{g.name}</p>
+                  <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] text-ink-3">
+                    {gDone}/{g.nodes.length} 达标
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {g.nodes.map((n) => node(n))}
+                </div>
+              </motion.div>
+            )
+          })}
+        </div>
+      )}
 
       <div className="mt-7 flex flex-wrap items-center gap-3">
         <button onClick={onProceed} className="btn btn-primary">
@@ -711,7 +844,7 @@ function ChapterStudy({ userId, node, goal, onError, onDone }: {
 }) {
   type Detail =
     | { source: 'seed'; graph: { chain: { level: number; title: string; summary: string }[]; relations: { source: { type: string; name: string }; edge: string; target: { type: string; name: string }; note?: string; evidence?: KgEvidence; review_status?: string }[]; confusion: { drug_a: string; drug_b: string; distinction: string; evidence?: KgEvidence }[] } }
-    | { source: 'syllabus'; chapter: { no: number; title: string; objectives: Record<string, string[]> | Record<string, string>; key_points: string[]; difficulties: string[]; sections: { title: string; points: string[] }[] } }
+    | { source: 'syllabus'; chapter: { no: number; title: string; objectives: Record<string, string[]> | Record<string, string>; key_points: string[]; difficulties: string[]; sections: { title: string; points: string[] }[] }; relations?: KgEdgeT[]; confusion?: { drug_a: string; drug_b: string; distinction: string; evidence?: KgEvidence }[] }
     | { source: 'none'; chapter: null }
   const [detail, setDetail] = useState<Detail | null>(null)
   const [quiz, setQuiz] = useState<{ id: string; code: string; stem: string; options: { key: string; text: string }[] }[] | null>(null)
@@ -771,6 +904,7 @@ function ChapterStudy({ userId, node, goal, onError, onDone }: {
             {detail.graph.relations.length > 0 && (
               <>
                 <p className="mb-3 mt-5 text-sm font-semibold">药效关系（源—边→目标，含教材出处）</p>
+                <KnowledgeGraphView edges={detail.graph.relations} />
                 <div className="grid gap-2 sm:grid-cols-2">
                   {detail.graph.relations.map((r, i) => (
                     <div key={i} className="rounded-lg border border-line-2 bg-white px-2.5 py-2">
@@ -853,7 +987,25 @@ function ChapterStudy({ userId, node, goal, onError, onDone }: {
                   {detail.chapter.difficulties.map((d2, i) => <span key={i} className="rounded-full bg-cat-red-soft px-2.5 py-1 text-[11px] text-cat-red">难点 · {d2}</span>)}
                 </div>
               )}
-              <p className="mt-3 text-[11px] text-ink-3">来源：校内《药理学》教学大纲（章节→节→知识点）。知识点间的逻辑关系图谱化，由药理顾问逐章审校后补全。</p>
+              {(detail.relations ?? []).length > 0 && (
+                <div className="mt-5 border-t border-dashed border-line pt-4">
+                  <p className="mb-2 text-[13px] font-semibold">本章知识图谱 · 章节—节—知识点—药物关系</p>
+                  <KnowledgeGraphView edges={detail.relations ?? []} title="本章图谱 · 全部待顾问审校" />
+                </div>
+              )}
+              {(detail.confusion ?? []).length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {(detail.confusion ?? []).slice(0, 3).map((p, i) => (
+                    <div key={i} className="rounded-lg bg-paper px-3 py-2 text-[12px]">
+                      <span className="font-semibold text-primary">{p.drug_a}</span>
+                      <span className="mx-1.5 text-ink-3">vs</span>
+                      <span className="font-semibold text-gold">{p.drug_b}</span>
+                      <span className="ml-2 text-ink-2">{p.distinction}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="mt-3 text-[11px] text-ink-3">来源：校内《药理学》教学大纲（章节→节→知识点）+ 题库选项共现（药物归属/易混候选）。机制级关系由药理顾问逐章审校后补全，当前图谱为待审校 v1。</p>
             </div>
           </div>
         )}
@@ -1268,6 +1420,210 @@ function Portrait({ result, onEnter }: { result: PortraitResult; onEnter: () => 
   )
 }
 
+/* ---------- 艾宾浩斯抗遗忘长时记忆复测胶囊（场景一） ---------- */
+function RetestCapsuleCard({ userId, onDone }: { userId: string; onDone: () => void }) {
+  const [capsule, setCapsule] = useState<RetestCapsuleData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [inQuiz, setInQuiz] = useState(false)
+  const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [submitting, setSubmitting] = useState(false)
+  const [result, setResult] = useState<{
+    passed: boolean; score: number; new_stage: number; next_due_days: number; next_stage_desc?: string; memory_boost: number; message: string
+  } | null>(null)
+
+  const loadCapsule = useCallback(() => {
+    setLoading(true)
+    api.retestCapsule(userId)
+      .then((d: RetestCapsuleData) => {
+        setCapsule(d)
+        setInQuiz(false)
+        setAnswers({})
+        setResult(null)
+      })
+      .catch(() => setCapsule(null))
+      .finally(() => setLoading(false))
+  }, [userId])
+
+  useEffect(() => { loadCapsule() }, [loadCapsule])
+
+  if (loading || !capsule || !capsule.has_capsule || !capsule.questions?.length) return null
+
+  const handlePick = (qid: string, key: string) => {
+    setAnswers((prev) => ({ ...prev, [qid]: key }))
+  }
+
+  const handleSubmit = async () => {
+    if (!capsule.schedule_id) return
+    setSubmitting(true)
+    try {
+      const res = await api.submitRetestCapsule(userId, {
+        schedule_id: capsule.schedule_id,
+        answers,
+      })
+      setResult(res)
+    } catch (e) {
+      alert(String(e))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const allAnswered = capsule.questions.every((q) => answers[q.id])
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mb-6 overflow-hidden rounded-2xl border border-amber-500/30 bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-transparent p-5 shadow-xs dark:border-amber-400/25 dark:from-amber-950/20"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/20 pb-3">
+        <div className="flex items-center gap-2">
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-500 text-white shadow-xs">
+            <Lightning size={14} weight="fill" />
+          </span>
+          <span className="text-xs font-bold tracking-wider text-amber-600 dark:text-amber-400">
+            今日遗忘预警 · 艾宾浩斯抗遗忘加固
+          </span>
+          <span className="rounded-full bg-amber-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+            {capsule.stage_name}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-ink-3">
+          <Hourglass size={14} className="text-amber-500" />
+          <span>记忆存留度</span>
+          <span className="font-bold text-amber-600 dark:text-amber-400">
+            {capsule.retention_pct}%
+          </span>
+        </div>
+      </div>
+
+      {!inQuiz && !result && (
+        <div className="mt-3.5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-ink">
+              检测到您在{' '}
+              <span className="font-bold text-primary">
+                {capsule.domain_name}（{capsule.concept_name}）
+              </span>{' '}
+              处于记忆衰退临界区！
+            </p>
+            <p className="mt-1 text-xs text-ink-3">
+              只需 2 分钟完成 {capsule.questions.length} 道靶向辨析题，即可阻断遗忘曲线，建立长时专业记忆。
+            </p>
+          </div>
+          <button
+            onClick={() => setInQuiz(true)}
+            className="btn btn-primary inline-flex shrink-0 items-center gap-1.5 rounded-full px-5 py-2 text-xs font-semibold shadow-xs"
+          >
+            <Lightning size={14} weight="fill" />
+            开始闪电复测（{capsule.questions.length}题）
+          </button>
+        </div>
+      )}
+
+      {inQuiz && !result && (
+        <div className="mt-4 space-y-5">
+          {capsule.questions.map((q, idx) => (
+            <div key={q.id} className="rounded-xl border border-line bg-card/60 p-4">
+              <p className="text-xs font-semibold text-primary">
+                第 {idx + 1} 题 / 共 {capsule.questions!.length} 题
+              </p>
+              <p className="mt-1.5 text-sm font-medium leading-relaxed">{q.stem}</p>
+              <div className="mt-3 space-y-2">
+                {q.options?.map((opt) => {
+                  const isPicked = answers[q.id] === opt.key
+                  return (
+                    <button
+                      key={opt.key}
+                      onClick={() => handlePick(q.id, opt.key)}
+                      className={`flex w-full items-center gap-3 rounded-lg border px-3.5 py-2.5 text-left text-xs transition ${
+                        isPicked
+                          ? 'border-primary bg-primary/10 font-semibold text-primary shadow-xs'
+                          : 'border-line hover:border-line-hover hover:bg-card-hover'
+                      }`}
+                    >
+                      <span
+                        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+                          isPicked ? 'bg-primary text-white' : 'border border-line text-ink-3'
+                        }`}
+                      >
+                        {opt.key}
+                      </span>
+                      <span className="leading-snug">{opt.text}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+
+          <div className="flex items-center justify-end gap-3 pt-1">
+            <button
+              onClick={() => setInQuiz(false)}
+              className="btn rounded-full border border-line px-4 py-1.5 text-xs text-ink-3 hover:text-ink"
+            >
+              稍后再测
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={!allAnswered || submitting}
+              className="btn btn-primary rounded-full px-5 py-2 text-xs font-semibold shadow-xs disabled:opacity-50"
+            >
+              {submitting ? '评估中…' : '提交复测结果'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="mt-3.5 space-y-3">
+          <div
+            className={`flex items-start gap-3 rounded-xl p-4 ${
+              result.passed
+                ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200'
+                : 'border border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+            }`}
+          >
+            <div className="mt-0.5">
+              {result.passed ? (
+                <CheckCircle size={20} weight="fill" className="text-emerald-500" />
+              ) : (
+                <Warning size={20} weight="fill" className="text-amber-500" />
+              )}
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-bold">
+                {result.passed ? '🎉 长时专业记忆已成功激活！' : '⚠️ 记忆仍需巩固'}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed opacity-90">{result.message}</p>
+              <div className="mt-2.5 flex flex-wrap items-center gap-3 text-xs font-semibold">
+                <span>正确率: {Math.round(result.score * 100)}%</span>
+                <span>•</span>
+                <span>当前进度: {result.next_stage_desc}</span>
+                <span>•</span>
+                <span>记忆强化度: +{result.memory_boost}%</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-1">
+            <button
+              onClick={() => {
+                setResult(null)
+                loadCapsule()
+                onDone()
+              }}
+              className="btn btn-primary rounded-full px-5 py-1.5 text-xs font-semibold"
+            >
+              完成并返回待办
+            </button>
+          </div>
+        </motion.div>
+      )}
+    </motion.div>
+  )
+}
+
 /* ---------- 学习路径（今日待办） ---------- */
 
 type PlanTask = { type: 'material' | 'practice'; domain_id: string; domain: string; category: string | null; state: string; title: string; guide?: string; goal?: string }
@@ -1312,6 +1668,9 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
     <motion.div key="plan" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <p className="text-xs font-semibold tracking-[0.18em] text-gold">STEP 6 · 学习路径</p>
       <h2 className="display mt-2 text-[26px]">今日待办</h2>
+      <div className="mt-4">
+        <RetestCapsuleCard userId={userId} onDone={() => load()} />
+      </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <p className="text-sm leading-relaxed text-ink-2">{plan.note}</p>
         {hasTasks && (
@@ -1555,6 +1914,115 @@ function QAView({ userId, onError }: { userId: string; onError: (m: string) => v
 
 /* ---------- 学习材料路由（一学一练：种子域走深图谱，章节走大纲学习） ---------- */
 
+/* ---------- 章节前置温故知新微测（场景三） ---------- */
+function ChapterWarmupCard({ userId, domainId }: { userId: string; domainId: string }) {
+  const [warmup, setWarmup] = useState<{ has_warmup: boolean; title?: string; reason?: string; question?: Question } | null>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [picked, setPicked] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [feedback, setFeedback] = useState<{ is_correct: boolean; correct_answer: string; message: string } | null>(null)
+
+  useEffect(() => {
+    api.chapterWarmup(userId, domainId).then(setWarmup).catch(() => setWarmup(null))
+  }, [userId, domainId])
+
+  if (!warmup || !warmup.has_warmup || !warmup.question) return null
+
+  const q = warmup.question
+
+  const handleSubmit = async () => {
+    if (!picked) return
+    setSubmitting(true)
+    try {
+      const res = await api.submitChapterWarmup(userId, domainId, {
+        question_id: q.id,
+        selected_option: picked,
+      })
+      setFeedback(res)
+    } catch (e) {
+      alert(String(e))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="mb-5 overflow-hidden rounded-2xl border border-primary/25 bg-primary-soft/30 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white shadow-xs">
+            <Sparkle size={13} weight="fill" />
+          </span>
+          <span className="text-xs font-bold text-primary">{warmup.title}</span>
+        </div>
+        {!expanded && !feedback && (
+          <button
+            onClick={() => setExpanded(true)}
+            className="btn btn-primary rounded-full px-3.5 py-1 text-xs font-semibold shadow-xs"
+          >
+            做 1 道热身题唤醒记忆
+          </button>
+        )}
+      </div>
+      <p className="mt-1.5 text-xs text-ink-2">{warmup.reason}</p>
+
+      {expanded && !feedback && (
+        <div className="mt-3.5 rounded-xl border border-line bg-card/80 p-4">
+          <p className="text-xs font-semibold text-ink-3">热身微测：</p>
+          <p className="mt-1 text-sm font-medium leading-relaxed">{q.stem}</p>
+          <div className="mt-3 space-y-1.5">
+            {q.options?.map((opt) => (
+              <button
+                key={opt.key}
+                onClick={() => setPicked(opt.key)}
+                className={`flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-xs transition ${
+                  picked === opt.key
+                    ? 'border-primary bg-primary/10 font-semibold text-primary'
+                    : 'border-line hover:bg-card-hover'
+                }`}
+              >
+                <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                  picked === opt.key ? 'bg-primary text-white' : 'border border-line text-ink-3'
+                }`}>
+                  {opt.key}
+                </span>
+                <span>{opt.text}</span>
+              </button>
+            ))}
+          </div>
+          <div className="mt-3 flex justify-end gap-2">
+            <button
+              onClick={() => setExpanded(false)}
+              className="btn rounded-full border border-line px-3.5 py-1 text-xs text-ink-3"
+            >
+              收起
+            </button>
+            <button
+              disabled={!picked || submitting}
+              onClick={handleSubmit}
+              className="btn btn-primary rounded-full px-4 py-1 text-xs font-semibold disabled:opacity-50"
+            >
+              {submitting ? '提交中…' : '提交热身'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {feedback && (
+        <div className="mt-3 flex items-start gap-2.5 rounded-xl border border-primary/30 bg-card p-3 text-xs">
+          <span className="mt-0.5">{feedback.is_correct ? '🎉' : '💡'}</span>
+          <div>
+            <p className="font-semibold text-primary">
+              {feedback.is_correct ? '回答正确！' : `参考答案：${feedback.correct_answer}`}
+            </p>
+            <p className="mt-0.5 text-ink-2">{feedback.message}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* 今日待办「进入学习 · 随堂自测」的统一入口：
  * 先查 study-map 明细判来源 —— 种子域（顾问深图谱）渲染 MaterialView；
  * 章节渲染 ChapterStudy（大纲知识点树 + 随堂自测 + 去本章练习），保证每个薄弱项
@@ -1592,8 +2060,17 @@ function MaterialRoute({ userId, domainId, goal, onPractice, onBack, onError }: 
 
   if (detail.is_seed) {
     return (
-      <MaterialView key={domainId} userId={userId} domainId={domainId} onError={onError}
-        onPractice={onPractice} onBack={onBack} />
+      <div key={domainId}>
+        <div className="mb-4">
+          <button onClick={onBack}
+            className="btn items-center gap-1 rounded-full border border-line bg-white px-3 py-1.5 text-xs text-ink-2 hover:border-primary hover:text-primary">
+            <ArrowRight size={12} className="rotate-180" />返回今日待办
+          </button>
+        </div>
+        <ChapterWarmupCard userId={userId} domainId={domainId} />
+        <MaterialView userId={userId} domainId={domainId} onError={onError}
+          onPractice={onPractice} onBack={onBack} />
+      </div>
     )
   }
 
@@ -1611,6 +2088,7 @@ function MaterialRoute({ userId, domainId, goal, onPractice, onBack, onError }: 
           <ArrowRight size={12} className="rotate-180" />返回今日待办
         </button>
       </div>
+      <ChapterWarmupCard userId={userId} domainId={domainId} />
       <ChapterStudy userId={userId} node={node} goal={goal} onError={onError} onDone={() => {}} />
       <div className="mt-6 flex flex-wrap items-center gap-3">
         <button onClick={goPractice} disabled={qBusy} className="btn btn-primary">
@@ -1723,6 +2201,7 @@ function MaterialView({ userId, domainId, onPractice, onBack, onError }: {
             <h3 className="text-sm font-semibold"><span className="capsule gold" />药效关系图谱 · 错题背后的知识点关系</h3>
           </div>
           <p className="mb-4 text-xs text-ink-3">把这道域内的药物/靶点/效应/禁忌关系画成一条条边，帮你看清「错因」所在的一环。</p>
+          <KnowledgeGraphView edges={mat.knowledge_relations ?? []} />
           <div className="grid gap-2.5 sm:grid-cols-2">
             {(mat.knowledge_relations ?? []).map((r, i) => (
               <div key={i} className="rounded-xl border border-line-2 bg-white px-3 py-2.5">
@@ -1841,6 +2320,11 @@ type WrongRow = {
   misconception: { name: string; category: string } | null
   case_evidence?: { scenario: string; lesson: string; source: string } | null
   evidence_level: string | null
+  retention_pct?: number
+  decay_level?: 'fresh' | 'warning' | 'critical'
+  days_since?: number
+  stage?: number
+  schedule_id?: string | null
 }
 
 /* 错题记忆卡（wrong/{id}/recall）：图谱 + 临床/教材助记 */
@@ -1850,9 +2334,11 @@ type RecallData = {
   case_evidence: { scenario: string; lesson: string; source: string } | null
   evidence_level: string | null
   relations: { source: { type: string; name: string }; edge: string; target: { type: string; name: string }; note?: string; evidence?: KgEvidence; review_status?: string }[]
-  confusion_pairs: { drug_a: string; drug_b: string; distinction: string; evidence?: KgEvidence }[]
+  confusion_pairs: { drug_a: string; drug_b: string; distinction: string; evidence?: KgEvidence; relevant?: boolean }[]
   textbook_anchors: { chapter: string; page: number; book_page: number; score: number; text: string; source_ref: string }[]
   trained: boolean
+  linked_entities?: { name: string; type: string }[]
+  subgraph?: { nodes: { name: string; type: string }[]; edges: RecallData['relations']; fallback: boolean }
 }
 
 type ArchiveData = {
@@ -2181,16 +2667,214 @@ function Profile({ userId, onGoTodo }: { userId: string; onGoTodo: () => void })
   )
 }
 
+/* ---------- 错题本一键抗遗忘唤醒弹窗（场景二） ---------- */
+/* ---------- 错题本一键抗遗忘唤醒弹窗（场景二 · 现代药房质感重构） ---------- */
+function WrongAwakenModal({
+  userId,
+  attemptId,
+  onClose,
+}: {
+  userId: string
+  attemptId: string
+  onClose: () => void
+}) {
+  const [loading, setLoading] = useState(true)
+  const [data, setData] = useState<{
+    concept_name: string
+    question: Question
+    hint: string
+  } | null>(null)
+  const [selected, setSelected] = useState<string | null>(null)
+  const [submitted, setSubmitted] = useState(false)
+
+  useEffect(() => {
+    setLoading(true)
+    api.awakenWrong(userId, attemptId)
+      .then(setData)
+      .catch((e) => alert(String(e)))
+      .finally(() => setLoading(false))
+  }, [userId, attemptId])
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 pt-16 sm:pt-20 bg-black/60 backdrop-blur-md overflow-y-auto">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 16 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+        className="relative w-full max-w-xl max-h-[calc(100dvh-6rem)] my-auto flex flex-col overflow-hidden rounded-2xl border border-line bg-white shadow-2xl"
+      >
+        {/* 顶部处方笺式装饰头栏 */}
+        <div className="flex shrink-0 items-center justify-between border-b border-line-2 bg-paper px-6 py-4">
+          <div className="flex items-center gap-2.5">
+            <span className="capsule gold" />
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold tracking-[0.16em] text-gold">抗遗忘唤醒</span>
+                <span className="rounded-full bg-gold-soft px-2 py-0.5 text-[10px] font-semibold text-gold">同源变式巩固</span>
+              </div>
+              <h3 className="display mt-0.5 text-base font-bold text-ink">
+                {data?.concept_name ? `「${data.concept_name}」定向靶向唤醒` : '抗遗忘靶向巩固'}
+              </h3>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="关闭"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-ink-3 shadow-xs transition hover:bg-line-2 hover:text-ink"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* 主体内容（自适应垂直滚动） */}
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          {loading && (
+            <div className="py-14 text-center">
+              <div className="skeleton mx-auto mb-3 h-8 w-8 rounded-full" />
+              <p className="text-xs font-medium text-ink-3">正在检索同章节变式题与药学辨析出处…</p>
+            </div>
+          )}
+
+          {!loading && data && (
+            <div className="space-y-4">
+              {/* 知识点提炼提示框（对齐处方笺风格） */}
+              <div className="rounded-xl border border-line-2 bg-paper px-4 py-3">
+                <p className="flex items-center gap-1.5 text-[11px] font-semibold text-gold">
+                  <Pill size={13} weight="fill" />
+                  临床机制与辨析提要
+                </p>
+                <p className="mt-1.5 text-[13px] leading-relaxed text-ink-2">
+                  {data.hint}
+                </p>
+              </div>
+
+              {/* 变式题目区 */}
+              <div className="rounded-xl border border-line bg-[#FCFDFB] p-4.5">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="rounded-full bg-primary-soft px-2.5 py-0.5 text-[11px] font-semibold text-primary">
+                    强化变式题 · {data.question.code}
+                  </span>
+                  <span className="text-xs text-ink-3">单项选择题</span>
+                </div>
+                <p className="text-[15px] font-medium leading-relaxed text-ink">
+                  {data.question.stem}
+                </p>
+
+                {/* 选项列表 */}
+                <div className="mt-4 space-y-2.5">
+                  {data.question.options?.map((opt) => {
+                    const isPicked = selected === opt.key
+                    const showResult = submitted
+                    const isCorrect = opt.key === (data.question as unknown as { answer?: string }).answer
+
+                    let borderClass = 'border-line hover:border-primary/40 bg-white'
+                    let textClass = 'text-ink'
+                    let badgeClass = 'border border-line bg-paper-2 text-ink-2 font-medium'
+
+                    if (isPicked && !showResult) {
+                      borderClass = 'border-primary bg-primary-soft/40 shadow-xs ring-1 ring-primary/30'
+                      textClass = 'text-primary font-medium'
+                      badgeClass = 'bg-primary text-white font-bold'
+                    } else if (showResult && isCorrect) {
+                      borderClass = 'border-ok bg-ok-soft/50 ring-1 ring-ok/40'
+                      textClass = 'text-ok font-semibold'
+                      badgeClass = 'bg-ok text-white font-bold'
+                    } else if (showResult && isPicked && !isCorrect) {
+                      borderClass = 'border-red-300 bg-red-50 ring-1 ring-red-300'
+                      textClass = 'text-red-700'
+                      badgeClass = 'bg-red-500 text-white font-bold'
+                    }
+
+                    return (
+                      <button
+                        key={opt.key}
+                        disabled={submitted}
+                        onClick={() => setSelected(opt.key)}
+                        className={`flex w-full items-center gap-3.5 rounded-xl border p-3.5 text-left text-xs transition ${borderClass}`}
+                      >
+                        <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs ${badgeClass}`}>
+                          {opt.key}
+                        </span>
+                        <span className={`leading-relaxed ${textClass}`}>{opt.text}</span>
+                        {showResult && isCorrect && (
+                          <CheckCircle size={16} weight="fill" className="ml-auto shrink-0 text-ok" />
+                        )}
+                        {showResult && isPicked && !isCorrect && (
+                          <XCircle size={16} weight="fill" className="ml-auto shrink-0 text-red-500" />
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* 作答反馈提示 */}
+              {submitted && (
+                <motion.div
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex items-start gap-2.5 rounded-xl border border-ok/30 bg-ok-soft/60 p-3.5"
+                >
+                  <CheckCircle size={18} weight="fill" className="mt-0.5 shrink-0 text-ok" />
+                  <div>
+                    <p className="text-xs font-bold text-ok">
+                      唤醒作答已完成！神经元长时记忆突触已重新加固。
+                    </p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-ink-2">
+                      错题记忆新鲜度已重置提升，系统将在下次临界衰退时主动提醒您。
+                    </p>
+                  </div>
+                </motion.div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* 底部操作条 */}
+        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-line-2 bg-paper px-6 py-3.5">
+          <button
+            onClick={onClose}
+            className="rounded-full border border-line bg-white px-4 py-2 text-xs font-medium text-ink-2 transition hover:bg-paper-2"
+          >
+            {submitted ? '返回错题本' : '稍后再做'}
+          </button>
+          {!submitted && (
+            <button
+              disabled={!selected}
+              onClick={() => setSubmitted(true)}
+              className="btn btn-primary rounded-full px-6 py-2 text-xs font-semibold disabled:opacity-40"
+            >
+              确认作答
+            </button>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
 function WrongBook({ userId, onGoTodo }: { userId: string; onGoTodo: () => void }) {
   const [wrong, setWrong] = useState<WrongRow[] | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
+  const [awakenAttemptId, setAwakenAttemptId] = useState<string | null>(null)
   const [recallMap, setRecallMap] = useState<Record<string, RecallData | null>>({})
   const [loadingRecall, setLoadingRecall] = useState<string | null>(null)
+  const [wgraph, setWgraph] = useState<{
+    nodes: KgNodeT[]; edges: KgEdgeT[]
+    meta: Record<string, { attempt_ids?: string[] }>
+    total: number; shown: number
+  } | null>(null)
 
   useEffect(() => { window.scrollTo(0, 0) }, [])
-  useEffect(() => {
+  const loadWrongData = useCallback(() => {
     api.wrongBook(userId).then(setWrong).catch(() => setWrong([]))
+    api.wrongGraph(userId).then(setWgraph).catch(() => setWgraph(null))
   }, [userId])
+
+  useEffect(() => {
+    loadWrongData()
+  }, [loadWrongData])
 
   const toggleRecall = (attemptId: string) => {
     if (openId === attemptId) { setOpenId(null); return }
@@ -2204,11 +2888,44 @@ function WrongBook({ userId, onGoTodo }: { userId: string; onGoTodo: () => void 
     }
   }
 
+  // 关联图谱点题节点 → 直接展开该错题记忆卡并滚到位置
+  const openFromGraph = (name: string) => {
+    const aid = wgraph?.meta?.[name]?.attempt_ids?.[0]
+    if (!aid) return
+    toggleRecall(aid)
+    requestAnimationFrame(() => {
+      document.getElementById(`wrong-${aid}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <p className="text-xs font-semibold tracking-[0.18em] text-gold">错题本</p>
       <h2 className="display mt-2 text-[26px]">按错因归档的错题</h2>
       <p className="mt-2 text-sm text-ink-2">演示账号 {userId.slice(0, 8)} · 数据仅存于校内演示环境</p>
+
+      {wgraph && wgraph.nodes.length > 0 && (
+        <section className="card mt-6 p-6">
+          <h3 className="flex items-center gap-2 text-sm font-semibold"><span className="capsule gold" />错题关联图谱 · 同章 / 同药 / 同错因的题自动连边</h3>
+          <p className="mb-3 mt-1 text-xs text-ink-3">
+            以错题为节点，章节·药物·错因为枢纽——连到同一枢纽的两道题，就是该一起复习的题。点击题节点可直接展开记忆卡。
+            {wgraph.total > wgraph.shown && `（最近 ${wgraph.shown} 道，共 ${wgraph.total} 道）`}
+          </p>
+          <KnowledgeGraphView
+            nodes={wgraph.nodes} edges={wgraph.edges}
+            title="错题关联图谱"
+            tabDefs={[
+              { k: 'all', label: `全部 ${wgraph.edges.length}`, match: () => true },
+              { k: 'know', label: '同知识', match: (e) => e.edge === '属于' || e.edge === '涉及' },
+              { k: 'cause', label: '同错因', match: (e) => e.edge === '归因' },
+            ]}
+            labelTypes={new Set(['题目', '章节', '药物', '错因', '类别', '靶点'])}
+            centerMode="degree"
+            palette={{ 题目: '#0e7a5f', 章节: '#ffffff' }}
+            onNodeClick={openFromGraph}
+          />
+        </section>
+      )}
 
       <div className="mt-6 space-y-8">
         <section>
@@ -2222,18 +2939,31 @@ function WrongBook({ userId, onGoTodo }: { userId: string; onGoTodo: () => void 
           )}
           {wrong && wrong.length > 0 && (
             <WrongGroups wrong={wrong} openId={openId}
-              loadingRecall={loadingRecall} recallMap={recallMap} onToggle={toggleRecall} />
+              loadingRecall={loadingRecall} recallMap={recallMap} onToggle={toggleRecall}
+              onAwaken={(aid) => setAwakenAttemptId(aid)} />
           )}
         </section>
       </div>
+
+      {awakenAttemptId && (
+        <WrongAwakenModal
+          userId={userId}
+          attemptId={awakenAttemptId}
+          onClose={() => {
+            setAwakenAttemptId(null)
+            loadWrongData()
+          }}
+        />
+      )}
     </motion.div>
   )
 }
 
 /* 错题分组（按错因归档：同类错因归一组，可折叠；待归因沉底） */
-function WrongGroups({ wrong, openId, loadingRecall, recallMap, onToggle }: {
+function WrongGroups({ wrong, openId, loadingRecall, recallMap, onToggle, onAwaken }: {
   wrong: WrongRow[]; openId: string | null; loadingRecall: string | null
   recallMap: Record<string, RecallData | null>; onToggle: (id: string) => void
+  onAwaken: (attemptId: string) => void
 }) {
   const groups: { key: string; label: string | null; items: WrongRow[] }[] = []
   for (const w of wrong) {
@@ -2266,12 +2996,26 @@ function WrongGroups({ wrong, openId, loadingRecall, recallMap, onToggle }: {
                   className="overflow-hidden">
                   <div className="space-y-3">
                     {g.items.map((w) => (
-                      <div key={w.attempt_id} className="card p-5">
+                      <div key={w.attempt_id} id={`wrong-${w.attempt_id}`} className="card scroll-mt-24 p-5">
                         <div className="flex flex-wrap items-center gap-2.5">
                           <span className="text-xs text-ink-3">{w.question_code}</span>
                           {w.evidence_level && (
                             <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${w.evidence_level === '低' ? 'bg-gold-soft text-gold' : 'bg-primary-soft text-primary'}`}>
                               证据 · {w.evidence_level}
+                            </span>
+                          )}
+                          {w.retention_pct !== undefined && (
+                            <span
+                              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
+                                w.decay_level === 'fresh'
+                                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                  : w.decay_level === 'warning'
+                                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                                  : 'bg-rose-500/15 text-rose-700 animate-pulse dark:text-rose-300'
+                              }`}
+                            >
+                              <Hourglass size={12} weight="fill" />
+                              新鲜度 {w.retention_pct}% · {w.decay_level === 'fresh' ? '保鲜良好' : w.decay_level === 'warning' ? '遗忘警戒' : '衰退严重'}
                             </span>
                           )}
                           <span className="ml-auto text-xs text-ink-3">选 {w.selected} · 正确 {w.answer}</span>
@@ -2288,11 +3032,20 @@ function WrongGroups({ wrong, openId, loadingRecall, recallMap, onToggle }: {
                             <p className="mt-1.5 text-[11px] text-ink-3">来源：{w.case_evidence.source}</p>
                           </div>
                         )}
-                        <button onClick={() => onToggle(w.attempt_id)}
-                          className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-line px-3.5 py-1.5 text-xs text-ink-3 transition hover:border-primary hover:text-primary">
-                          <BookOpenText size={13} />
-                          {openId === w.attempt_id ? '收起错因图谱 · 记忆助记' : '看这张错题的图谱 & 临床助记'}
-                        </button>
+                        <div className="mt-3 flex flex-wrap items-center gap-2.5">
+                          <button onClick={() => onToggle(w.attempt_id)}
+                            className="inline-flex items-center gap-1.5 rounded-full border border-line px-3.5 py-1.5 text-xs text-ink-3 transition hover:border-primary hover:text-primary">
+                            <BookOpenText size={13} />
+                            {openId === w.attempt_id ? '收起错因图谱 · 记忆助记' : '看这张错题的图谱 & 临床助记'}
+                          </button>
+                          <button
+                            onClick={() => onAwaken(w.attempt_id)}
+                            className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-3.5 py-1.5 text-xs font-semibold text-amber-700 transition hover:bg-amber-500/20 dark:text-amber-300"
+                          >
+                            <Lightning size={13} weight="fill" className="text-amber-500" />
+                            ⚡ 一键抗遗忘唤醒
+                          </button>
+                        </div>
                         {openId === w.attempt_id && (
                           <div className="mt-3 rounded-xl border border-primary/20 bg-primary-soft/40 px-4 py-4">
                             {loadingRecall === w.attempt_id
@@ -2350,6 +3103,371 @@ function NodeChip({ type, name }: { type: string; name: string }) {
   )
 }
 
+/* 知识图谱交互视图（2026-09-12 redesign-preserve）：分层轨道布局。
+   力导毛球不可读 → 确定性 BFS 分层：中心（章节/核心实体）+ 环带（节/类别/药物/知识点）。
+   标签纪律：章节·节·药物常显，其余悬停/聚焦才显；边标签默认隐藏，含义进图例与详情。
+   颜色锁主题：emerald 主色 + gold 点缀药物，其余 stone 中性；文字一律墨色 + 白色描边。 */
+type KgNodeT = { name: string; type: string }
+type KgEdgeT = {
+  source: { type: string; name: string }; edge: string; target: { type: string; name: string }
+  note?: string; evidence?: KgEvidence; review_status?: string
+}
+
+const KG_DOT: Record<string, string> = {
+  核心: '#0e7a5f', 系统: '#1d4ed8', 章节: '#0e7a5f', 示范: '#b8860b', 已达标: '#2e7d32', 节: '#ffffff', 药物: '#b8860b', 类别: '#9aa0a8', 知识点: '#c3c9c2',
+  靶点: '#7c5cd6', 效应: '#2e7d32', 禁忌: '#c0392b', 适应证: '#b8860b', 机制: '#5b7fa6', 其他: '#9aa0a8',
+  题目: '#334155', 错因: '#c0392b',
+}
+const KG_RING: Record<string, string> = {
+  核心: '#0e7a5f', 系统: '#2563eb', 章节: '#0e7a5f', 示范: '#b8860b', 已达标: '#2e7d32', 节: '#0e7a5f', 知识点: '#8a8f98', 类别: '#8a8f98',
+}
+const KG_LINE: Record<string, string> = {
+  '包含': '#d5dbd7', '属于': '#0e7a5f',
+  '作用于': '#7c5cd6', '表现为': '#5b7fa6', '禁忌用于': '#c0392b', '适应证': '#b8860b', '与…相互作用': '#7c5cd6',
+  '涉及': '#0e7a5f', '归因': '#b8860b',
+}
+const KG_LABEL_TYPES = new Set(['核心', '系统', '章节', '示范', '已达标', '节', '药物'])
+
+/** 自定义视图：错题关联图谱等场景覆盖默认三视图（全部/结构/药物）。 */
+export type KgTabDef = { k: string; label: string; match: (e: KgEdgeT) => boolean }
+
+/** 确定性分层轨道坐标：BFS 定层，子节点按父角扇形展开。返回 positions + angles（弧度）。
+    规则：直连中心的药物统一移到外环整圆均分（内环只留结构节点，避免 40 点挤一环）。 */
+function kgOrbit(names: string[], types: Map<string, string>, adj: Map<string, string[]>, center: string, W: number, H: number): { pos: Map<string, [number, number]>; ang: Map<string, number> } {
+  const centerType = types.get(center)
+  const layer = new Map<string, number>([[center, 0]])
+  const parent = new Map<string, string>()
+  const queue = [center]
+  while (queue.length) {
+    const u = queue.shift()!
+    const next = [...(adj.get(u) ?? [])].filter((n) => !layer.has(n)).sort()
+    for (const n of next) { layer.set(n, (layer.get(u) ?? 0) + 1); parent.set(n, u); queue.push(n) }
+  }
+  for (const n of names) if (!layer.has(n)) layer.set(n, 3)
+  // 章节型中心：直连药物下沉到外环（parent 仍记中心，布局时整圆均分）
+  if (centerType === '章节') {
+    for (const n of names) {
+      if (n !== center && types.get(n) === '药物' && layer.get(n) === 1) layer.set(n, 2)
+    }
+  }
+  const cx = W / 2; const cy = H / 2
+  const R = Math.max(60, Math.min(W, H) / 2 - 46)
+  const ring = [0, R * 0.5, R * 0.8, R * 1.0]
+  const pos = new Map<string, [number, number]>([[center, [cx, cy]]])
+  const ang = new Map<string, number>()
+  const at = (d: number) => names.filter((n) => layer.get(n) === d).sort()
+  const l1 = at(1)
+  l1.forEach((n, i) => {
+    const a = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(l1.length, 1)
+    ang.set(n, a)
+    pos.set(n, [cx + ring[1] * Math.cos(a), cy + ring[1] * Math.sin(a) * 0.94])
+  })
+  for (let d = 2; d <= 3; d++) {
+    const kids = new Map<string, string[]>()
+    for (const n of at(d)) {
+      const p = parent.get(n) ?? center
+      if (!kids.has(p)) kids.set(p, [])
+      kids.get(p)!.push(n)
+    }
+    const orderedParents = [...kids.keys()].sort((a, b) => (ang.get(a) ?? 0) - (ang.get(b) ?? 0))
+    for (const p of orderedParents) {
+      const group = kids.get(p)!.sort()
+      // 直连中心的成组节点（如下沉药物）：整圆均分，保证外环可读
+      if (p === center) {
+        group.forEach((n, i) => {
+          const a = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(group.length, 1)
+          ang.set(n, a)
+          const r = ring[Math.min(d, 3)] + (i % 2 === 1 ? 26 : 0)
+          pos.set(n, [cx + r * Math.cos(a), cy + r * Math.sin(a) * 0.94])
+        })
+        continue
+      }
+      const pa = ang.get(p) ?? -Math.PI / 2
+      const span = d === 2 ? Math.min(2.4, (2 * Math.PI) / Math.max(orderedParents.length, 1) * 0.95) : 0.9
+      group.forEach((n, i) => {
+        const a = pa + (group.length === 1 ? 0 : (i - (group.length - 1) / 2) * Math.max(0.2, span / Math.max(group.length, 1)))
+        ang.set(n, a)
+        // 相邻节点半径交错，给切向标签腾地方
+        const r = ring[Math.min(d, 3)] + (i % 2 === 1 ? 26 : 0)
+        pos.set(n, [cx + r * Math.cos(a), cy + r * Math.sin(a) * 0.94])
+      })
+    }
+  }
+  return { pos, ang }
+}
+
+/** 切向标签旋转角（度）：文字沿轨道切线走，左侧翻转保证正读。 */
+function kgLabelRotate(a: number): number {
+  let deg = (a * 180) / Math.PI + 90
+  while (deg > 90) deg -= 180
+  while (deg <= -90) deg += 180
+  return Math.round(deg)
+}
+
+function KnowledgeGraphView({ nodes, edges, title, tabDefs, labelTypes, centerMode, palette, onNodeClick, height }: {
+  nodes?: KgNodeT[]; edges: KgEdgeT[]; title?: string
+  tabDefs?: KgTabDef[]; labelTypes?: Set<string>; centerMode?: 'auto' | 'degree'
+  palette?: Record<string, string>; onNodeClick?: (name: string) => void
+  height?: number
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<echarts.ECharts | null>(null)
+  const [tab, setTab] = useState<string>('all')
+  const [query, setQuery] = useState('')
+  const [selEdge, setSelEdge] = useState<number | null>(null)
+  const [selNode, setSelNode] = useState<string | null>(null)
+  const reduceMotion = useReducedMotion()
+  const dot = (t: string) => palette?.[t] ?? KG_DOT[t] ?? KG_DOT['其他']
+  const showSet = labelTypes ?? KG_LABEL_TYPES
+  const defs: KgTabDef[] = useMemo(() => tabDefs ?? [
+    { k: 'all', label: `全部 ${edges.length}`, match: () => true },
+    { k: 'struct', label: '结构', match: (e) => e.edge === '包含' || (e.edge === '属于' && e.source.type !== '药物') },
+    { k: 'drug', label: '药物', match: (e) => e.source.type === '药物' || e.target.type === '药物' },
+  ], [tabDefs, edges.length])
+  const activeDef = defs.find((d) => d.k === tab) ?? defs[0]
+  const shown = useMemo(() => edges.slice(0, 120).filter(activeDef.match), [edges, activeDef])
+
+  const nodeList = useMemo<KgNodeT[]>(() => {
+    const m = new Map<string, string>()
+    for (const e of shown) {
+      if (e.source?.name && !m.has(e.source.name)) m.set(e.source.name, e.source.type || '其他')
+      if (e.target?.name && !m.has(e.target.name)) m.set(e.target.name, e.target.type || '其他')
+    }
+    if (nodes && nodes.length) {
+      for (const n of nodes) if (m.has(n.name)) m.set(n.name, n.type || m.get(n.name)!)
+    }
+    return [...m.entries()].map(([name, type]) => ({ name, type }))
+  }, [nodes, shown])
+
+  const degree = useMemo(() => {
+    const d = new Map<string, number>()
+    for (const e of shown) {
+      d.set(e.source.name, (d.get(e.source.name) ?? 0) + 1)
+      d.set(e.target.name, (d.get(e.target.name) ?? 0) + 1)
+    }
+    return d
+  }, [shown])
+
+  const center = useMemo(() => {
+    if (centerMode !== 'degree') {
+      const chap = nodeList.find((n) => n.type === '核心' || n.type === '学科') ?? nodeList.find((n) => n.type === '章节')
+      if (chap) return chap.name
+    }
+    let best = nodeList[0]?.name ?? ''
+    let bestScore = -1
+    for (const n of nodeList) {
+      const s = (degree.get(n.name) ?? 0) * 10 + (n.type === '药物' ? 1 : 0)
+      if (s > bestScore) { bestScore = s; best = n.name }
+    }
+    return best
+  }, [nodeList, degree, centerMode])
+
+  // 标签纪律：章节·节·药物常显（切向旋转 + 半径交错处理密度）；知识点/类别悬停才显
+  const types = useMemo(() => [...new Set(nodeList.map((n) => n.type || '其他'))], [nodeList])
+
+  useEffect(() => {
+    setSelEdge(null); setSelNode(null)
+  }, [tab, edges])
+
+  useEffect(() => {
+    if (!ref.current) return
+    if (nodeList.length === 0) {
+      // 空视角：销毁旧图（切 tab 残留），只留头部导航可点回
+      chartRef.current?.dispose()
+      chartRef.current = null
+      return
+    }
+    let chart = chartRef.current
+    if (!chart) {
+      try { chart = echarts.init(ref.current); chartRef.current = chart }
+      catch { return }
+    }
+    const render = () => {
+      if (!chart || !ref.current) return
+      const W = chart.getWidth() || ref.current.clientWidth || 600
+      const H = chart.getHeight() || (height ?? 380)
+      const adj = new Map<string, string[]>()
+      for (const e of shown) {
+        if (!adj.has(e.source.name)) adj.set(e.source.name, [])
+        if (!adj.has(e.target.name)) adj.set(e.target.name, [])
+        adj.get(e.source.name)!.push(e.target.name)
+        adj.get(e.target.name)!.push(e.source.name)
+      }
+      const { pos, ang } = center ? kgOrbit(nodeList.map((n) => n.name), new Map(nodeList.map((n) => [n.name, n.type || '其他'])), adj, center, W, H) : { pos: new Map<string, [number, number]>(), ang: new Map<string, number>() }
+      chart.setOption({
+        animationDuration: reduceMotion ? 0 : 500,
+        animationEasing: 'cubicOut',
+        tooltip: {
+          trigger: 'item', confine: true,
+          backgroundColor: 'rgba(255,255,255,0.97)', borderColor: '#e3e8e5', borderWidth: 1,
+          textStyle: { color: '#1f2a26', fontSize: 12 },
+          formatter: (p: { dataType?: string; data?: { tip?: string } }) => p.data?.tip ?? '',
+        },
+        series: [{
+          type: 'graph', layout: 'none', roam: true, draggable: false,
+          data: nodeList.map((n) => {
+            const [x, y] = pos.get(n.name) ?? [W / 2, H / 2]
+            const t = n.type || '其他'
+            const showLabel = showSet.has(t)
+            const isCenter = n.name === center
+            const a = ang.get(n.name) ?? 0
+            const outward = Math.cos(a) >= 0
+            // 长名截断：节名多为长短语，超过 7 字只显示前 7 字（全名进 tooltip/详情）
+            const maxLen = t === '节' ? 7 : (t === '章节' || t === '示范' || t === '已达标') ? 13 : 9
+            const lbl = n.name.length > maxLen ? `${n.name.slice(0, maxLen)}…` : n.name
+            return {
+              name: n.name, x, y, category: t,
+              tip: `<b>${n.name}</b><br/>${t} · 连边 ${degree.get(n.name) ?? 0} 条<br/><span style="color:#0e7a5f">${(t === '章节' || t === '示范' || t === '已达标') ? '点击聚焦并在下方进入章节自学' : '点击聚焦邻域'}</span>`,
+              symbolSize: t === '核心' ? 44 : t === '系统' ? 32 : (t === '章节' || t === '示范' || t === '已达标') ? (isCenter ? 40 : 20) : t === '题目' ? 26 : t === '药物' ? 20 : t === '节' ? 24 : t === '错因' ? 22 : 14,
+              itemStyle: {
+                color: dot(t),
+                borderColor: KG_RING[t] ?? '#ffffff', borderWidth: 2.5,
+                shadowColor: 'rgba(14,122,95,0.18)', shadowBlur: 8,
+              },
+              label: {
+                show: showLabel,
+                position: isCenter ? 'inside' : outward ? 'right' : 'left',
+                distance: 7, rotate: isCenter ? 0 : kgLabelRotate(a),
+                formatter: lbl,
+                fontSize: isCenter ? 13 : t === '系统' ? 11 : (t === '章节' || t === '示范' || t === '已达标') ? 10 : 10,
+                fontWeight: (isCenter || t === '系统') ? 700 : 500,
+                color: isCenter ? '#ffffff' : '#1f2a26',
+                textBorderColor: isCenter ? 'transparent' : 'rgba(255,255,255,0.92)',
+                textBorderWidth: 3,
+              },
+              emphasis: { scale: 1.3, label: { show: true, rotate: 0 } },
+            }
+          }),
+          links: shown.map((e, i) => ({
+            id: `e${i}`, source: e.source.name, target: e.target.name,
+            tip: `<b>${e.source.name} —${e.edge}→ ${e.target.name}</b>${e.note ? `<br/>${e.note}` : ''}<br/><span style="color:#0e7a5f">点击查看出处</span>`,
+            lineStyle: { width: e.edge === '属于' ? 1.6 : 1.2, opacity: e.edge === '属于' ? 0.55 : 0.8, color: KG_LINE[e.edge] ?? '#c9d1cd', curveness: 0.18 },
+            emphasis: { lineStyle: { width: 3, color: '#0e7a5f', opacity: 1 } },
+          })),
+          emphasis: { focus: 'adjacency' },
+        }],
+      }, true)
+    }
+    render()
+    chart.off('click')
+    chart.on('click', (p) => {
+      const d = p as unknown as { dataType?: string; data?: { id?: string } | null; name?: string }
+      if (d.dataType === 'edge' && typeof d.data?.id === 'string' && d.data.id.startsWith('e')) {
+        const i = Number(d.data.id.slice(1))
+        if (Number.isFinite(i) && shown[i]) { setSelEdge(i); setSelNode(null) }
+      } else if (d.dataType === 'node' && d.name) {
+        setSelNode(d.name); setSelEdge(null)
+        onNodeClick?.(d.name)
+      }
+    })
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const onResize = () => {
+      chart?.resize()
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(render, 180)
+    }
+    window.addEventListener('resize', onResize)
+    return () => { window.removeEventListener('resize', onResize); if (timer) clearTimeout(timer) }
+  }, [nodeList, shown, center, degree, reduceMotion, onNodeClick])
+
+  useEffect(() => () => { chartRef.current?.dispose(); chartRef.current = null }, [])
+
+  // 空视角只替换画布区：头部 tabs/搜索/图例常驻，保证随时可点回（此前 early return 吃掉整组导航）
+  const empty = nodeList.length === 0
+  const edge = !empty && selEdge != null ? shown[selEdge] : null
+  const nodeEdges = selNode ? shown.map((e, i) => ({ e, i })).filter(({ e }) => e.source.name === selNode || e.target.name === selNode) : []
+  const nodeType = nodeList.find((n) => n.name === selNode)?.type
+
+  function focus(name: string) {
+    setSelNode(name); setSelEdge(null)
+    const chart = chartRef.current
+    if (!chart) return
+    const idx = nodeList.findIndex((n) => n.name === name)
+    if (idx >= 0) {
+      chart.dispatchAction({ type: 'unfocusNodeAdjacency', seriesIndex: 0 })
+      chart.dispatchAction({ type: 'focusNodeAdjacency', seriesIndex: 0, dataIndex: idx })
+    }
+  }
+
+  function submitSearch() {
+    const q = query.trim()
+    if (!q) return
+    const hit = nodeList.find((n) => n.name === q) ?? nodeList.find((n) => n.name.includes(q))
+    if (hit) focus(hit.name)
+  }
+
+  return (
+    <div className="mb-3 overflow-hidden rounded-2xl border border-line bg-white shadow-[0_8px_28px_-18px_rgba(14,122,95,0.35)]">
+      <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
+        <p className="mr-auto text-xs font-semibold text-ink">{title ?? '知识图谱'}</p>
+        <div className="flex rounded-full bg-paper p-0.5">
+          {defs.map((t) => (
+            <button key={t.k} onClick={() => setTab(t.k)}
+              className={`rounded-full px-3 py-1 text-[11px] font-semibold transition-all active:scale-[0.97] ${tab === t.k ? 'bg-primary text-white shadow' : 'text-ink-3'}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitSearch() }}
+            placeholder="搜实体，如硝苯地平" className="w-36 rounded-full border border-line bg-paper px-3 py-1 text-[11px] text-ink outline-none placeholder:text-ink-3 focus:border-primary" />
+          <button onClick={submitSearch} aria-label="搜索实体"
+            className="grid size-7 place-items-center rounded-full bg-primary-soft text-primary transition-all active:scale-[0.95]">
+            <MagnifyingGlass size={14} />
+          </button>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-2">
+        {types.map((t) => (
+          <span key={t} className="inline-flex items-center gap-1 text-[10px] text-ink-3">
+            <span className="inline-block size-2 rounded-full border border-white shadow" style={{ background: dot(t) }} />{t}
+          </span>
+        ))}
+        <span className="ml-auto text-[10px] text-ink-3">{nodeList.length} 节点 · {shown.length} 边{edges.length > 120 ? '（仅展示前 120 条）' : ''}</span>
+      </div>
+      {empty && (
+        <div className="mx-4 mb-4 rounded-xl border border-dashed border-line bg-paper/60 px-4 py-6 text-center text-xs text-ink-3">
+          该视角暂无关联——点上方视图切回，或多做几道同章/同类错题后再看。
+        </div>
+      )}
+      {/* 画布常驻挂载（空态仅隐藏）：卸载会导致 ref 丢失、回切复用僵尸实例 */}
+      <div ref={ref} style={{ height: empty ? 0 : (height ?? 380), width: '100%', display: empty ? 'none' : undefined }} className="cursor-grab active:cursor-grabbing" />
+      {!empty && (edge || selNode) && (
+        <div className="border-t border-line bg-paper/70 px-4 py-2.5">
+          {edge && (
+            <>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <NodeChip type={edge.source.type} name={edge.source.name} />
+                <span className="text-[11px] font-medium text-primary">─{edge.edge}→</span>
+                <NodeChip type={edge.target.type} name={edge.target.name} />
+              </div>
+              <EvidenceNote ev={edge.evidence ?? null} reviewStatus={edge.review_status} />
+            </>
+          )}
+          {!edge && selNode && (
+            <>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <NodeChip type={nodeType ?? '其他'} name={selNode} />
+                <span className="text-[11px] text-ink-3">连边 {nodeEdges.length} 条，点击行查看出处</span>
+              </div>
+              <div className="mt-1.5 max-h-36 space-y-1 overflow-y-auto">
+                {nodeEdges.map(({ e, i }) => (
+                  <button key={i} onClick={() => { setSelEdge(i); setSelNode(null) }}
+                    className="flex w-full items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-left text-[11px] text-ink-2 transition-all hover:bg-primary-soft/50 active:scale-[0.99]">
+                    <span className="font-medium text-ink">{e.source.name}</span>
+                    <span className="flex-none rounded-full bg-paper-2 px-1.5 py-px font-semibold text-ink-3">{e.edge}</span>
+                    <span className="font-medium text-ink">{e.target.name}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* 图谱证据锚点（2026-09-11）：每条边/每组辨析挂一条教材原文出处；无依据时如实标注，不伪造出处 */
 type KgEvidence = { source?: string; book_page?: number; chapter?: string; text?: string } | null
 
@@ -2361,6 +3479,18 @@ function EvidenceNote({ ev, reviewStatus }: { ev: KgEvidence; reviewStatus?: str
         <span className="mr-1 rounded bg-paper-2 px-1.5 py-0.5 text-[10px] font-semibold text-ink-3">无教材依据</span>
         该条关系暂未在教材原文中检索到直接表述，保留待药理顾问核实后补充。
       </p>
+    )
+  }
+  // 派生关联（大纲结构/题库共现/做题关联）：如实署名，不冒充教材页码
+  if (ev.book_page == null) {
+    return (
+      <div className="mt-1 text-[11px] leading-relaxed">
+        <p className="flex flex-wrap items-center gap-1 text-ink-3">
+          <span className="rounded bg-paper-2 px-1.5 py-0.5 text-[10px] font-semibold text-ink-2">{ev.source ?? '程序派生'}</span>
+          {ev.chapter && <span>{ev.chapter}</span>}
+        </p>
+        <p className="mt-0.5 text-ink-2">「{ev.text}」</p>
+      </div>
     )
   }
   return (
@@ -2385,6 +3515,10 @@ function RecallCardView({ data }: { data: RecallData }) {
   const cps = data.confusion_pairs ?? []
   const anchors = data.textbook_anchors ?? []
   const hasGraph = rels.length > 0
+  // 条目列表只列与本题实体直连的边（子图加深到 2 跳后全量可达 40 条，全列即刷屏）
+  const linkedNames = new Set((data.linked_entities ?? []).map((e) => e.name))
+  const direct = rels.filter((r) => linkedNames.has(r.source.name) || linkedNames.has(r.target.name))
+  const listRels = (direct.length ? direct : rels).slice(0, 8)
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2 text-[13px]">
@@ -2398,9 +3532,24 @@ function RecallCardView({ data }: { data: RecallData }) {
         <p className="flex items-center gap-1.5 text-[11px] font-semibold text-primary">
           <span className="capsule" />错因背后的知识关系图谱{!hasGraph && '（该章关系表待扩充）'}
         </p>
+        {(data.linked_entities ?? []).length > 0 && (
+          <p className="mt-1.5 text-[11px] text-ink-3">
+            本题关联实体：{(data.linked_entities ?? []).map((e) => e.name).join(' · ')}
+          </p>
+        )}
+        {hasGraph && (
+          <KnowledgeGraphView
+            nodes={data.subgraph?.nodes}
+            edges={(data.subgraph?.edges?.length ? data.subgraph.edges : rels)}
+            title={data.subgraph?.fallback ? '本章图谱（本题未链接到具体实体，展示全章）' : '错题子图 · 与本题相关的边（点击边查看出处）'}
+          />
+        )}
         {hasGraph ? (
           <div className="mt-2.5 space-y-2">
-            {rels.map((r, i) => (
+            {rels.length > listRels.length && (
+              <p className="text-[10px] text-ink-3">子图共 {rels.length} 条关系，下仅列出与本题实体直接相关的 {listRels.length} 条，其余在上方交互图中查看。</p>
+            )}
+            {listRels.map((r, i) => (
               <div key={i} className="rounded-lg bg-paper/60 px-2.5 py-1.5">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <NodeChip type={r.source.type} name={r.source.name} />
@@ -2424,6 +3573,7 @@ function RecallCardView({ data }: { data: RecallData }) {
             {cps.map((p, i) => (
               <div key={i} className="rounded-lg bg-paper px-3 py-2 text-[12px] text-ink-2">
                 <span className="font-semibold text-ink">{p.drug_a}</span> × <span className="font-semibold text-ink">{p.drug_b}</span>
+                {p.relevant && <span className="ml-2 rounded-full bg-primary-soft px-2 py-0.5 text-[10px] font-semibold text-primary">与本题相关</span>}
                 <p className="mt-0.5 leading-relaxed">{p.distinction}</p>
                 <EvidenceNote ev={p.evidence ?? null} reviewStatus="published" />
               </div>

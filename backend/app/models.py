@@ -326,6 +326,29 @@ class StudyProgress(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
 
+class RetestSchedule(Base):
+    """艾宾浩斯抗遗忘长时记忆复测排期表 (ADR-Retest-01)
+    stage: 1 (24h/1天), 2 (72h/3天), 3 (168h/7天), 4 (长时稳定掌握)
+    status: 'pending', 'passed', 'failed', 'mastered'
+    """
+    __tablename__ = "retest_schedules"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    domain_id: Mapped[str] = mapped_column(ForeignKey("diagnostic_domains.id"))
+    misconception_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    confusion_pair_id: Mapped[str | None] = mapped_column(ForeignKey("confusion_pairs.id"), nullable=True)
+    source_attempt_id: Mapped[str | None] = mapped_column(ForeignKey("attempts.id"), nullable=True)
+    stage: Mapped[int] = mapped_column(SmallInteger, default=1)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    last_reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    status: Mapped[str] = mapped_column(
+        _enum("retest_schedule_status", "pending", "passed", "failed", "mastered"),
+        default="pending",
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+
 class ModelRun(Base):
     __tablename__ = "model_runs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)

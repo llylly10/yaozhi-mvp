@@ -67,3 +67,11 @@ def migrate():
         if "evidence" not in existing_g:
             with engine.begin() as conn:
                 conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN evidence TEXT"))
+    # 艾宾浩斯复测排期表（2026-09-11，旧库热升级）
+    try:
+        if "retest_schedules" not in inspect(engine).get_table_names():
+            from .models import RetestSchedule
+            RetestSchedule.__table__.create(engine)
+    except Exception:
+        pass
+

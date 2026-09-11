@@ -432,6 +432,12 @@ def _restore_course_assets(db):
         n_mis = apply_chapter_misconceptions(db)
         if n_mis:
             print(f"[seed] 章级错因目录恢复: 新增 {n_mis} 条")
+        # 全量章节图谱（2026-09-11）：34 章结构边+药物归属边+混淆候选，
+        # 依赖 domains（桥接建）与 tiku/大纲内容，故放在最后。
+        from seed.seed_chapter_graphs import apply_chapter_graphs
+        g = apply_chapter_graphs(db)
+        if g["relations"] or g["pairs"]:
+            print(f"[seed] 章节图谱恢复: 新增边 {g['relations']}，混淆候选 {g['pairs']}")
     except Exception as e:  # noqa: BLE001
         # 醒目提示：异常会导致补章(4章)与内容化(published)静默缺失，reset-demo
         # 接口仍返回 ok，演示方不易察觉。打印类型便于定位（如枚举非法值拦截）。
