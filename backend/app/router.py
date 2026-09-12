@@ -1647,6 +1647,20 @@ def get_training(session_id: str, db: Session = Depends(get_db)):
     rows = db.execute(select(TrainingSessionQuestion).where(
         TrainingSessionQuestion.training_session_id == ts.id).order_by(
         TrainingSessionQuestion.sequence_no)).scalars().all()
+    if len(rows) == 0 and mode != "记忆卡":
+        # 自动愈合机制：若历史会话或单题章节未分配题目，调用 engine 兜底补齐题目
+        att = db.get(Attempt, s.attempt_id)
+        q = db.get(Question, att.question_id) if att else None
+        if q and m:
+            picked = dx.pick_training_questions(db, q, m)
+            for i, p_q in enumerate(picked):
+                db.add(TrainingSessionQuestion(training_session_id=ts.id, question_id=p_q.id, sequence_no=i))
+            ts.status = "in_progress"
+            db.commit()
+            rows = db.execute(select(TrainingSessionQuestion).where(
+                TrainingSessionQuestion.training_session_id == ts.id).order_by(
+                TrainingSessionQuestion.sequence_no)).scalars().all()
+
     questions = [{"id": r.question_id, "stem": db.get(Question, r.question_id).stem,
                   "options": db.get(Question, r.question_id).options} for r in rows]
 

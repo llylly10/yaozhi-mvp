@@ -3858,33 +3858,41 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
 
           {training.mode !== '记忆卡' && (
           <div className="space-y-6">
-            {training.questions.map((q, i) => (
-              <div key={q.id} className="rounded-2xl border border-line-2 p-6">
-                <p className="mb-3.5 text-sm font-medium leading-relaxed">{i + 1}. {q.stem}</p>
-                <div className="space-y-2.5">
-                  {q.options.map((o) => (
-                    <motion.button key={o.key} whileTap={{ scale: 0.99 }}
-                      onClick={() => setTrainingPicks({ ...trainingPicks, [q.id]: o.key })}
-                      className={`relative w-full rounded-xl border px-4 py-3 text-left text-sm transition-colors duration-150
-                        ${trainingPicks[q.id] === o.key ? 'border-primary bg-primary-soft/75 shadow-xs' : 'border-line bg-white hover:border-ink-3/40 hover:bg-paper-2/40'}`}>
-                      <span className="relative z-10 flex items-center gap-3">
-                        <span className={`grid size-6 flex-none place-items-center rounded-full border text-xs font-bold transition-colors duration-150
-                          ${trainingPicks[q.id] === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2 bg-white'}`}>
-                          {o.key}
-                        </span>
-                        <span className={trainingPicks[q.id] === o.key ? 'font-medium text-ink' : 'text-ink-2'}>{o.text}</span>
-                      </span>
-                    </motion.button>
-                  ))}
-                </div>
+            {training.questions.length === 0 ? (
+              <div className="rounded-2xl border border-line-2 bg-paper p-6 text-center text-sm text-ink-2">
+                正在加载针对性训练题，请稍候…
               </div>
-            ))}
+            ) : (
+              training.questions.map((q, i) => (
+                <div key={q.id} className="rounded-2xl border border-line-2 p-6">
+                  <p className="mb-3.5 text-sm font-medium leading-relaxed">{i + 1}. {q.stem}</p>
+                  <div className="space-y-2.5">
+                    {q.options.map((o) => (
+                      <motion.button key={o.key} whileTap={{ scale: 0.99 }}
+                        onClick={() => setTrainingPicks({ ...trainingPicks, [q.id]: o.key })}
+                        className={`relative w-full rounded-xl border px-4 py-3 text-left text-sm transition-colors duration-150
+                          ${trainingPicks[q.id] === o.key ? 'border-primary bg-primary-soft/75 shadow-xs' : 'border-line bg-white hover:border-ink-3/40 hover:bg-paper-2/40'}`}>
+                        <span className="relative z-10 flex items-center gap-3">
+                          <span className={`grid size-6 flex-none place-items-center rounded-full border text-xs font-bold transition-colors duration-150
+                            ${trainingPicks[q.id] === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2 bg-white'}`}>
+                            {o.key}
+                          </span>
+                          <span className={trainingPicks[q.id] === o.key ? 'font-medium text-ink' : 'text-ink-2'}>{o.text}</span>
+                        </span>
+                      </motion.button>
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
           </div>
           )}
           {training.mode !== '记忆卡' && (
           <button onClick={finishTraining}
-            disabled={Object.keys(trainingPicks).length < training.questions.length}
-            className="btn btn-primary mt-7">提交训练</button>
+            disabled={training.questions.length === 0 || Object.keys(trainingPicks).length < training.questions.length}
+            className="btn btn-primary mt-7 disabled:opacity-50">
+            提交训练{training.questions.length > 0 ? `（已答 ${Object.keys(trainingPicks).length}/${training.questions.length}）` : ''}
+          </button>
           )}
           {training.mode === '记忆卡' && (
             <button onClick={finishTraining} className="btn btn-primary mt-7">完成记忆训练</button>

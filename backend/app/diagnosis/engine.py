@@ -483,51 +483,72 @@ def time_ms() -> int:
     return int(_t.time() * 1000)
 
 
-def start_training(db: Session, session: DiagnosisSession):
+def pick_training_questions(db: Session, question: Question, misconception: Misconception) -> list[Question]:
     """按错因×干预路由取训练题（v1.1 §5.3）。
-
-    记忆卡：不推刷题，训练载荷只有卡片（picked 为空，提交时自评通过，见 router.submit_training）。
-    情境拆解：先按 condition_type 筛情境题再补足 3 道——先取 3 道再筛会只剩 1 道。
-    其余：同错因标注题优先，补足 3 道。
+    记忆卡：不推刷题，训练载荷只有卡片（返回空列表）。
+    混淆对变式：优先易混药对变式。
+    情境拆解：优先情境题。
+    兜底机制：若本域题目少于 3 道（如单题章节），自动从全局已发布题库补足 3 道，保证绝不出现空题目。
     """
-    if session.state != "diagnosed":
-        raise ValueError(f"会话状态 {session.state} 不能开始训练")
-    misconception = db.get(Misconception, session.hypothesis_id)
-    attempt = db.get(Attempt, session.attempt_id)
-    question = db.get(Question, attempt.question_id)
-    # 题库物化题（T）usage 全为 diagnostic，无 training 标注题；
-    # 故训练池放宽为 同域 training∨diagnostic，并排除刚做错的原题（变式训练）。
+    mode = misconception.remediation_type
+    if mode == "记忆卡":
+        return []
+
     pool = db.execute(select(Question).where(
         Question.domain_id == question.domain_id,
         Question.usage.in_(["training", "diagnostic"]),
         Question.review_status == "published",
         Question.id != question.id)).scalars().all()
-    mode = misconception.remediation_type
-    if mode == "记忆卡":
-        picked = []
+
+    sig = [q for q in pool
+           if misconception.code in [(s or {}).get("misconception") for s in (q.distractor_signals or {}).values()]]
+    if mode == "混淆对变式":
+        pairs = db.execute(select(ConfusionPair).where(
+            ConfusionPair.domain_id == question.domain_id)).scalars().all()
+        drugs = {d for p in pairs for d in (p.drug_a, p.drug_b) if d}
+        conf = [q for q in pool
+                if any(d in (q.stem or "") for d in drugs)] if drugs else []
+        ordered = conf + [q for q in sig if q not in conf]
+    elif mode == "情境拆解":
+        ctx = [q for q in pool if q.condition_type != "normal"]
+        ordered = ([q for q in sig if q in ctx]
+                   + [q for q in ctx if q not in sig]
+                   + [q for q in sig if q not in ctx])
     else:
-        sig = [q for q in pool
-               if misconception.code in [(s or {}).get("misconception") for s in (q.distractor_signals or {}).values()]]
-        if mode == "混淆对变式":
-            # 图谱驱动选题（2026-09-11）：此前"概念混淆"类错因的变式训练完全没用上
-            # 混淆对（混淆对只在"记忆卡"形态被消费），题库物化题又无 distractor_signals，
-            # 结果 ordered 为空 → 退化成随机抽 3 道同域题，与"围绕易混点训练"的意图不符。
-            # 改为：优先选题干涉及本域易混药对的题，让图谱真正参与训练决策。
-            pairs = db.execute(select(ConfusionPair).where(
-                ConfusionPair.domain_id == question.domain_id)).scalars().all()
-            drugs = {d for p in pairs for d in (p.drug_a, p.drug_b) if d}
-            conf = [q for q in pool
-                    if any(d in (q.stem or "") for d in drugs)] if drugs else []
-            ordered = conf + [q for q in sig if q not in conf]
-        elif mode == "情境拆解":
-            ctx = [q for q in pool if q.condition_type != "normal"]
-            ordered = ([q for q in sig if q in ctx]
-                       + [q for q in ctx if q not in sig]
-                       + [q for q in sig if q not in ctx])
-        else:
-            ordered = sig
-        rest = [q for q in pool if q not in ordered]  # 补足至 3 道，保持训练量
-        picked = (ordered + rest)[:3]
+        ordered = sig
+
+    rest = [q for q in pool if q not in ordered]
+    picked = (ordered + rest)[:3]
+
+    # 兜底保障：若本域内少于 3 道题（如只有单题的章节），优先从全库已发布题池补齐，保证学生必有题练
+    if len(picked) < 3:
+        existing_ids = {p.id for p in picked} | {question.id}
+        fallbacks = db.execute(select(Question).where(
+            Question.usage.in_(["training", "diagnostic"]),
+            Question.review_status == "published",
+            Question.id.notin_(existing_ids)
+        ).limit(10)).scalars().all()
+        for fq in fallbacks:
+            if len(picked) >= 3:
+                break
+            picked.append(fq)
+
+    # 终极兜底：若全库仍不足 3 道，允许放入本题原题进行再次巩固
+    if len(picked) < 3 and question.id not in {p.id for p in picked}:
+        picked.append(question)
+
+    return picked[:3]
+
+
+def start_training(db: Session, session: DiagnosisSession):
+    """按错因×干预路由取训练题（v1.1 §5.3）。"""
+    if session.state != "diagnosed":
+        raise ValueError(f"会话状态 {session.state} 不能开始训练")
+    misconception = db.get(Misconception, session.hypothesis_id)
+    attempt = db.get(Attempt, session.attempt_id)
+    question = db.get(Question, attempt.question_id)
+    mode = misconception.remediation_type
+    picked = pick_training_questions(db, question, misconception)
     ts = TrainingSession(diagnosis_id=session.id, source="审核题池",
                          status="in_progress" if (picked or mode == "记忆卡") else "pending")
     db.add(ts)
