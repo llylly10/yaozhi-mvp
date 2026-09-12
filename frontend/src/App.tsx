@@ -4,7 +4,7 @@ import { motion, AnimatePresence, MotionConfig, useReducedMotion, useScroll, use
 import {
   CheckCircle, XCircle, Warning, MagnifyingGlass, SkipForward, ArrowRight, ArrowUp, CaretDown, Pill,
   CalendarBlank, ClockCounterClockwise, SquaresFour, Gear, BookOpenText, ChatCircle,
-  Lightning, Hourglass, Sparkle,
+  Lightning, Hourglass, Sparkle, ShareNetwork,
 } from '@phosphor-icons/react'
 import { api, type Diagnosis, type Question, type TikuFeedback, type RetestCapsuleData } from './api'
 
@@ -202,7 +202,14 @@ export default function App() {
 
       <div className="relative z-10 mx-auto flex w-full max-w-[1140px] gap-6 px-5 pb-16 pt-6">
         {/* 左侧学习栏 */}
-        {inLearning && <Sidebar view={view} onNav={goNav} />}
+        {inLearning && (
+          <Sidebar
+            view={view}
+            currentScreen={screen}
+            onNav={goNav}
+            onGoMap={() => { setActiveQuestion(null); setScreen('study'); window.scrollTo(0, 0); }}
+          />
+        )}
 
         <div className="min-w-0 flex-1">
           {error && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
@@ -224,10 +231,12 @@ export default function App() {
             {screen === 'assessment' && userId && (
               <Assessment key="assess" userId={userId}
                 onDone={(r) => { setPortrait(r); setScreen('portrait') }} onError={setError}
-                onBack={() => setScreen('goal')} />
+                onBack={() => setScreen('study')} />
             )}
             {screen === 'portrait' && portrait && (
-              <Portrait key="portrait" result={portrait} onEnter={() => { setError(null); setScreen('list'); setView('todo') }} />
+              <Portrait key="portrait" result={portrait}
+                onEnter={() => { setError(null); setScreen('list'); setView('todo') }}
+                onBack={() => setScreen('study')} />
             )}
             {screen === 'list' && userId && view === 'todo' && (
               <LearningPathHome key="plan" userId={userId}
@@ -315,13 +324,15 @@ function MolField() {
 
 /* ---------- 左侧学习栏 ---------- */
 
-function Sidebar({ view, onNav }: { view: View; onNav: (v: View) => void }) {
+function Sidebar({ view, currentScreen, onNav, onGoMap }: {
+  view: View; currentScreen?: Screen; onNav: (v: View) => void; onGoMap?: () => void
+}) {
   const item = (v: View, label: string, icon: React.ReactNode, disabled = false) => (
     <button key={v + label} disabled={disabled} onClick={() => onNav(v)}
       className={`btn relative !justify-start w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm
-        ${!disabled && view === v ? 'font-semibold text-primary' : 'text-ink-2 hover:bg-paper-2'}
+        ${!disabled && currentScreen !== 'study' && view === v ? 'font-semibold text-primary' : 'text-ink-2 hover:bg-paper-2'}
         ${disabled ? 'opacity-45' : ''}`}>
-      {!disabled && view === v && (
+      {!disabled && currentScreen !== 'study' && view === v && (
         <motion.span layoutId="side-active" transition={spring}
           className="absolute inset-0 rounded-xl bg-primary-soft" aria-hidden />
       )}
@@ -334,6 +345,14 @@ function Sidebar({ view, onNav }: { view: View; onNav: (v: View) => void }) {
       <div className="glass liquid sticky top-[118px] space-y-5 rounded-[20px] p-3">
         <div>
           <p className="mb-1.5 px-3.5 text-[11px] font-semibold text-ink-3">学习</p>
+          {onGoMap && (
+            <button onClick={onGoMap}
+              className={`btn relative !justify-start w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm transition-colors mb-0.5 ${
+                currentScreen === 'study' ? 'font-semibold text-primary bg-primary-soft' : 'text-ink-2 hover:bg-paper-2'
+              }`}>
+              <ShareNetwork size={15} />全景学习地图
+            </button>
+          )}
           {item('todo', '今日待办', <CalendarBlank size={15} />)}
           {item('wrongbook', '错题本', <ClockCounterClockwise size={15} />)}
           {item('qa', '问AI', <ChatCircle size={15} />)}
@@ -582,10 +601,8 @@ function GoalPicker({ onNext, goal, onBack }: { onNext: (g: string) => void; goa
       <div className="mt-7 space-y-3.5">
         {GOALS.map(([t, d]) => (
           <motion.button key={t} whileTap={{ scale: 0.99 }} onClick={() => setPicked(t)}
-            className={`relative w-full rounded-2xl border p-5 text-left transition-colors
-              ${picked === t ? 'border-primary bg-primary-soft' : 'border-line-2 bg-white hover:border-line'}`}>
-            {picked === t && <motion.span layoutId="goal-sel" transition={spring}
-              className="absolute inset-0 rounded-2xl bg-primary-soft" />}
+            className={`relative w-full rounded-2xl border p-5 text-left transition-colors duration-150
+              ${picked === t ? 'border-primary bg-primary-soft/80 shadow-xs' : 'border-line-2 bg-white hover:border-line hover:bg-paper-2/40'}`}>
             <span className="relative z-10 flex items-start gap-3.5">
               <span className={`mt-0.5 grid size-[22px] flex-none place-items-center rounded-full border-2
                 ${picked === t ? 'border-primary bg-primary' : 'border-line bg-white'}`}>
@@ -1175,15 +1192,12 @@ function Assessment({ userId, onDone, onError, onBack }: {
               <div className="space-y-2.5">
                 {q.options.map((o) => (
                   <motion.button key={o.key} whileTap={{ scale: 0.99 }} onClick={() => setAnswers({ ...answers, [q.id]: o.key })}
-                    className={`relative w-full rounded-xl border px-4 py-3 text-left text-sm
-                      ${answers[q.id] === o.key ? 'border-primary' : 'border-line bg-white hover:border-ink-3/40'}`}>
-                    {answers[q.id] === o.key && (
-                      <motion.span layoutId={`as-${q.id}`} transition={spring} className="absolute inset-0 rounded-xl bg-primary-soft" />
-                    )}
+                    className={`relative w-full rounded-xl border px-4 py-3 text-left text-sm transition-colors duration-150
+                      ${answers[q.id] === o.key ? 'border-primary bg-primary-soft/75 shadow-xs' : 'border-line bg-white hover:border-ink-3/40 hover:bg-paper-2/40'}`}>
                     <span className="relative z-10 flex items-center gap-3">
-                      <span className={`grid size-6 flex-none place-items-center rounded-full border text-xs font-bold
-                        ${answers[q.id] === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2'}`}>{o.key}</span>
-                      {o.text}
+                      <span className={`grid size-6 flex-none place-items-center rounded-full border text-xs font-bold transition-colors duration-150
+                        ${answers[q.id] === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2 bg-white'}`}>{o.key}</span>
+                      <span className={answers[q.id] === o.key ? 'font-medium text-ink' : 'text-ink-2'}>{o.text}</span>
                     </span>
                   </motion.button>
                 ))}
@@ -1195,10 +1209,19 @@ function Assessment({ userId, onDone, onError, onBack }: {
 
       {questions && (
         <div className="sticky bottom-4 mt-6 flex justify-center">
-          <div className="glass liquid relative flex items-center gap-3 rounded-full py-2 pl-5 pr-2">
-            <span className="text-xs font-medium text-ink-2">已答 {answered}/{questions.length}</span>
-            <button onClick={submit} disabled={submitting || answered < questions.length} className="btn btn-primary !px-7 !py-2.5 shadow-[var(--shadow-lg)]">
-              交卷并生成画像
+          <div className="glass liquid relative flex items-center gap-3 rounded-full py-2 pl-5 pr-2 shadow-lg">
+            <span className="text-xs font-medium text-ink-2">
+              已答 <span className={answered === questions.length ? 'font-bold text-ok' : 'font-bold text-ink'}>{answered}/{questions.length}</span>
+              {answered < questions.length && (
+                <span className="ml-1 text-[11px] text-ink-3">（还剩 {questions.length - answered} 题）</span>
+              )}
+            </span>
+            <button
+              onClick={submit}
+              disabled={submitting || answered < questions.length}
+              className="btn btn-primary !px-7 !py-2.5 shadow-[var(--shadow-lg)] disabled:opacity-50"
+            >
+              {submitting ? '分析并生成画像中…' : '交卷并生成画像'}
             </button>
           </div>
         </div>
@@ -1218,7 +1241,7 @@ export type PortraitResult = {
 // 真错因（排除「待诊断」占位）；与错题本 / 档案页共用同一定义与配色
 const CAT_KEYS = ['知识遗忘', '概念混淆', '机制理解不足', '审题与应用失误']
 
-function Portrait({ result, onEnter }: { result: PortraitResult; onEnter: () => void }) {
+function Portrait({ result, onEnter, onBack }: { result: PortraitResult; onEnter: () => void; onBack?: () => void }) {
   useEffect(() => { window.scrollTo(0, 0) }, [])
   const total = result.total || result.weak.length
   const wrong = result.weak.length
@@ -1271,7 +1294,14 @@ function Portrait({ result, onEnter }: { result: PortraitResult; onEnter: () => 
 
   return (
     <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="pt-4">
-      <p className="text-xs font-semibold tracking-[0.18em] text-gold">STEP 5 · 摸底画像</p>
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-xs font-semibold tracking-[0.18em] text-gold">STEP 5 · 摸底画像</p>
+        {onBack && (
+          <button onClick={onBack} className="inline-flex flex-none items-center gap-1 rounded-full border border-line bg-white px-3 py-1 text-xs text-ink-2 transition hover:border-primary hover:text-primary">
+            <ArrowRight size={12} className="rotate-180" />返回学习地图
+          </button>
+        )}
+      </div>
       <h2 className="display mt-2 text-[26px]">先看清水平，再知道下一步练什么</h2>
       <p className="mt-2 text-sm text-ink-2">下面会用「一句话」直接告诉你该补哪——不用再看报表自己猜。</p>
 
@@ -1427,12 +1457,14 @@ function RetestCapsuleCard({ userId, onDone }: { userId: string; onDone: () => v
   const [inQuiz, setInQuiz] = useState(false)
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<{
     passed: boolean; score: number; new_stage: number; next_due_days: number; next_stage_desc?: string; memory_boost: number; message: string
   } | null>(null)
 
   const loadCapsule = useCallback(() => {
     setLoading(true)
+    setError(null)
     api.retestCapsule(userId)
       .then((d: RetestCapsuleData) => {
         setCapsule(d)
@@ -1455,6 +1487,7 @@ function RetestCapsuleCard({ userId, onDone }: { userId: string; onDone: () => v
   const handleSubmit = async () => {
     if (!capsule.schedule_id) return
     setSubmitting(true)
+    setError(null)
     try {
       const res = await api.submitRetestCapsule(userId, {
         schedule_id: capsule.schedule_id,
@@ -1462,7 +1495,7 @@ function RetestCapsuleCard({ userId, onDone }: { userId: string; onDone: () => v
       })
       setResult(res)
     } catch (e) {
-      alert(String(e))
+      setError(String(e))
     } finally {
       setSubmitting(false)
     }
@@ -1496,6 +1529,7 @@ function RetestCapsuleCard({ userId, onDone }: { userId: string; onDone: () => v
           </span>
         </div>
       </div>
+      {error && <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">{error}</div>}
 
       {!inQuiz && !result && (
         <div className="mt-3.5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1921,6 +1955,7 @@ function ChapterWarmupCard({ userId, domainId }: { userId: string; domainId: str
   const [picked, setPicked] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [feedback, setFeedback] = useState<{ is_correct: boolean; correct_answer: string; message: string } | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     api.chapterWarmup(userId, domainId).then(setWarmup).catch(() => setWarmup(null))
@@ -1933,6 +1968,7 @@ function ChapterWarmupCard({ userId, domainId }: { userId: string; domainId: str
   const handleSubmit = async () => {
     if (!picked) return
     setSubmitting(true)
+    setError(null)
     try {
       const res = await api.submitChapterWarmup(userId, domainId, {
         question_id: q.id,
@@ -1940,7 +1976,7 @@ function ChapterWarmupCard({ userId, domainId }: { userId: string; domainId: str
       })
       setFeedback(res)
     } catch (e) {
-      alert(String(e))
+      setError(String(e))
     } finally {
       setSubmitting(false)
     }
@@ -2005,6 +2041,7 @@ function ChapterWarmupCard({ userId, domainId }: { userId: string; domainId: str
               {submitting ? '提交中…' : '提交热身'}
             </button>
           </div>
+          {error && <p className="mt-2 text-right text-xs text-red-600">{error}</p>}
         </div>
       )}
 
@@ -2679,6 +2716,7 @@ function WrongAwakenModal({
   onClose: () => void
 }) {
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<{
     concept_name: string
     question: Question
@@ -2688,15 +2726,27 @@ function WrongAwakenModal({
   const [submitted, setSubmitted] = useState(false)
 
   useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  useEffect(() => {
     setLoading(true)
+    setError(null)
     api.awakenWrong(userId, attemptId)
       .then(setData)
-      .catch((e) => alert(String(e)))
+      .catch((e) => setError(String(e)))
       .finally(() => setLoading(false))
   }, [userId, attemptId])
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 pt-16 sm:pt-20 bg-black/60 backdrop-blur-md overflow-y-auto">
+    <div
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 pt-16 sm:pt-20 bg-black/60 backdrop-blur-md overflow-y-auto"
+    >
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 16 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -2729,6 +2779,7 @@ function WrongAwakenModal({
 
         {/* 主体内容（自适应垂直滚动） */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
+          {error && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">{error}</div>}
           {loading && (
             <div className="py-14 text-center">
               <div className="skeleton mx-auto mb-3 h-8 w-8 rounded-full" />
@@ -3710,8 +3761,13 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
       <div className="card relative overflow-hidden !rounded-[24px]">
         <div className="absolute right-6 top-5 opacity-[0.06]"><Hex size={92} className="text-ink" /></div>
         <div className="border-b border-line-2 px-8 pb-6 pt-7">
-          <div className="flex items-center gap-2 text-xs text-ink-3">
-            <span className="capsule" />{question.code} · 单选题 · 药理学 / {question.chapter_name || 'M 受体药'}
+          <div className="flex items-center justify-between text-xs text-ink-3">
+            <div className="flex items-center gap-2">
+              <span className="capsule" />{question.code} · 单选题 · 药理学 / {question.chapter_name || 'M 受体药'}
+            </div>
+            <button onClick={onExit} className="inline-flex items-center gap-1 rounded-full border border-line bg-white px-2.5 py-1 text-xs text-ink-3 transition hover:border-primary hover:text-primary">
+              <ArrowRight size={11} className="rotate-180" />返回今日待办
+            </button>
           </div>
           <p className="display mt-4 text-[19px] leading-relaxed">{question.stem}</p>
         </div>
@@ -3719,18 +3775,14 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
           <div className="space-y-3">
             {question.options.map((o) => (
               <motion.button key={o.key} onClick={() => setSelected(o.key)} whileTap={{ scale: 0.99 }}
-                className={`relative w-full rounded-2xl border px-5 py-4 text-left text-sm
-                  ${selected === o.key ? 'border-primary' : 'border-line bg-white hover:border-ink-3/40'}`}>
-                {selected === o.key && (
-                  <motion.span layoutId={`opt-${question.id}`} transition={spring}
-                    className="absolute inset-0 rounded-2xl bg-primary-soft" />
-                )}
+                className={`relative w-full rounded-2xl border px-5 py-4 text-left text-sm transition-colors duration-150
+                  ${selected === o.key ? 'border-primary bg-primary-soft/75 shadow-xs' : 'border-line bg-white hover:border-ink-3/40 hover:bg-paper-2/40'}`}>
                 <span className="relative z-10 flex items-center gap-3.5">
-                  <span className={`grid size-7 flex-none place-items-center rounded-full border text-xs font-bold
-                    ${selected === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2'}`}>
+                  <span className={`grid size-7 flex-none place-items-center rounded-full border text-xs font-bold transition-colors duration-150
+                    ${selected === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2 bg-white'}`}>
                     {o.key}
                   </span>
-                  <span className={selected === o.key ? 'font-medium' : ''}>{o.text}</span>
+                  <span className={selected === o.key ? 'font-semibold text-ink' : 'text-ink-2'}>{o.text}</span>
                 </span>
               </motion.button>
             ))}
@@ -3813,18 +3865,14 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
                   {q.options.map((o) => (
                     <motion.button key={o.key} whileTap={{ scale: 0.99 }}
                       onClick={() => setTrainingPicks({ ...trainingPicks, [q.id]: o.key })}
-                      className={`relative w-full rounded-xl border px-4 py-3 text-left text-sm
-                        ${trainingPicks[q.id] === o.key ? 'border-primary' : 'border-line bg-white hover:border-ink-3/40'}`}>
-                      {trainingPicks[q.id] === o.key && (
-                        <motion.span layoutId={`tr-${q.id}`} transition={spring}
-                          className="absolute inset-0 rounded-xl bg-primary-soft" />
-                      )}
+                      className={`relative w-full rounded-xl border px-4 py-3 text-left text-sm transition-colors duration-150
+                        ${trainingPicks[q.id] === o.key ? 'border-primary bg-primary-soft/75 shadow-xs' : 'border-line bg-white hover:border-ink-3/40 hover:bg-paper-2/40'}`}>
                       <span className="relative z-10 flex items-center gap-3">
-                        <span className={`grid size-6 flex-none place-items-center rounded-full border text-xs font-bold
-                          ${trainingPicks[q.id] === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2'}`}>
+                        <span className={`grid size-6 flex-none place-items-center rounded-full border text-xs font-bold transition-colors duration-150
+                          ${trainingPicks[q.id] === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2 bg-white'}`}>
                           {o.key}
                         </span>
-                        {o.text}
+                        <span className={trainingPicks[q.id] === o.key ? 'font-medium text-ink' : 'text-ink-2'}>{o.text}</span>
                       </span>
                     </motion.button>
                   ))}
@@ -3861,15 +3909,12 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
                   {q.options.map((o) => (
                     <motion.button key={o.key} whileTap={{ scale: 0.99 }}
                       onClick={() => setRetestPicks({ ...retestPicks, [q.id]: o.key })}
-                      className={`relative w-full rounded-xl border px-4 py-3 text-left text-sm
-                        ${retestPicks[q.id] === o.key ? 'border-primary' : 'border-line bg-white hover:border-ink-3/40'}`}>
-                      {retestPicks[q.id] === o.key && (
-                        <motion.span layoutId={`rt-${q.id}`} transition={spring} className="absolute inset-0 rounded-xl bg-primary-soft" />
-                      )}
+                      className={`relative w-full rounded-xl border px-4 py-3 text-left text-sm transition-colors duration-150
+                        ${retestPicks[q.id] === o.key ? 'border-primary bg-primary-soft/75 shadow-xs' : 'border-line bg-white hover:border-ink-3/40 hover:bg-paper-2/40'}`}>
                       <span className="relative z-10 flex items-center gap-3">
-                        <span className={`grid size-6 flex-none place-items-center rounded-full border text-xs font-bold
-                          ${retestPicks[q.id] === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2'}`}>{o.key}</span>
-                        {o.text}
+                        <span className={`grid size-6 flex-none place-items-center rounded-full border text-xs font-bold transition-colors duration-150
+                          ${retestPicks[q.id] === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2 bg-white'}`}>{o.key}</span>
+                        <span className={retestPicks[q.id] === o.key ? 'font-medium text-ink' : 'text-ink-2'}>{o.text}</span>
                       </span>
                     </motion.button>
                   ))}
@@ -4298,9 +4343,14 @@ function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onE
             </div>
 
             {diagnosis.state === 'diagnosed' && (
-              <button onClick={onStartTraining} className="btn btn-primary mt-7">
-                按此诊断开具靶向训练<ArrowRight size={15} weight="bold" />
-              </button>
+              <div className="mt-7 flex flex-wrap items-center gap-3">
+                <button onClick={onStartTraining} className="btn btn-primary">
+                  按此诊断开具靶向训练<ArrowRight size={15} weight="bold" />
+                </button>
+                <button onClick={onExit} className="btn rounded-full border border-line bg-white px-5 py-3 text-sm text-ink-2 transition hover:border-primary hover:text-primary">
+                  稍后训练，返回待办
+                </button>
+              </div>
             )}
           </div>
         </motion.div>
