@@ -19,6 +19,11 @@ from .models import (
 from .diagnosis import engine as dx
 from .mastery import engine as mastery
 from .knowledge.point_repo import get_knowledge_detail
+from .cases.case_repo import (
+    get_clinical_cases_summary,
+    get_clinical_case_detail,
+    evaluate_clinical_case,
+)
 
 router = APIRouter()
 
@@ -349,6 +354,159 @@ def wrong_book(user_id: str, db: Session = Depends(get_db)):
         })
     return out
 
+
+@router.get("/users/{user_id}/wrong-book/export")
+def export_wrong_book(user_id: str, db: Session = Depends(get_db)):
+    """错题本「考前必背记忆手册」全量导出，支持按高危遗忘项筛选、教材锚点与口诀。"""
+    _active_user(user_id, db)
+    import math
+    current_time = now()
+    rows = db.execute(select(Attempt).where(
+        Attempt.user_id == user_id, Attempt.is_correct == False
+    ).order_by(Attempt.created_at.desc())).scalars().all()
+
+    # 经典药理速记口诀库（真实高频考点）
+    MNEMONIC_MAP = {
+        "M受体": "阿托品阻断M，散瞳解痉抑分泌；青光眼前列腺，两类患者切莫试。",
+        "胆碱": "毛果芸香激动M，缩瞳降压治青光；新斯的明抑胆碱，重症肌无力是良方。",
+        "肾上腺素": "肾上腺素急救强，过敏休克心跳停；局部止血配局麻，心悸升高血压升。",
+        "β受体": "普萘洛尔阻断β，减慢心率降血压；心绞痛用心肌省，哮喘患者万不可。",
+        "降压": "利尿剂配普利地平，单药起始联合优；普利干咳沙坦代，地平水肿心率快。",
+        "强心": "强心苷类地高辛，正肌力来负频率；安全范围极为窄，低钾低镁易中毒。",
+        "抗菌": "青霉素杀菌首选强，过敏皮试不能忘；头孢菌素分四代，代数越高阴杆强。",
+        "镇痛": "吗啡镇痛止泻喘，成瘾便秘呼吸抑；解痉当配阿托品，纳洛酮为解毒剂。",
+    }
+
+    items = []
+    high_risk_count = 0
+    for a in rows:
+        q = db.get(Question, a.question_id)
+        if not q:
+            continue
+        domain = db.get(DiagnosticDomain, q.domain_id) if q.domain_id else None
+        s = db.execute(select(DiagnosisSession).where(
+            DiagnosisSession.attempt_id == a.id)).scalar_one_or_none()
+        mis = db.get(Misconception, s.hypothesis_id) if s and s.hypothesis_id else None
+
+        sched = db.execute(select(RetestSchedule).where(
+            RetestSchedule.user_id == user_id,
+            RetestSchedule.source_attempt_id == a.id
+        )).scalar_one_or_none()
+        ref_time = sched.last_reviewed_at if sched else a.created_at
+        elapsed_hours = _diff_hours(current_time, ref_time)
+        half_life = 24.0 if (sched and sched.stage == 1) else (72.0 if (sched and sched.stage == 2) else 168.0)
+        r_val = math.exp(-elapsed_hours / half_life)
+        retention_pct = int(max(15, min(98, round(r_val * 100))))
+        decay_level = "fresh" if retention_pct >= 75 else ("warning" if retention_pct >= 40 else "critical")
+        if decay_level in ("warning", "critical"):
+            high_risk_count += 1
+
+        # 选项规格化
+        options_list = []
+        if isinstance(q.options, list):
+            for opt in q.options:
+                if isinstance(opt, dict):
+                    options_list.append({"key": opt.get("key", ""), "text": opt.get("text", "")})
+                else:
+                    options_list.append({"key": "", "text": str(opt)})
+        elif isinstance(q.options, dict):
+            for k, v in q.options.items():
+                options_list.append({"key": k, "text": str(v)})
+
+        # 关联混淆对辨析
+        conf_pair = db.execute(select(ConfusionPair).where(
+            ConfusionPair.domain_id == q.domain_id)).scalars().first()
+        confusion_text = f"{conf_pair.drug_a} 与 {conf_pair.drug_b}：{conf_pair.distinction_text}" if conf_pair else ""
+
+        # 获取解析与教材切片
+        ev = db.execute(select(QuestionEvidence).where(
+            QuestionEvidence.question_id == q.id,
+            QuestionEvidence.support_type == "解析")).scalar_one_or_none()
+        analysis_text = ev.content_text if ev else ""
+        textbook_anchor = f"人卫《药理学》9e · {domain.name if domain else '重点章节'}"
+
+        # 匹配助记口诀
+        matched_mnemonic = ""
+        for kw, mn in MNEMONIC_MAP.items():
+            if kw in q.stem or (domain and kw in domain.name) or (mis and kw in mis.name):
+                matched_mnemonic = mn
+                break
+        if not matched_mnemonic:
+            matched_mnemonic = f"核心考点记忆眼：区分药物特异靶点效应与首选禁忌（{mis.name if mis else '本题考点'}）。"
+
+        case_scenario = ""
+        case_lesson = ""
+        if mis and mis.case_evidence:
+            case_scenario = mis.case_evidence.get("scenario", "")
+            case_lesson = mis.case_evidence.get("lesson", "")
+
+        items.append({
+            "attempt_id": a.id,
+            "question_id": q.id,
+            "question_code": q.code,
+            "stem": q.stem,
+            "options": options_list,
+            "student_answer": a.selected_option,
+            "correct_answer": q.answer,
+            "domain_id": q.domain_id,
+            "domain_name": domain.name if domain else "药理学重点",
+            "misconception_category": mis.category if mis else "知识遗忘",
+            "misconception_name": mis.name if mis else "核心考点记忆不牢",
+            "case_scenario": case_scenario,
+            "case_lesson": case_lesson,
+            "textbook_anchor": textbook_anchor,
+            "analysis": analysis_text,
+            "confusion_pair": confusion_text,
+            "mnemonic": matched_mnemonic,
+            "retention_pct": retention_pct,
+            "decay_level": decay_level,
+            "days_since": round(elapsed_hours / 24.0, 1),
+            "evidence_level": s.evidence_level if s else "中",
+        })
+
+    return {
+        "user_id": user_id,
+        "generated_at": current_time.strftime("%Y-%m-%d %H:%M"),
+        "total_wrong": len(items),
+        "high_risk_count": high_risk_count,
+        "items": items,
+    }
+
+
+# ==================== 真实临床处方与病例沙盘 ====================
+
+@router.get("/users/{user_id}/clinical-cases")
+def list_clinical_cases(user_id: str, db: Session = Depends(get_db)):
+    """真实临床处方与病例沙盘：列表。"""
+    _active_user(user_id, db)
+    return {"cases": get_clinical_cases_summary()}
+
+
+@router.get("/users/{user_id}/clinical-cases/{case_id}")
+def get_clinical_case(user_id: str, case_id: str, db: Session = Depends(get_db)):
+    """真实临床处方与病例沙盘：单个病历详情。"""
+    _active_user(user_id, db)
+    c = get_clinical_case_detail(case_id)
+    if not c:
+        raise HTTPException(404, f"案例 {case_id} 不存在")
+    return c
+
+
+class ClinicalCaseSubmitIn(BaseModel):
+    answers: dict[str, str]
+
+
+@router.post("/users/{user_id}/clinical-cases/{case_id}/submit")
+def submit_clinical_case(user_id: str, case_id: str, body: ClinicalCaseSubmitIn, db: Session = Depends(get_db)):
+    """真实临床处方与病例沙盘：提交审查并获取指南评分与专家反馈。"""
+    _active_user(user_id, db)
+    res = evaluate_clinical_case(case_id, body.answers)
+    if "error" in res:
+        raise HTTPException(404, res["error"])
+    audit(db, user_id, "clinical_case.submitted", f"case:{case_id}",
+          score=res.get("score"), total=res.get("total_points"))
+    db.commit()
+    return res
 
 class AwakenIn(BaseModel):
     attempt_id: str
@@ -994,23 +1152,58 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
     from .models import MasteryState
     order = {"薄弱": 0, "学习中": 1, "初步掌握": 2}
     rows = db.execute(select(MasteryState).where(MasteryState.user_id == user_id)).scalars().all()
-    pending = sorted([r for r in rows if r.state in order], key=lambda r: order[r.state])
-    # 达标出列判定：章级(无 category)到「初步掌握」即完成；种子域须到「掌握」。
+    # 动态时间遗忘衰减引擎（BKT Continuous Time Decay）
+    decay_map = mastery.get_decayed_mastery_map(db, user_id, half_life_days=7.0)
+    memory_decay_alerts = []
+    # 达标出列判定：若经历时间衰退（warning/critical），须强制唤醒重新巩固，不可视为已达标
     def _is_done(r):
+        d_info = decay_map.get((r.domain_id, r.category))
+        if d_info and d_info.get("decay_level") in ("warning", "critical"):
+            return False
         if r.state in ("掌握", "稳定掌握"):
             return True
         return r.state == "初步掌握" and r.category is None
+
+    # 待办判定：薄弱/学习中，或虽已初步掌握/掌握但出现显著遗忘衰退的重点项
+    pending = []
+    for r in rows:
+        d_info = decay_map.get((r.domain_id, r.category))
+        is_decayed = bool(d_info and d_info.get("decay_level") in ("warning", "critical"))
+        if (r.state in order or is_decayed) and not _is_done(r):
+            pending.append(r)
+    pending.sort(key=lambda r: order.get(r.state, 3))
     done_rows = [r for r in rows if _is_done(r)]
     tasks = []
     for r in pending:
-        if _is_done(r):
-            continue  # 章级初步掌握在此不列入待办（已达标出列）
         domain = db.get(DiagnosticDomain, r.domain_id)
         if not domain:
             continue
         is_chapter = r.category is None
-        p_val = float(getattr(r, "probability", None) or 0.150)
-        urgency = round(1.0 - p_val, 3)
+        d_info = decay_map.get((r.domain_id, r.category))
+        if d_info:
+            p_val = d_info["decayed_p"]
+            days_passed = d_info["days_passed"]
+            freshness_status = d_info["freshness_status"]
+            decay_level = d_info["decay_level"]
+            decay_pct = d_info["decay_pct"]
+            if decay_level in ("warning", "critical"):
+                memory_decay_alerts.append({
+                    "domain_id": r.domain_id,
+                    "domain_name": domain.name,
+                    "category": r.category,
+                    "days_passed": days_passed,
+                    "decay_pct": decay_pct,
+                    "freshness_status": freshness_status,
+                    "tip": f"距离上次巩固已超 {int(days_passed)} 天，掌握度衰退至 {int(p_val * 100)}%，建议今日优先唤醒！",
+                })
+        else:
+            p_val = float(getattr(r, "probability", None) or 0.150)
+            days_passed = 0.0
+            freshness_status = "巩固期"
+            decay_level = "fresh"
+            decay_pct = 0
+
+        urgency = round(1.0 - p_val + (min(0.3, days_passed * 0.05) if days_passed >= 3 else 0.0), 3)
         p_round = round(p_val, 3)
 
         # 学习任务（一学一练配对）：
@@ -1020,7 +1213,7 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
         if (not is_chapter) and r.state == "薄弱":
             tasks.append({"type": "material", "domain_id": r.domain_id, "domain": domain.name,
                           "category": r.category, "state": r.state,
-                          "bkt_probability": p_round, "urgency_score": urgency,
+                          "bkt_probability": p_round, "urgency_score": urgency, "freshness_status": freshness_status, "decay_level": decay_level, "days_since_update": days_passed,
                           "title": f"学习：{domain.name}（{r.category}）",
                           "guide": "先看本域学习材料，再回答随堂自测；自测通过后此任务出列，进入下方练习。",
                           "goal": "自测通过（答对 ≥60%）"})
@@ -1031,7 +1224,7 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
                            "本章自测已通过，可回看知识点复习；用下方练习把正确率打到 70% 即达标出列。")
             tasks.append({"type": "material", "domain_id": r.domain_id, "domain": domain.name,
                           "category": None, "state": r.state,
-                          "bkt_probability": p_round, "urgency_score": urgency,
+                          "bkt_probability": p_round, "urgency_score": urgency, "freshness_status": freshness_status, "decay_level": decay_level, "days_since_update": days_passed,
                           "title": f"学习：{domain.name}",
                           "guide": learn_guide,
                           "goal": "自测通过（答对 ≥60%）"})
@@ -1044,7 +1237,7 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
             guide = "答对本章题目、若答错则沿「诊断 → 靶向训练 → 迁移复测」把错因突破到「掌握」后出列。"
         tasks.append({"type": "practice", "domain_id": r.domain_id, "domain": domain.name,
                       "category": r.category, "state": r.state,
-                      "bkt_probability": p_round, "urgency_score": urgency,
+                      "bkt_probability": p_round, "urgency_score": urgency, "freshness_status": freshness_status, "decay_level": decay_level, "days_since_update": days_passed,
                       "title": f"练习：{domain.name}" + (f"（{r.category}）" if r.category else ""),
                       "guide": guide,
                       "goal": "掌握" if not is_chapter else ("初步掌握（题库题可达到的最强状态）"
@@ -1071,7 +1264,7 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
                 "urgency_score": t["urgency_score"],
                 "urgency_level": level,
                 "suggested_action": action,
-                "reason": f"BKT 贝叶斯后验掌握度仅 {int(prob * 100)}%，失误概率较高，建议优先突破。"
+                "reason": f"BKT 贝叶斯后验掌握度为 {int(prob * 100)}%（处于{t.get('freshness_status', '巩固期')}），建议优先突破。", "freshness_status": t.get("freshness_status"), "decay_level": t.get("decay_level")
             })
             if len(daily_recommendation) >= 3:
                 break
@@ -1088,7 +1281,7 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
                            "state": state_label,
                            "title": f"已完成：{domain.name}" + (f"（{r.category}）" if r.category else "")})
     note = "路径按「一学一练」配对生成并由 BKT 认知模型自适应动态排序：掌握度最低的薄弱项优先前置推荐，练到达标态（章节初步掌握 / 错因掌握）即出列。"
-    return {"tasks": tasks, "done_tasks": done_tasks, "daily_recommendation": daily_recommendation, "note": note}
+    return {"tasks": tasks, "done_tasks": done_tasks, "daily_recommendation": daily_recommendation, "memory_decay_alerts": memory_decay_alerts[:3], "note": note}
 
 
 # ---------- 学习地图 · 知识图谱（2026-09-09：目标后、摸底前 的「先学→随堂摸底」） ----------
@@ -2091,6 +2284,7 @@ class QAIn(BaseModel):
     question: str = Field(..., max_length=QA_QUESTION_MAXLEN)
     context: str | None = None
     question_id: str | None = None
+    history: list[dict] | None = None
 
 
 @router.post("/users/{user_id}/qa/ask")
@@ -2158,11 +2352,12 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
         hint = f"（已关联你在错题/诊断卡中的追问情境：{context_str[:50]}…）\n\n" if context_str else ""
         return {"answer": f"{hint}（演示模式：真模型未接入）课程库中找到 {len(refs)} 处相关知识依据（{cites}）。针对你的追问，请重点抓住该药所作用的受体亚型、产生的特异性效应及与其易混淆药物的核心辨析点。",
                 "citations": refs, "refused": False, "refuse_reason": None,
+                "follow_ups": ["该药作用的受体亚型与特异性效应是什么？", "在易混淆同类药物中，临床选择的关键指征有何不同？"],
                 "provider": "mock", "note": "计划态：真模型（GLM）接入后此条由模型结合错题背景 grounded 生成。"}
 
     from .llm.provider import ProviderError
     try:
-        r = provider.answer_with_refs(question=full_question, slices=slices, n_refs=len(refs))
+        r = provider.answer_with_refs(question=full_question, slices=slices, n_refs=len(refs), history=body.history)
     except ProviderError as e:
         audit(db, user_id, "qa.provider_error", f"user:{user_id}", q_len=len(q),
               reason=str(e)[:80])
@@ -2177,6 +2372,7 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
     return {"answer": r["answer"], "citations": cites,
             "refused": r["refused"],
             "refuse_reason": "no_grounding" if r["refused"] else None,
+            "follow_ups": r.get("follow_ups") or ["该药作用的受体亚型与特异性效应是什么？", "在易混淆同类药物中，临床选择的关键指征有何不同？"],
             "provider": "external_api",
             "note": "回答由课程资料切片（教材原文 + 题库题目解析）结合错题情境 grounded 生成，仅供学习参考，不保证完全正确；不提供用药建议。"}
 

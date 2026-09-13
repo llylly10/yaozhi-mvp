@@ -230,7 +230,7 @@ class ExternalApiProvider(_BaseProvider):
     # 思考模型（GLM-5.2）说明：简单问题也要烧 ~700 reasoning tokens，max_tokens 预算
     # 必须留出推理余量，否则 finish=length 导致空内容；默认 2000。
     def _chat_json(self, system: str, user: str, temperature: float = 0.0,
-                   max_tokens: int = 2000) -> dict:
+                   max_tokens: int = 2000, history: list[dict] | None = None) -> dict:
         # 熔断门：处于冷却期 → 不开真请求，直接降级
         if self._circuit_open():
             raise CircuitOpenError(
@@ -238,18 +238,22 @@ class ExternalApiProvider(_BaseProvider):
         try:
             def _call() -> str:
                 client = self._get_client()
+                messages = [{"role": "system", "content": system}]
+                if history:
+                    for h in history[-6:]:  # 保留最近 3 轮追问上下文
+                        r = h.get("role")
+                        c = h.get("content")
+                        if r in {"user", "assistant"} and c:
+                            messages.append({"role": r, "content": str(c)[:1000]})
+                messages.append({"role": "user", "content": user})
                 resp = client.chat.completions.create(
                     model=self.model,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
+                    messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     response_format={"type": "json_object"},
                 )
                 return resp.choices[0].message.content or ""
-
             # 墙钟硬超时：即便传输层挂死，也保证主流程在 deadline 内返回/抛错
             content = _run_with_deadline(_call, self._hard_timeout)
             # 去掉可能的 ```json 围栏
@@ -322,38 +326,42 @@ class ExternalApiProvider(_BaseProvider):
         return out
 
     # ---- 问 AI grounded 生成（课程问答：只依据给定切片回答，引用可验）----
-    def answer_with_refs(self, *, question: str, slices: str, n_refs: int) -> dict:
+    def answer_with_refs(self, *, question: str, slices: str, n_refs: int,
+                         history: list[dict] | None = None) -> dict:
         """slices: 已编号的资料串（如 "[1](第5章·p61) …… [2]……"）。
-        返回 {"answer": str(≤800字), "used_refs": [1-based int], "refused": bool}。
+        返回 {"answer": str(≤800字), "used_refs": [1-based int], "refused": bool, "follow_ups": list[str]}。
         失败抛 ProviderError，调用方降级 Mock 摘录（问答链路永不因模型崩溃）。"""
         system = (
-            "你是药知课程助教，只讲授《药理学》课程内容。规则："
-            "1) 只能依据【课程资料切片】回答，切片没有的信息必须说不知道，不得编造；"
-            "2) 切片来源有两类：教材原文，或课程题库的题目及其解析（标注「题库」）；"
-            "两者都是课程资料，同样可作为依据引用；"
-            "3) 可以对多条切片做归纳与对比（例如把分别提到两种药的切片放在一起比较），"
-            "但每条结论都必须对应到切片，不得补充切片之外的药理事实；"
-            "4) 先给一句话结论，再列 2-4 个要点，总长度≤300字，用自己的话转述，不要复制原文整句；"
-            "5) 每条结论后标注引用序号如[1][2]，序号只能来自给定切片编号；"
-            "6) 涉及具体患者用药决策（吃不吃、剂量、换药停药等）一律拒绝并提示咨询医师/药师；"
-            '7) 只输出 JSON：{"answer": "...", "used_refs": [1], "refused": false}。'
+            "你是药知课程助教，只讲授《药理学》课程内容。规则：\n"
+            "1) 只能依据【课程资料切片】回答，切片没有的信息必须说不知道，不得编造；\n"
+            "2) 切片来源有两类：教材原文，或课程题库的题目及其解析（标注「题库」）；两者都是课程资料，同样可作为依据引用；\n"
+            "3) 可以对多条切片做归纳与对比（例如把分别提到两种药的切片放在一起比较），但每条结论都必须对应到切片，不得补充切片之外的药理事实；\n"
+            "4) 先给一句话结论，再列 2-4 个要点，总长度≤350字，用自己的话转述，不要复制原文整句；\n"
+            "5) 每条结论后标注引用序号如[1][2]，序号只能来自给定切片编号；\n"
+            "6) 涉及具体患者用药决策（吃不吃、剂量、换药停药等）一律拒绝并提示咨询医师/药师；\n"
+            "7) 生成 2~3 个苏格拉底式进阶追问启发问题（每题≤25字），引导学生继续深入思考药理机制或临床联系；\n"
+            '8) 只输出 JSON：{"answer": "...", "used_refs": [1], "refused": false, "follow_ups": ["追问1", "追问2"]}。\n'
             '若切片不足以回答，输出 {"answer": "课程资料里没有足够依据，建议换个问法或先学对应章节。", '
-            '"used_refs": [], "refused": true}。'
+            '"used_refs": [], "refused": true, "follow_ups": []}。'
         )
         user = f"【学生问题】{question}\n【课程资料切片】\n{slices}\n只输出 JSON。"
         t0 = time.time()
-        result = self._chat_json(system, user, temperature=0.2, max_tokens=2000)
+        result = self._chat_json(system, user, temperature=0.2, max_tokens=2000, history=history)
         latency = int((time.time() - t0) * 1000)
         answer = str(result.get("answer") or "")[:800]
         used = [i for i in (result.get("used_refs") or [])
                 if isinstance(i, int) and 1 <= i <= max(n_refs, 0)]
-        out = {"answer": answer, "used_refs": used, "refused": bool(result.get("refused"))}
+        raw_follow_ups = result.get("follow_ups") or []
+        follow_ups = [str(f)[:40] for f in raw_follow_ups if isinstance(f, str) and f.strip()][:3]
+        out = {"answer": answer, "used_refs": used, "refused": bool(result.get("refused")), "follow_ups": follow_ups}
         self.log_run("qa_answer", {"payload": {"q_len": len(question),
                                                "slices_len": len(slices),
-                                               "n_refs": n_refs},
+                                               "n_refs": n_refs,
+                                               "has_history": bool(history)},
                                    "result": {"answer_len": len(answer),
                                               "used_refs": used,
-                                              "refused": out["refused"]}}, latency)
+                                              "refused": out["refused"],
+                                              "follow_ups_count": len(follow_ups)}}, latency)
         return out
 
     # ---- 候选重排（真模型：按语义贴合度在候选内排序）----

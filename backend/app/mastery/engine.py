@@ -177,3 +177,65 @@ def transition(db, user_id: str, domain_id: str, category: str | None, event: st
     db.commit()
     audit(db, "system", "mastery.transition", f"{user_id}/{domain_id}", to=dst, event=event)
     return st
+
+
+def get_decayed_mastery_map(db, user_id: str, half_life_days: float = 7.0) -> dict:
+    """获取用户考虑艾宾浩斯时间衰减后的掌握度态势（连续概率半衰期建模）。"""
+    from sqlalchemy import select
+    from ..models import now
+
+    rows = db.execute(select(MasteryState).where(MasteryState.user_id == user_id)).scalars().all()
+    current_time = now()
+    domain_decay = {}
+
+    for st in rows:
+        raw_p = float(getattr(st, "probability", None) or BKTOnlineTracker.state_to_default_probability(st.state))
+        ref_time = getattr(st, "updated_at", None) or current_time
+
+        # 兼容时区比较（SQLite 无时区 vs UTC）
+        from datetime import timezone
+        if ref_time.tzinfo is None and current_time.tzinfo is not None:
+            ref_time = ref_time.replace(tzinfo=timezone.utc)
+        elif ref_time.tzinfo is not None and current_time.tzinfo is None:
+            current_time = current_time.replace(tzinfo=timezone.utc)
+
+        # 计算流逝时间（天）
+        diff_sec = max(0.0, (current_time - ref_time).total_seconds())
+        days_passed = round(diff_sec / 86400.0, 1)
+
+        decayed_p = BKTOnlineTracker.apply_decay(raw_p, days_passed=days_passed, half_life_days=half_life_days)
+        decayed_state = BKTOnlineTracker.probability_to_state(decayed_p, current_state=st.state)
+
+        # 衰退警示级别
+        if days_passed <= 3.0 or (raw_p - decayed_p) < 0.08:
+            decay_level = "fresh"      # 🟢 巩固期
+            freshness_status = "巩固期"
+        elif days_passed <= 7.0 or (raw_p - decayed_p) < 0.20:
+            decay_level = "warning"    # 🟡 临界衰退
+            freshness_status = "临界衰退"
+        else:
+            decay_level = "critical"   # 🔴 严重遗忘风险
+            freshness_status = "严重遗忘"
+
+        decay_pct = max(0, min(100, int(round((1.0 - (decayed_p / max(0.01, raw_p))) * 100))))
+        entry = {
+            "domain_id": st.domain_id,
+            "category": st.category,
+            "raw_p": raw_p,
+            "original_p": raw_p,
+            "decayed_p": decayed_p,
+            "days_passed": days_passed,
+            "decay_level": decay_level,
+            "freshness_status": freshness_status,
+            "decay_pct": decay_pct,
+            "is_decayed": (raw_p - decayed_p) >= 0.05,
+            "state": st.state,
+            "decayed_state": decayed_state,
+            "attempts_count": getattr(st, "attempts_count", 0) or 0,
+        }
+        str_key = st.domain_id if st.category is None else f"{st.domain_id}:{st.category}"
+        domain_decay[str_key] = entry
+        domain_decay[(st.domain_id, st.category)] = entry
+
+    return domain_decay
+

@@ -4,12 +4,14 @@ import { motion, AnimatePresence, MotionConfig, useReducedMotion, useScroll, use
 import {
   CheckCircle, XCircle, Warning, MagnifyingGlass, SkipForward, ArrowRight, ArrowUp, CaretDown, Pill,
   CalendarBlank, ClockCounterClockwise, SquaresFour, Gear, BookOpenText, ChatCircle, ChatCircleText,
-  Lightning, Hourglass, Sparkle, ShareNetwork,
+  Lightning, Hourglass, Sparkle, ShareNetwork, FirstAid, Printer,
 } from '@phosphor-icons/react'
 import { api, type Diagnosis, type Question, type TikuFeedback, type RetestCapsuleData } from './api'
 import { EvalBenchmarkModal } from './EvalBenchmarkModal'
 import { CustomQuizView } from './CustomQuizView'
 import { KnowledgeDetailModal } from './KnowledgeDetailModal'
+import { WrongBookExportModal } from './WrongBookExportModal'
+import { ClinicalCaseView } from './ClinicalCaseView'
 
 /*
  * 药知 · 「现代药房 × 分子美学」
@@ -35,8 +37,8 @@ function genUUID(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-type Screen = 'register' | 'consent' | 'goal' | 'study' | 'assessment' | 'portrait' | 'list' | 'material' | 'flow' | 'profile' | 'qa' | 'custom_quiz'
-type View = 'todo' | 'material' | 'wrongbook' | 'profile' | 'qa' | 'custom_quiz'
+type Screen = 'register' | 'consent' | 'goal' | 'study' | 'assessment' | 'portrait' | 'list' | 'material' | 'flow' | 'profile' | 'qa' | 'custom_quiz' | 'clinical_cases'
+type View = 'todo' | 'material' | 'wrongbook' | 'profile' | 'qa' | 'custom_quiz' | 'clinical_cases'
 
 const STEPS = ['注册', '同意', '目标', '地图', '摸底', '画像', '路径', '学习', '练习', '诊断', '追问', '训练', '复测', '档案'] as const
 
@@ -48,7 +50,7 @@ function stepIndex(screen: Screen, diagnosis: Diagnosis | null): number {
   const map: Record<Screen, number> = {
     register: 0, consent: 1, goal: 2, study: 3, assessment: 4, portrait: 5,
     list: 6, flow: 8, profile: 13,
-    material: 7, qa: 6, custom_quiz: 6,
+    material: 7, qa: 6, custom_quiz: 6, clinical_cases: 6,
   }
   if (screen !== 'flow') return map[screen]
   if (!diagnosis) return 8
@@ -72,11 +74,11 @@ export default function App() {
   const [showEvalModal, setShowEvalModal] = useState(false)
   const [qaPrefill, setQaPrefill] = useState<{ context?: string; question?: string } | null>(null)
 
-  // 主壳（可切换视图的页面：今日待办/错题本/问AI/档案/自适应组卷），全屏子流程(材料/练习/onboarding)不显示底部导航
-  const isShell = screen === 'list' || screen === 'profile' || screen === 'qa' || screen === 'custom_quiz'
+  // 主壳（可切换视图的页面：今日待办/错题本/问AI/档案/自适应组卷/临床沙盘），全屏子流程(材料/练习/onboarding)不显示底部导航
+  const isShell = screen === 'list' || screen === 'profile' || screen === 'qa' || screen === 'custom_quiz' || screen === 'clinical_cases'
   function goNav(v: View) {
     setError(null); setView(v)
-    setScreen(v === 'todo' ? 'list' : v === 'qa' ? 'qa' : v === 'custom_quiz' ? 'custom_quiz' : 'profile')
+    setScreen(v === 'todo' ? 'list' : v === 'qa' ? 'qa' : v === 'custom_quiz' ? 'custom_quiz' : v === 'clinical_cases' ? 'clinical_cases' : 'profile')
     setActiveQuestion(null)
   }
 
@@ -297,6 +299,9 @@ export default function App() {
             {screen === 'custom_quiz' && userId && (
               <CustomQuizView key="custom_quiz" userId={userId} onExit={() => goNav('todo')} onAskAi={handleAskAi} />
             )}
+            {screen === 'clinical_cases' && userId && (
+              <ClinicalCaseView key="clinical_cases" userId={userId} onAskAi={handleAskAi} onBackToTodo={() => goNav('todo')} />
+            )}
             {screen === 'qa' && userId && view === 'qa' && (
               <QAView key="qa" userId={userId} onError={setError} prefill={qaPrefill} onClearPrefill={() => setQaPrefill(null)} />
             )}
@@ -393,6 +398,7 @@ function Sidebar({ view, currentScreen, onNav, onGoMap }: {
           )}
           {item('todo', '今日待办', <CalendarBlank size={15} />)}
           {item('custom_quiz', '自适应组卷', <BookOpenText size={15} />)}
+          {item('clinical_cases', '临床沙盘', <FirstAid size={15} />)}
           {item('wrongbook', '错题本', <ClockCounterClockwise size={15} />)}
           {item('qa', '问AI', <ChatCircle size={15} />)}
         </div>
@@ -432,6 +438,7 @@ function MobileTab({ current, onNav }: { current: { screen: Screen; view: View }
       style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
       <div className="mx-auto flex w-full max-w-[560px] items-center gap-1">
         {tab('todo', '今日待办', <CalendarBlank size={19} />, 'list')}
+        {tab('clinical_cases', '临床沙盘', <FirstAid size={19} />, 'clinical_cases')}
         {tab('qa', '问AI', <ChatCircle size={19} />, 'qa')}
         {tab('wrongbook', '错题本', <ClockCounterClockwise size={19} />, 'profile')}
         {tab('profile', '学习档案', <SquaresFour size={19} />, 'profile')}
@@ -1779,6 +1786,9 @@ type PlanTask = {
   goal?: string
   bkt_probability?: number
   urgency_score?: number
+  freshness_status?: string
+  decay_level?: string
+  days_since_update?: number
 }
 type DoneTask = { domain_id: string; domain: string; category: string | null; state: string; title: string }
 type DailyRec = {
@@ -1791,11 +1801,26 @@ type DailyRec = {
   suggested_action: string
   reason: string
 }
+type MemoryDecayAlert = {
+  domain_id: string
+  domain_name: string
+  category: string | null
+  days_passed: number
+  decay_pct: number
+  freshness_status: string
+  tip: string
+}
 
 function LearningPathHome({ userId, onPick, onMaterial }: {
   userId: string; onPick: (q: Question) => void; onMaterial: (domainId: string) => void
 }) {
-  const [plan, setPlan] = useState<{ tasks: PlanTask[]; done_tasks?: DoneTask[]; daily_recommendation?: DailyRec[]; note: string } | null>(null)
+  const [plan, setPlan] = useState<{
+    tasks: PlanTask[]
+    done_tasks?: DoneTask[]
+    daily_recommendation?: DailyRec[]
+    memory_decay_alerts?: MemoryDecayAlert[]
+    note: string
+  } | null>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -1834,6 +1859,35 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
       <div className="mt-4">
         <RetestCapsuleCard userId={userId} onDone={() => load()} />
       </div>
+
+      {/* 动态时间遗忘衰减引擎预警 */}
+      {plan.memory_decay_alerts && plan.memory_decay_alerts.length > 0 && (
+        <div className="card mt-4 mb-3 border border-amber-500/40 bg-gradient-to-r from-amber-50 via-orange-50/40 to-white p-4 rounded-2xl shadow-xs">
+          <div className="flex items-center justify-between mb-2">
+            <span className="flex items-center gap-1.5 text-xs font-bold text-amber-900">
+              <Hourglass size={16} className="text-amber-600" weight="fill" />
+              BKT 动态时间遗忘预警 · 记忆半衰期衰退探测
+            </span>
+            <span className="rounded-full bg-amber-200/70 px-2.5 py-0.5 text-[10px] font-semibold text-amber-900">
+              {plan.memory_decay_alerts.length} 个薄弱考点临界遗忘
+            </span>
+          </div>
+          <div className="space-y-2">
+            {plan.memory_decay_alerts.map((al, idx) => (
+              <div key={idx} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white/95 p-3 border border-amber-200/70 text-xs">
+                <div>
+                  <span className="font-bold text-ink-1 mr-2">{al.domain_name}</span>
+                  {al.category && <span className="text-ink-3 mr-2 font-mono">[{al.category}]</span>}
+                  <span className="text-amber-800">{al.tip}</span>
+                </div>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${al.freshness_status === '严重遗忘' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'}`}>
+                  {al.freshness_status}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* BKT 认知追踪驱动的今日自适应推荐 */}
       {plan.daily_recommendation && plan.daily_recommendation.length > 0 && (
@@ -1949,10 +2003,23 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
                               <p className="text-[15px] font-medium leading-snug">{t.title}</p>
                               {isLearn && <p className="mt-0.5 text-xs text-gold">先学本域材料，再做随堂自测，最后练习</p>}
                             </div>
-                            <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium
-                              ${t.state === '薄弱' ? 'bg-cat-red-soft text-cat-red' : t.state === '学习中' ? 'bg-gold-soft text-gold' : 'bg-primary-soft text-primary'}`}>
-                              {t.state}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {t.freshness_status && (
+                                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                  t.freshness_status === '巩固期'
+                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                    : t.freshness_status === '临界衰退'
+                                    ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                                    : 'bg-red-50 text-red-700 border border-red-200'
+                                }`}>
+                                  {t.freshness_status}
+                                </span>
+                              )}
+                              <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium
+                                ${t.state === '薄弱' ? 'bg-cat-red-soft text-cat-red' : t.state === '学习中' ? 'bg-gold-soft text-gold' : 'bg-primary-soft text-primary'}`}>
+                                {t.state}
+                              </span>
+                            </div>
                           </div>
                           {/* 明确引导：这一步该做什么、做完会怎样 */}
                           {t.guide && <p className="mt-2 rounded-lg bg-paper px-3 py-2 text-[13px] leading-relaxed text-ink-2">{t.guide}</p>}
@@ -2019,6 +2086,7 @@ type QAMsg = {
   citations: { ref: string; chapter: string; book_page: number;
     source?: string; label?: string; code?: string }[]
   refused: boolean; provider: string; note?: string
+  follow_ups?: string[]
 }
 
 const QA_EXAMPLES = [
@@ -2057,21 +2125,38 @@ function QAView({
     setBusy(true)
     setInput('')
     const ctx = contextOverride !== undefined ? contextOverride : prefill?.context
+    const history = msgs.slice(-4).flatMap((m) => [
+      { role: 'user', content: m.q },
+      { role: 'assistant', content: m.a }
+    ])
     try {
-      const r = await api.qa(userId, question, ctx)
+      const r = await api.qa(userId, question, ctx, undefined, history)
       setMsgs((m) => [...m, {
         q: question, a: r.answer, citations: r.citations ?? [],
         refused: !!r.refused, provider: r.provider ?? '', note: r.note,
+        follow_ups: r.follow_ups ?? [],
       }])
     } catch (e) { onError(String(e)) } finally { setBusy(false) }
   }
 
   return (
     <motion.div key="qa" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      <p className="text-xs font-semibold tracking-[0.18em] text-gold">课程问答 · 问AI</p>
-      <h2 className="display mt-2 text-[26px]">有不会的，直接问</h2>
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs font-semibold tracking-[0.18em] text-gold">课程问答 · 问AI</p>
+          <h2 className="display mt-2 text-[26px]">有不会的，直接问</h2>
+        </div>
+        {msgs.length > 0 && (
+          <button
+            onClick={() => setMsgs([])}
+            className="flex items-center gap-1.5 rounded-full border border-line px-3.5 py-1.5 text-xs text-ink-3 hover:border-red-300 hover:text-red-700 transition"
+          >
+            开启新会话 / 清除历史
+          </button>
+        )}
+      </div>
       <p className="mt-2 text-sm leading-relaxed text-ink-2">
-        只讲《药理学》课程内容：先检索教材切片，有依据才回答，并标出引用章节。
+        只讲《药理学》课程内容：支持多轮深度追问，先检索教材切片，有依据才回答，并标出引用章节。
         检索不到会直说不知道；用药决策类问题会拒绝（本系统不提供用药建议）。
       </p>
 
@@ -2144,6 +2229,29 @@ function QAView({
                       {c.ref} {c.label || `${c.chapter} · p${c.book_page}`}
                     </span>
                   ))}
+                </div>
+              )}
+
+              {/* Socrates follow-up question bubbles */}
+              {m.follow_ups && m.follow_ups.length > 0 && (
+                <div className="mt-3 border-t border-dashed border-line/60 pt-3">
+                  <p className="text-[11px] font-bold text-amber-800 mb-1.5 flex items-center gap-1">
+                    <Sparkle size={13} weight="fill" className="text-amber-600" />
+                    苏格拉底启发追问（点击继续深挖）：
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {m.follow_ups.map((fup, fidx) => (
+                      <button
+                        key={fidx}
+                        type="button"
+                        onClick={() => ask(fup)}
+                        disabled={busy}
+                        className="rounded-full border border-amber-500/30 bg-amber-50/70 px-3 py-1 text-xs text-amber-950 hover:border-amber-500 hover:bg-amber-100 transition text-left"
+                      >
+                        💡 {fup}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -3163,6 +3271,7 @@ function WrongBook({ userId, onGoTodo, onAskAi }: { userId: string; onGoTodo: ()
   const [wrong, setWrong] = useState<WrongRow[] | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
   const [awakenAttemptId, setAwakenAttemptId] = useState<string | null>(null)
+  const [showExportModal, setShowExportModal] = useState(false)
   const [recallMap, setRecallMap] = useState<Record<string, RecallData | null>>({})
   const [loadingRecall, setLoadingRecall] = useState<string | null>(null)
   const [wgraph, setWgraph] = useState<{
@@ -3205,9 +3314,23 @@ function WrongBook({ userId, onGoTodo, onAskAi }: { userId: string; onGoTodo: ()
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      <p className="text-xs font-semibold tracking-[0.18em] text-gold">错题本</p>
-      <h2 className="display mt-2 text-[26px]">按错因归档的错题</h2>
-      <p className="mt-2 text-sm text-ink-2">演示账号 {userId.slice(0, 8)} · 数据仅存于校内演示环境</p>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold tracking-[0.18em] text-gold">错题本</p>
+          <h2 className="display mt-2 text-[26px]">按错因归档的错题</h2>
+          <p className="mt-2 text-sm text-ink-2">演示账号 {userId.slice(0, 8)} · 数据仅存于校内演示环境</p>
+        </div>
+        {wrong && wrong.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowExportModal(true)}
+            className="btn btn-secondary flex items-center gap-2 border-gold/40 text-xs font-semibold shadow-sm hover:border-gold hover:bg-gold/5 transition"
+          >
+            <Printer size={16} className="text-gold" weight="bold" />
+            一键导出考前必背小册 (PDF / A4)
+          </button>
+        )}
+      </div>
 
       {wgraph && wgraph.nodes.length > 0 && (
         <section className="card mt-6 p-6">
@@ -3258,6 +3381,13 @@ function WrongBook({ userId, onGoTodo, onAskAi }: { userId: string; onGoTodo: ()
             setAwakenAttemptId(null)
             loadWrongData()
           }}
+        />
+      )}
+
+      {showExportModal && (
+        <WrongBookExportModal
+          userId={userId}
+          onClose={() => setShowExportModal(false)}
         />
       )}
     </motion.div>

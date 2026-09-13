@@ -91,6 +91,19 @@ export const api = {
 
   wrongBook: (userId: string) => fetch(`/api/users/${userId}/wrong-book`).then(handle),
 
+  exportWrongBook: (userId: string) => fetch(`/api/users/${userId}/wrong-book/export`).then(handle),
+
+  clinicalCases: (userId: string) => fetch(`/api/users/${userId}/clinical-cases`).then(handle),
+
+  clinicalCaseDetail: (userId: string, caseId: string) => fetch(`/api/users/${userId}/clinical-cases/${caseId}`).then(handle),
+
+  submitClinicalCase: (userId: string, caseId: string, answers: Record<string, string>) =>
+    fetch(`/api/users/${userId}/clinical-cases/${caseId}/submit`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ answers }),
+    }).then(handle),
+
   wrongRecall: (attemptId: string) => fetch(`/api/wrong/${attemptId}/recall`).then(handle),
 
   wrongGraph: (userId: string) => fetch(`/api/users/${userId}/wrong-graph`).then(handle),
@@ -111,11 +124,11 @@ export const api = {
 
   learningPlan: (userId: string) => fetch(`/api/users/${userId}/learning-plan`).then(handle),
 
-  qa: (userId: string, question: string, context?: string, questionId?: string) =>
+  qa: (userId: string, question: string, context?: string, questionId?: string, history?: { role: string; content: string }[]) =>
     fetch(`/api/users/${userId}/qa/ask`, {
       method: 'POST',
       headers: jsonHeaders,
-      body: JSON.stringify({ question, context, question_id: questionId }),
+      body: JSON.stringify({ question, context, question_id: questionId, history }),
     }).then(handle),
 
   customQuizConfig: (userId: string) =>
