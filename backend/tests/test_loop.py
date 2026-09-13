@@ -36,7 +36,8 @@ client = TestClient(app)
 
 
 def fresh_user() -> str:
-    r = client.post("/sessions/demo", json={"account": "yaozhi_student01", "invite_code": "DEMO2026"})
+    acc = f"user_{uuid.uuid4().hex[:8]}"
+    r = client.post("/sessions/demo", json={"account": acc, "invite_code": "DEMO2026"})
     assert r.status_code == 200, r.text
     uid = r.json()["user_id"]
     c = client.post(f"/users/{uid}/consent", json={

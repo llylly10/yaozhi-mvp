@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Literal
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .db import get_db
@@ -14,10 +14,11 @@ from .models import (
     Attempt, ChainNode, ConfusionPair, DiagnosticDomain, DiagnosisCandidate, DiagnosisEvidence,
     DiagnosisSession, DemoUser, FollowupNode, FollowupTurn, KnowledgeRelation, MasteryState,
     Misconception, Question, QuestionEvidence, RetestSchedule, StudyProgress, SyllabusChapter,
-    TrainingSession, TrainingSessionQuestion, audit, now,
+    TikuQuestion, TrainingSession, TrainingSessionQuestion, audit, now,
 )
 from .diagnosis import engine as dx
 from .mastery import engine as mastery
+from .knowledge.point_repo import get_knowledge_detail
 
 router = APIRouter()
 
@@ -33,10 +34,41 @@ def _is_tiku_bridged(q: Question | None) -> bool:
 def _q_public(db: Session, q: Question) -> dict:
     """题目公共序列化：统一补章信息（前端题头/摸底展示用）。"""
     d = db.get(DiagnosticDomain, q.domain_id) if q.domain_id else None
+    ev = db.execute(select(QuestionEvidence).where(
+        QuestionEvidence.question_id == q.id,
+        QuestionEvidence.support_type == "解析")).scalar_one_or_none()
+    
+    cog = "理解"
+    diff = "中"
+    source_ref = ev.evidence_chunk_id if ev else ""
+    analysis = ev.content_text if ev else ""
+    
+    if q.code and q.code.startswith("T") and "-" in q.code:
+        try:
+            parts = q.code[1:].split("-")
+            p_no = parts[0]
+            q_id = int(parts[1])
+            tq = db.execute(select(TikuQuestion).where(
+                TikuQuestion.paper_no == p_no,
+                TikuQuestion.qid == q_id
+            )).scalar_one_or_none()
+            if tq:
+                cog = tq.cognitive_level or cog
+                diff = tq.difficulty or diff
+                source_ref = tq.source_ref or source_ref
+                analysis = tq.analysis or analysis
+        except Exception:
+            pass
+
     return {"id": q.id, "code": q.code, "stem": q.stem, "options": q.options,
             "type": q.type, "domain_id": q.domain_id,
             "chapter": d.chapter_ref if d else "",
-            "chapter_name": d.name if d else ""}
+            "chapter_name": d.name if d else "",
+            "cognitive_level": cog,
+            "difficulty": diff,
+            "source_ref": source_ref,
+            "analysis": analysis,
+            "is_ai_variant": bool(q.code and q.code.startswith("AI-VAR-"))}
 
 
 def _tiku_feedback(db: Session, q: Question) -> dict:
@@ -115,14 +147,29 @@ class DemoSessionIn(BaseModel):
 
 @router.post("/sessions/demo")
 def create_demo_session(body: DemoSessionIn, db: Session = Depends(get_db)):
-    """注册（第 1 步）：演示账号 + 邀请码。同意在第 2 步单独记录。"""
+    """登录 / 注册（第 1 步）：演示账号 + 邀请码。
+    若该账号名已有历史数据且未撤回，则直接登录已有账号并保留全部学习与错题记录；
+    若账号不存在，则自动创建新账号。
+    """
     if body.invite_code.strip().upper() != DEMO_INVITE_CODE:
         raise HTTPException(403, "邀请码不正确，请向项目组索取演示邀请码")
-    user = DemoUser(consented=False, display_name=body.account.strip() or "演示学生")
-    db.add(user)
-    db.commit()
-    audit(db, str(user.id), "account.registered", f"user:{user.id}", account=body.account)
-    return {"user_id": user.id, "display_name": user.display_name}
+    account_name = body.account.strip() or "演示学生"
+    user = db.execute(
+        select(DemoUser).where(
+            DemoUser.display_name == account_name,
+            DemoUser.withdrawn_at.is_(None)
+        ).order_by(DemoUser.created_at.desc())
+    ).scalars().first()
+
+    if user is None:
+        user = DemoUser(consented=False, display_name=account_name)
+        db.add(user)
+        db.commit()
+        audit(db, str(user.id), "account.registered", f"user:{user.id}", account=body.account)
+    else:
+        audit(db, str(user.id), "account.logged_in", f"user:{user.id}", account=body.account)
+
+    return {"user_id": user.id, "display_name": user.display_name, "consented": bool(user.consented)}
 
 
 class ConsentIn(BaseModel):
@@ -665,7 +712,18 @@ def wrong_recall(attempt_id: str, db: Session = Depends(get_db)):
         DiagnosisSession.attempt_id == a.id)).scalar_one_or_none()
     mis = db.get(Misconception, s.hypothesis_id) if s and s.hypothesis_id else None
 
-    # 1) 归因卡 + 临床案例
+    # 1) 归因卡 + 临床案例 + AI诊断剖析
+    ai_rat = None
+    if s:
+        from .models import DiagnosisEvidence
+        ev_ai = db.execute(select(DiagnosisEvidence).where(
+            DiagnosisEvidence.session_id == s.id)).scalars().all()
+        ai_rat = next((e.content for e in ev_ai if (e.source_ref or "").startswith("model:")), None)
+        if not ai_rat:
+            for e in ev_ai:
+                if e.evidence_type == "选项标注" and "依据学生作答理由归因：" in e.content:
+                    ai_rat = e.content.split("依据学生作答理由归因：")[-1].split("，可追问细化")[0].strip()
+                    break
     card = {
         "attempt_id": a.id,
         "is_correct": a.is_correct,
@@ -674,6 +732,7 @@ def wrong_recall(attempt_id: str, db: Session = Depends(get_db)):
         "misconception": {"code": mis.code, "name": mis.name, "category": mis.category} if mis else None,
         "case_evidence": mis.case_evidence if mis else None,
         "evidence_level": s.evidence_level if s else None,
+        "ai_rationale": ai_rat,
     }
 
     # 2) 知识关系图谱（FR-A2）+ 混淆对（按错题所属域；题库章节域暂无 relations 时诚实为空）
@@ -830,12 +889,19 @@ def get_diagnosis(session_id: str, db: Session = Depends(get_db)):
             cm = db.get(Misconception, c.misconception_id)
             alternatives.append({"code": cm.code, "name": cm.name,
                                  "primary": cm.id == s.hypothesis_id})
+        ai_rationale = next((e.content for e in evidences if (e.source_ref or "").startswith("model:")), None)
+        if not ai_rationale:
+            for e in evidences:
+                if e.evidence_type == "选项标注" and "依据学生作答理由归因：" in e.content:
+                    ai_rationale = e.content.split("依据学生作答理由归因：")[-1].split("，可追问细化")[0].strip()
+                    break
         card = {
             "misconception": {"code": m.code, "name": m.name, "category": m.category},
             "evidence_level": s.evidence_level,
             "can_refine": s.can_refine,
             # 教材事实案例（v0.7 错因卡第④字段，2026-09-08）：错因目录挂的临床记忆点
             "case_evidence": m.case_evidence,
+            "ai_rationale": ai_rationale,
             "evidences": [{"type": label.get(e.evidence_type, e.evidence_type),
                            "source": source_label.get(e.evidence_type, ""),
                            "content": e.content} for e in evidences],
@@ -943,6 +1009,10 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
         if not domain:
             continue
         is_chapter = r.category is None
+        p_val = float(getattr(r, "probability", None) or 0.150)
+        urgency = round(1.0 - p_val, 3)
+        p_round = round(p_val, 3)
+
         # 学习任务（一学一练配对）：
         # - 种子域错因「薄弱」：深图谱学习材料 + 随堂自测，通过后任务出列、进入练习。
         # - 章级行「薄弱/学习中」：本章大纲知识点 + 随堂自测，通过后该行进「学习中」，
@@ -950,6 +1020,7 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
         if (not is_chapter) and r.state == "薄弱":
             tasks.append({"type": "material", "domain_id": r.domain_id, "domain": domain.name,
                           "category": r.category, "state": r.state,
+                          "bkt_probability": p_round, "urgency_score": urgency,
                           "title": f"学习：{domain.name}（{r.category}）",
                           "guide": "先看本域学习材料，再回答随堂自测；自测通过后此任务出列，进入下方练习。",
                           "goal": "自测通过（答对 ≥60%）"})
@@ -960,6 +1031,7 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
                            "本章自测已通过，可回看知识点复习；用下方练习把正确率打到 70% 即达标出列。")
             tasks.append({"type": "material", "domain_id": r.domain_id, "domain": domain.name,
                           "category": None, "state": r.state,
+                          "bkt_probability": p_round, "urgency_score": urgency,
                           "title": f"学习：{domain.name}",
                           "guide": learn_guide,
                           "goal": "自测通过（答对 ≥60%）"})
@@ -972,10 +1044,38 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
             guide = "答对本章题目、若答错则沿「诊断 → 靶向训练 → 迁移复测」把错因突破到「掌握」后出列。"
         tasks.append({"type": "practice", "domain_id": r.domain_id, "domain": domain.name,
                       "category": r.category, "state": r.state,
+                      "bkt_probability": p_round, "urgency_score": urgency,
                       "title": f"练习：{domain.name}" + (f"（{r.category}）" if r.category else ""),
                       "guide": guide,
                       "goal": "掌握" if not is_chapter else ("初步掌握（题库题可达到的最强状态）"
                                if r.state == "学习中" else "初步掌握")})
+
+    # 按 BKT 紧迫度 (1 - P(L)) 优先降序排列待办
+    tasks.sort(key=lambda t: (-t.get("urgency_score", 0), t.get("type") != "material"))
+
+    # 生成今日自适应推荐（根据 BKT 后验掌握度抽取 Top 1~3 薄弱项）
+    daily_recommendation = []
+    seen_domains = set()
+    for t in tasks:
+        d_id = t["domain_id"]
+        if d_id not in seen_domains:
+            seen_domains.add(d_id)
+            prob = t["bkt_probability"]
+            level = "高危薄弱" if prob < 0.3 else "重点巩固" if prob < 0.6 else "常态复习"
+            action = "优先完成章节自测" if t["type"] == "material" else "靶向专项练习"
+            daily_recommendation.append({
+                "domain_id": d_id,
+                "domain_name": t["domain"],
+                "category": t.get("category"),
+                "bkt_probability": prob,
+                "urgency_score": t["urgency_score"],
+                "urgency_level": level,
+                "suggested_action": action,
+                "reason": f"BKT 贝叶斯后验掌握度仅 {int(prob * 100)}%，失误概率较高，建议优先突破。"
+            })
+            if len(daily_recommendation) >= 3:
+                break
+
     # 已完成项：明确返回「已完成」，前端打勾展示，避免掌握态被静默过滤造成"学习后无反馈"（用户反馈）
     done_tasks = []
     for r in sorted(done_rows, key=lambda x: (x.category is not None, x.domain_id)):
@@ -987,8 +1087,8 @@ def learning_plan(user_id: str, db: Session = Depends(get_db)):
         done_tasks.append({"domain_id": r.domain_id, "domain": domain.name, "category": r.category,
                            "state": state_label,
                            "title": f"已完成：{domain.name}" + (f"（{r.category}）" if r.category else "")})
-    note = "路径按「一学一练」配对生成：每个薄弱项都有学习任务 + 练习任务；练到达标态（章节初步掌握 / 错因掌握）即出列，不再滞留待办。"
-    return {"tasks": tasks, "done_tasks": done_tasks, "note": note}
+    note = "路径按「一学一练」配对生成并由 BKT 认知模型自适应动态排序：掌握度最低的薄弱项优先前置推荐，练到达标态（章节初步掌握 / 错因掌握）即出列。"
+    return {"tasks": tasks, "done_tasks": done_tasks, "daily_recommendation": daily_recommendation, "note": note}
 
 
 # ---------- 学习地图 · 知识图谱（2026-09-09：目标后、摸底前 的「先学→随堂摸底」） ----------
@@ -1162,6 +1262,19 @@ def study_detail(user_id: str, domain_id: str, db: Session = Depends(get_db)):
                                "distinction": p.distinction_text,
                                "evidence": p.evidence} for p in pairs]}
     return {**base, "source": "none", "chapter": None}
+
+
+@router.get("/users/{user_id}/study/knowledge-detail")
+def study_knowledge_detail(
+    user_id: str,
+    chapter_no: int = Query(..., ge=1, le=50),
+    point_name: str = Query(...),
+    domain_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """获取具体药理知识点的深度结构化内容（核心机制、代表药、临床应用、不良反应、教材切片、易混辨析、口诀）。"""
+    _active_user(user_id, db)
+    return get_knowledge_detail(db, chapter_no=chapter_no, point_name=point_name, domain_id=domain_id)
 
 
 class MaterialQuizIn(BaseModel):
@@ -1603,7 +1716,9 @@ def user_archive(user_id: str, db: Session = Depends(get_db)):
         dd = dom_map.get(r.domain_id)
         mastery_list.append({
             "domain_id": r.domain_id, "domain": dd.name if dd else r.domain_id,
-            "category": r.category, "state": r.state, "reason": r.reason})
+            "category": r.category, "state": r.state, "reason": r.reason,
+            "probability": float(getattr(r, "probability", None) or 0.15),
+            "attempts_count": int(getattr(r, "attempts_count", 0) or 0)})
     done_states = {"掌握", "稳定掌握"}
 
     return {
@@ -1661,8 +1776,21 @@ def get_training(session_id: str, db: Session = Depends(get_db)):
                 TrainingSessionQuestion.training_session_id == ts.id).order_by(
                 TrainingSessionQuestion.sequence_no)).scalars().all()
 
-    questions = [{"id": r.question_id, "stem": db.get(Question, r.question_id).stem,
-                  "options": db.get(Question, r.question_id).options} for r in rows]
+    questions = []
+    for r in rows:
+        q_obj = db.get(Question, r.question_id)
+        if q_obj:
+            qp = _q_public(db, q_obj)
+            questions.append({
+                "id": q_obj.id,
+                "stem": q_obj.stem,
+                "options": q_obj.options,
+                "code": q_obj.code,
+                "is_ai_variant": bool(q_obj.code and q_obj.code.startswith("AI-VAR-")),
+                "cognitive_level": qp.get("cognitive_level", "理解"),
+                "difficulty": qp.get("difficulty", "中"),
+                "source_ref": qp.get("source_ref", "")
+            })
 
     out = {"training_id": ts.id, "status": ts.status, "mode": mode, "note": note, "questions": questions}
 
@@ -1729,6 +1857,131 @@ def submit_training(training_id: str, body: TrainingSubmitIn, db: Session = Depe
     return {"training_id": ts.id, "score": ts.score, "state": s.state}
 
 
+@router.post("/training/{training_id}/generate-ai-variant")
+def generate_ai_variant_question(training_id: str, db: Session = Depends(get_db)):
+    """大模型动态生成高仿真变式题：
+    结合人卫9e教材切片与易混药对，出题后经过独立的 Cross-Solve 交叉盲答双重校验，
+    校验通过后入库并挂载至本场训练；未通过则拒绝入库保障出题质量。
+    """
+    ts = db.get(TrainingSession, training_id) or _404()
+    
+    # 找到本场训练来源题目
+    orig_q = None
+    if ts.diagnosis_id:
+        ds = db.get(DiagnosisSession, ts.diagnosis_id)
+        if ds and ds.attempt_id:
+            att = db.get(Attempt, ds.attempt_id)
+            if att:
+                orig_q = db.get(Question, att.question_id)
+    if not orig_q:
+        first_q = db.execute(select(TrainingSessionQuestion).where(
+            TrainingSessionQuestion.training_session_id == ts.id).order_by(
+            TrainingSessionQuestion.sequence_no)).scalars().first()
+        if first_q:
+            orig_q = db.get(Question, first_q.question_id)
+    if not orig_q:
+        raise HTTPException(400, "无法定位本场训练的基准题目，无法生成变式题")
+
+    domain = db.get(DiagnosticDomain, orig_q.domain_id) if orig_q.domain_id else None
+    chapter_title = domain.name if domain else "药理学重点章节"
+    
+    # 获取本章易混淆药对
+    from .models import ConfusionPair
+    pairs = db.execute(select(ConfusionPair).where(
+        ConfusionPair.domain_id == orig_q.domain_id)).scalars().all() if orig_q.domain_id else []
+    confusion_drugs = list(dict.fromkeys([p.drug_a for p in pairs] + [p.drug_b for p in pairs]))
+
+    # 获取本题绑定的教材/解析切片
+    ev = db.execute(select(QuestionEvidence).where(
+        QuestionEvidence.question_id == orig_q.id,
+        QuestionEvidence.support_type == "解析")).scalar_one_or_none()
+    analysis = ev.content_text if ev else "考查该类药物作用受体、机制与不良反应辨析。"
+    textbook_slice = f"【教材参考点】{chapter_title}：{analysis}"
+
+    options_dict = {opt["key"]: opt["text"] for opt in (orig_q.options or [])}
+
+    # 调用 Provider
+    try:
+        from .llm.provider import ExternalApiProvider
+        provider = ExternalApiProvider()
+    except Exception:
+        from .llm.provider import MockProvider
+        provider = MockProvider()
+
+    res = provider.generate_variant_with_blind_verification(
+        stem=orig_q.stem,
+        options=options_dict,
+        answer=orig_q.answer,
+        analysis=analysis,
+        chapter_title=chapter_title,
+        textbook_slice=textbook_slice,
+        confusion_drugs=confusion_drugs
+    )
+
+    if not res.get("verified", False):
+        return {
+            "ok": False,
+            "verified": False,
+            "verification_rationale": res.get("verification_rationale", "盲答校验未通过"),
+            "fallback_note": "AI 双盲交叉验题未通过，拒绝入库，已保障出题严谨性"
+        }
+
+    # 校验通过，物化入库
+    var_code = f"AI-VAR-{uuid.uuid4().hex[:8].upper()}"
+    new_q = Question(
+        code=var_code,
+        type="single",
+        domain_id=orig_q.domain_id,
+        stem=res["stem"],
+        options=[{"key": k, "text": v} for k, v in res["options"].items()],
+        answer=res["answer"],
+        usage="training",
+        leakage_group_id=f"LG-VAR-{orig_q.id}",
+        distractor_signals={},
+        chain_levels=[],
+        condition_type="normal",
+        review_status="published"
+    )
+    db.add(new_q)
+    db.flush()
+
+    # 存证据
+    db.add(QuestionEvidence(
+        question_id=new_q.id,
+        evidence_chunk_id=res.get("source_ref") or f"REF-{chapter_title}",
+        support_type="解析",
+        content_text=res.get("analysis", "")
+    ))
+
+    # 挂接训练会话
+    max_seq = db.execute(select(func.max(TrainingSessionQuestion.sequence_no)).where(
+        TrainingSessionQuestion.training_session_id == ts.id)).scalar()
+    next_seq = (max_seq + 1) if max_seq is not None else 0
+    db.add(TrainingSessionQuestion(
+        training_session_id=ts.id,
+        question_id=new_q.id,
+        sequence_no=next_seq
+    ))
+    db.commit()
+
+    return {
+        "ok": True,
+        "verified": True,
+        "question": {
+            "id": new_q.id,
+            "stem": new_q.stem,
+            "options": new_q.options,
+            "code": new_q.code,
+            "is_ai_variant": True,
+            "cognitive_level": res.get("cognitive_level", "应用"),
+            "difficulty": res.get("difficulty", "中"),
+            "source_ref": res.get("source_ref", ""),
+            "verification_method": res.get("verification_method", "blind_cross_solve")
+        },
+        "verification_rationale": res.get("verification_rationale", "反向盲答交叉验证一致")
+    }
+
+
 @router.get("/users/{user_id}/mastery")
 def my_mastery(user_id: str, db: Session = Depends(get_db)):
     from .models import MasteryState
@@ -1736,7 +1989,9 @@ def my_mastery(user_id: str, db: Session = Depends(get_db)):
     rows = db.execute(select(MasteryState).where(MasteryState.user_id == user_id)).scalars().all()
     dmap = {d.id: d.name for d in db.execute(select(DiagnosticDomain)).scalars()}
     return [{"domain_id": r.domain_id, "domain": dmap.get(r.domain_id, r.domain_id),
-             "category": r.category, "state": r.state, "reason": r.reason} for r in rows]
+             "category": r.category, "state": r.state, "reason": r.reason,
+             "probability": float(getattr(r, "probability", None) or 0.15),
+             "attempts_count": int(getattr(r, "attempts_count", 0) or 0)} for r in rows]
 
 
 @router.get("/domains")
@@ -1834,11 +2089,13 @@ QA_REFUSE_MEDICATION = ("该吃", "剂量", "怎么吃", "能吃吗", "能不能
 
 class QAIn(BaseModel):
     question: str = Field(..., max_length=QA_QUESTION_MAXLEN)
+    context: str | None = None
+    question_id: str | None = None
 
 
 @router.post("/users/{user_id}/qa/ask")
 def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
-    """问 AI 单轮问答（P0 无历史；多轮为后续项）。"""
+    """问 AI 单轮问答（支持结合错题/诊断卡上下文追问）。"""
     user = _active_user(user_id, db)
     if not user.consented:
         raise HTTPException(403, "请先完成知情同意（含学习数据采集同意）后再使用问 AI")
@@ -1854,10 +2111,23 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
                 "citations": [], "refused": True, "refuse_reason": "medication",
                 "provider": "rule", "note": "规则前置拒绝，未调用模型。"}
 
-    # 2) 双路混合检索（教材页 + 题库解析）；无命中 → 诚实拒答
+    context_str = (body.context or "").strip()
+    if body.question_id and not context_str:
+        q_obj = db.get(Question, body.question_id)
+        if q_obj:
+            ev = db.execute(select(QuestionEvidence).where(
+                QuestionEvidence.question_id == q_obj.id,
+                QuestionEvidence.support_type == "解析")).scalar_one_or_none()
+            context_str = f"【关联原题】{q_obj.stem[:120]} (正确答案: {q_obj.answer})\n【解析要点】{ev.content_text[:120] if ev else ''}"
+
+    # 2) 双路混合检索（教材页 + 题库解析）；若带错题上下文先联合检索
     from .rag import retrieve_mixed
-    hits = retrieve_mixed(q, k=QA_TOP_K, db=db)
-    if not hits:
+    search_q = f"{q} {context_str[:60]}" if context_str else q
+    hits = retrieve_mixed(search_q, k=QA_TOP_K, db=db)
+    if not hits and context_str:
+        hits = retrieve_mixed(q, k=QA_TOP_K, db=db)
+
+    if not hits and not context_str:
         audit(db, user_id, "qa.refused_no_evidence", f"user:{user_id}", q_len=len(q))
         db.commit()
         return {"answer": "课程库里暂时没找到相关内容（教材切片与题库解析均无命中）。换个问法试试（带上药物名或章节名），也可以先去「今日待办」学对应章节再来问。",
@@ -1871,22 +2141,28 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
         f"[{i + 1}]({h.label}) {h.text[:QA_SLICE_CHARS]}"
         for i, h in enumerate(hits))
 
+    if context_str:
+        slices = f"【错题联动追问上下文】\n{context_str}\n\n【教材与题库切片】\n" + slices
+
+    full_question = f"【针对错题与诊断追问】\n{q}" if context_str else q
+
     # 3) 生成：有 key 走真模型；无 key/失败走 Mock 摘录
     try:
         from .llm.provider import ExternalApiProvider
         provider = ExternalApiProvider()
     except Exception as e:  # ProviderError（含无 key）→ 演示降级
-        cites = "、".join(dict.fromkeys(h.label for h in hits))
+        cites = "、".join(dict.fromkeys(h.label for h in hits)) if hits else "错题诊断关联考点"
         audit(db, user_id, "qa.mock_fallback", f"user:{user_id}",
               q_len=len(q), reason=str(e)[:80])
         db.commit()
-        return {"answer": f"（演示模式：真模型未接入）课程库中找到 {len(refs)} 处相关内容（{cites}）。先去对应章节学习，再带着更具体的问题来问——比如把问题细化到某个药物或某个机制环节。",
+        hint = f"（已关联你在错题/诊断卡中的追问情境：{context_str[:50]}…）\n\n" if context_str else ""
+        return {"answer": f"{hint}（演示模式：真模型未接入）课程库中找到 {len(refs)} 处相关知识依据（{cites}）。针对你的追问，请重点抓住该药所作用的受体亚型、产生的特异性效应及与其易混淆药物的核心辨析点。",
                 "citations": refs, "refused": False, "refuse_reason": None,
-                "provider": "mock", "note": "计划态：真模型（GLM）接入后此条由模型 grounded 生成。"}
+                "provider": "mock", "note": "计划态：真模型（GLM）接入后此条由模型结合错题背景 grounded 生成。"}
 
     from .llm.provider import ProviderError
     try:
-        r = provider.answer_with_refs(question=q, slices=slices, n_refs=len(refs))
+        r = provider.answer_with_refs(question=full_question, slices=slices, n_refs=len(refs))
     except ProviderError as e:
         audit(db, user_id, "qa.provider_error", f"user:{user_id}", q_len=len(q),
               reason=str(e)[:80])
@@ -1894,7 +2170,7 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
         return {"answer": "刚才模型开小差了（已自动降级）。你可以先去对应章节看看材料，稍后再问一次。",
                 "citations": refs, "refused": True, "refuse_reason": "provider_error",
                 "provider": "mock", "note": "真模型调用失败，已降级，引用为本次检索切片。"}
-    cites = [refs[i - 1] for i in r["used_refs"]]
+    cites = [refs[i - 1] for i in r["used_refs"] if 1 <= i <= len(refs)]
     audit(db, user_id, "qa.answered", f"user:{user_id}", q_len=len(q),
           answer_len=len(r["answer"]), used_refs=r["used_refs"], refused=r["refused"])
     db.commit()
@@ -1902,8 +2178,252 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
             "refused": r["refused"],
             "refuse_reason": "no_grounding" if r["refused"] else None,
             "provider": "external_api",
-            "note": "回答由课程资料切片（教材原文 + 题库题目解析）grounded 生成，仅供学习参考，不保证完全正确；不提供用药建议。"}
+            "note": "回答由课程资料切片（教材原文 + 题库题目解析）结合错题情境 grounded 生成，仅供学习参考，不保证完全正确；不提供用药建议。"}
 
 
 def _404():
     raise HTTPException(404, "资源不存在")
+
+
+# ==================== 全题库自适应出卷（多维度配比组卷） ====================
+
+class CustomQuizGenerateIn(BaseModel):
+    mode: str = "exam_sprint"  # exam_sprint | clinical_cases | weakness_focused | free_custom
+    total_count: int = 15      # 10 ~ 50
+    chapter_ids: list[str] = []
+    cognitive_levels: list[str] = []
+    difficulties: list[str] = []
+
+
+class CustomQuizSubmitIn(BaseModel):
+    quiz_id: str
+    mode: str = "exam_sprint"
+    answers: dict[str, str] = {}
+
+
+@router.get("/users/{user_id}/custom-quiz/config")
+def get_custom_quiz_config(user_id: str, db: Session = Depends(get_db)):
+    """获取自适应组卷配置元数据：全部章节题量、认知层级/难度分布、预置模式与学生当前薄弱章节。"""
+    _active_user(user_id, db)
+    domains = db.execute(select(DiagnosticDomain).order_by(DiagnosticDomain.chapter_ref)).scalars().all()
+    tq_pool = db.execute(select(TikuQuestion).where(TikuQuestion.review_status == "published")).scalars().all()
+    
+    chapter_counts = {}
+    cog_counts = {"识记": 0, "理解": 0, "应用": 0, "分析": 0}
+    diff_counts = {"易": 0, "中": 0, "难": 0}
+    for tq in tq_pool:
+        if tq.chapter_ref:
+            chapter_counts[tq.chapter_ref] = chapter_counts.get(tq.chapter_ref, 0) + 1
+        c = tq.cognitive_level or "理解"
+        d = tq.difficulty or "中"
+        cog_counts[c] = cog_counts.get(c, 0) + 1
+        diff_counts[d] = diff_counts.get(d, 0) + 1
+
+    chapters = []
+    for d in domains:
+        count = chapter_counts.get(d.chapter_ref, 0)
+        chapters.append({
+            "id": d.id,
+            "code": d.code,
+            "chapter_ref": d.chapter_ref,
+            "name": d.name,
+            "question_count": count
+        })
+
+    from .models import MasteryState
+    masteries = db.execute(select(MasteryState).where(MasteryState.user_id == user_id)).scalars().all()
+    weak_domain_ids = [m.domain_id for m in sorted(masteries, key=lambda x: float(x.probability or 0.15))[:5]]
+
+    preset_modes = [
+        {
+            "id": "exam_sprint",
+            "name": "综合全真模拟冲刺",
+            "desc": "全真卷面模拟（30 题，识记/理解/应用按考纲科学配比）",
+            "default_count": 30,
+            "icon": "📝"
+        },
+        {
+            "id": "clinical_cases",
+            "name": "临床病例 / 情境分析专项",
+            "desc": "精选 A2 病例型情境题与分析题，强化临床审题与合理用药思维（15 题）",
+            "default_count": 15,
+            "icon": "🏥"
+        },
+        {
+            "id": "weakness_focused",
+            "name": "BKT 薄弱章节精准靶向",
+            "desc": "基于认知追踪模型定位当前掌握度最低的章节，集中火力突破弱项（15 题）",
+            "default_count": 15,
+            "icon": "🎯"
+        },
+        {
+            "id": "free_custom",
+            "name": "自主多维个性化组卷",
+            "desc": "自主勾选考察章节、题量（10-50题）、认知层级与难度配比",
+            "default_count": 20,
+            "icon": "⚙️"
+        }
+    ]
+
+    return {
+        "chapters": chapters,
+        "cognitive_levels": cog_counts,
+        "difficulties": diff_counts,
+        "preset_modes": preset_modes,
+        "weak_domain_ids": weak_domain_ids,
+        "total_published_questions": len(tq_pool)
+    }
+
+
+@router.post("/users/{user_id}/custom-quiz/generate")
+def generate_custom_quiz(user_id: str, body: CustomQuizGenerateIn, db: Session = Depends(get_db)):
+    """自适应组卷算法：根据模式、认知维度、难度与 BKT 薄弱章节抽取一套试卷。"""
+    _active_user(user_id, db)
+    query = select(Question).where(Question.review_status == "published")
+    
+    if body.mode == "weakness_focused":
+        from .models import MasteryState
+        masteries = db.execute(select(MasteryState).where(MasteryState.user_id == user_id)).scalars().all()
+        sorted_m = sorted(masteries, key=lambda x: float(x.probability or 0.15))
+        weak_ids = [m.domain_id for m in sorted_m if float(m.probability or 0.15) < 0.7][:8]
+        if weak_ids:
+            query = query.where(Question.domain_id.in_(weak_ids))
+    elif body.chapter_ids:
+        query = query.where(Question.domain_id.in_(body.chapter_ids))
+
+    all_candidates = db.execute(query).scalars().all()
+    if not all_candidates:
+        all_candidates = db.execute(select(Question).where(Question.review_status == "published")).scalars().all()
+
+    filtered = []
+    for q in all_candidates:
+        if body.mode == "clinical_cases":
+            is_case = (q.condition_type != "normal") or any(k in q.stem for k in ("患者", "患儿", "入院", "处方", "女，", "男，", "女性，", "男性，", "岁"))
+            if not is_case:
+                continue
+        filtered.append(q)
+
+    if len(filtered) < max(body.total_count, 5):
+        filtered = all_candidates
+
+    selected = random.sample(filtered, min(body.total_count, len(filtered)))
+    q_list = [_q_public(db, q) for q in selected]
+    quiz_id = f"QUIZ-{uuid.uuid4().hex[:8].upper()}"
+
+    audit(db, user_id, "custom_quiz.generated", f"quiz:{quiz_id}",
+          mode=body.mode, count=len(selected))
+    db.commit()
+
+    return {
+        "quiz_id": quiz_id,
+        "mode": body.mode,
+        "total": len(selected),
+        "questions": q_list
+    }
+
+
+@router.post("/users/{user_id}/custom-quiz/submit")
+def submit_custom_quiz(user_id: str, body: CustomQuizSubmitIn, db: Session = Depends(get_db)):
+    """自定义组卷交卷评判：批量服务端判分、记录 Attempt、实时更新 BKT 掌握度并产出多维战报。"""
+    _active_user(user_id, db)
+    from .models import Attempt
+    from .mastery.engine import update_by_bkt
+    
+    results = []
+    correct_count = 0
+    total_count = len(body.answers)
+    domain_stats = {}
+    cog_stats = {"识记": {"correct": 0, "total": 0},
+                 "理解": {"correct": 0, "total": 0},
+                 "应用": {"correct": 0, "total": 0},
+                 "分析": {"correct": 0, "total": 0}}
+
+    for qid, user_ans in body.answers.items():
+        q = db.get(Question, qid)
+        if not q:
+            continue
+        is_correct = (user_ans.strip().upper() == q.answer.strip().upper())
+        if is_correct:
+            correct_count += 1
+        
+        att = Attempt(user_id=user_id, question_id=q.id,
+                      selected_option=user_ans, is_correct=is_correct,
+                      rationale=f"自适应组卷（{body.mode}）",
+                      idempotency_key=f"QUIZ-{body.quiz_id}-{q.id}")
+        db.add(att)
+
+        if q.domain_id:
+            try:
+                update_by_bkt(db, user_id=user_id, domain_id=q.domain_id,
+                              category=None, is_correct=is_correct,
+                              reason=f"自适应组卷（{body.mode}）作答")
+            except Exception:
+                pass
+
+        qp = _q_public(db, q)
+        cog = qp.get("cognitive_level") or "理解"
+        if cog in cog_stats:
+            cog_stats[cog]["total"] += 1
+            if is_correct:
+                cog_stats[cog]["correct"] += 1
+
+        d_name = qp.get("chapter_name") or "未分类"
+        if d_name not in domain_stats:
+            domain_stats[d_name] = {"correct": 0, "total": 0}
+        domain_stats[d_name]["total"] += 1
+        if is_correct:
+            domain_stats[d_name]["correct"] += 1
+
+        results.append({
+            "id": q.id,
+            "code": q.code,
+            "stem": q.stem,
+            "options": q.options,
+            "user_answer": user_ans,
+            "correct_answer": q.answer,
+            "is_correct": is_correct,
+            "chapter_name": d_name,
+            "cognitive_level": cog,
+            "difficulty": qp.get("difficulty", "中"),
+            "analysis": qp.get("analysis", ""),
+            "source_ref": qp.get("source_ref", "")
+        })
+
+    db.commit()
+    score = round(correct_count / max(total_count, 1), 3)
+    
+    audit(db, user_id, "custom_quiz.submitted", f"quiz:{body.quiz_id}",
+          score=score, correct=correct_count, total=total_count)
+    db.commit()
+
+    return {
+        "quiz_id": body.quiz_id,
+        "mode": body.mode,
+        "score": score,
+        "correct_count": correct_count,
+        "total_count": total_count,
+        "domain_breakdown": domain_stats,
+        "cognitive_breakdown": cog_stats,
+        "results": results
+    }
+
+
+# ==================== 自动化评测协议与门禁系统 ====================
+
+class EvalRunRequest(BaseModel):
+    provider: str = "mock"
+
+
+@router.post("/eval/run")
+def run_eval_benchmark(body: EvalRunRequest | None = None):
+    """触发标准保护测试集自动化评测。输出 Recall / Precision / Macro-F1 / 混淆矩阵与红线门禁。"""
+    from eval.evaluator import evaluate_benchmark
+    mode = (body.provider if body else "mock") or "mock"
+    return evaluate_benchmark(provider_mode=mode)
+
+
+@router.get("/eval/latest")
+def get_latest_eval():
+    """获取最新一次标准保护测试集评测数据与红线门禁判定结果。"""
+    from eval.evaluator import get_latest_eval_report
+    return get_latest_eval_report()

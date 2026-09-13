@@ -106,8 +106,13 @@ def test_external_api_without_key_raises(monkeypatch):
 
 
 def test_get_provider_degrades_to_mock_when_no_key(monkeypatch):
+    from app.llm import provider as prov_mod
+    prov_mod._cached_external = None
     monkeypatch.setattr(settings, "model_provider", "external_api")
+    monkeypatch.setattr(settings, "external_api_key", "")
     monkeypatch.setattr(settings, "qwen_api_key", "")
+    monkeypatch.delenv("YAOZHI_EXTERNAL_API_KEY", raising=False)
+    monkeypatch.delenv("YAOZHI_QWEN_API_KEY", raising=False)
     p = get_provider()
     # 实例化失败应降级为 Mock，而非让整个请求崩溃
     assert isinstance(p, MockProvider)

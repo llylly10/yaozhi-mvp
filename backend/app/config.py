@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # W1 开发/测试用 SQLite；部署切 PostgreSQL：postgresql+psycopg://…（模型层未用 PG 专有类型）
     database_url: str = "sqlite:///./yaozhi_w1.db"
-    model_provider: str = "mock"  # mock | external_api（OpenAI 兼容）| vllm（保留）
+    model_provider: str = "external_api"  # mock | external_api（OpenAI 兼容，默认 GLM-5.2）| vllm（保留）
     # ---- external_api（通用外部模型，OpenAI 兼容接口）----
     # 2026-09-10 起默认 GLM（智谱 BigModel）；qwen_* 为旧字段，仅作回退。
     external_api_key: str = ""  # env: YAOZHI_EXTERNAL_API_KEY（智谱 Key，与阿里云 Key 不通用）

@@ -301,6 +301,8 @@ class MasteryState(Base):
         primary_key=True, nullable=True)
     state: Mapped[str] = mapped_column(_enum(
         "mastery_state", "未评估", "薄弱", "学习中", "初步掌握", "掌握", "稳定掌握"), default="未评估")
+    probability: Mapped[float] = mapped_column(Numeric(4, 3), default=0.150)  # BKT 贝叶斯后验掌握概率 [0.0, 1.0]
+    attempts_count: Mapped[int] = mapped_column(SmallInteger, default=0)        # 该维度累计作答数
     reason: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
@@ -352,7 +354,7 @@ class RetestSchedule(Base):
 class ModelRun(Base):
     __tablename__ = "model_runs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    task_type: Mapped[str] = mapped_column(_enum("model_task", "rerank", "followup_judge", "explain", "variant_draft"))
+    task_type: Mapped[str] = mapped_column(_enum("model_task", "rerank", "followup_judge", "explain", "variant_draft", "judge_open_answer", "attribute_misconception", "qa_answer"))
     provider: Mapped[str] = mapped_column(String(32))
     model: Mapped[str] = mapped_column(String(64))
     prompt_version: Mapped[str] = mapped_column(String(32), default="v0")

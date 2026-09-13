@@ -3,10 +3,13 @@ import * as echarts from 'echarts'
 import { motion, AnimatePresence, MotionConfig, useReducedMotion, useScroll, useMotionValueEvent } from 'framer-motion'
 import {
   CheckCircle, XCircle, Warning, MagnifyingGlass, SkipForward, ArrowRight, ArrowUp, CaretDown, Pill,
-  CalendarBlank, ClockCounterClockwise, SquaresFour, Gear, BookOpenText, ChatCircle,
+  CalendarBlank, ClockCounterClockwise, SquaresFour, Gear, BookOpenText, ChatCircle, ChatCircleText,
   Lightning, Hourglass, Sparkle, ShareNetwork,
 } from '@phosphor-icons/react'
 import { api, type Diagnosis, type Question, type TikuFeedback, type RetestCapsuleData } from './api'
+import { EvalBenchmarkModal } from './EvalBenchmarkModal'
+import { CustomQuizView } from './CustomQuizView'
+import { KnowledgeDetailModal } from './KnowledgeDetailModal'
 
 /*
  * 药知 · 「现代药房 × 分子美学」
@@ -32,8 +35,8 @@ function genUUID(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-type Screen = 'register' | 'consent' | 'goal' | 'study' | 'assessment' | 'portrait' | 'list' | 'material' | 'flow' | 'profile' | 'qa'
-type View = 'todo' | 'material' | 'wrongbook' | 'profile' | 'qa'
+type Screen = 'register' | 'consent' | 'goal' | 'study' | 'assessment' | 'portrait' | 'list' | 'material' | 'flow' | 'profile' | 'qa' | 'custom_quiz'
+type View = 'todo' | 'material' | 'wrongbook' | 'profile' | 'qa' | 'custom_quiz'
 
 const STEPS = ['注册', '同意', '目标', '地图', '摸底', '画像', '路径', '学习', '练习', '诊断', '追问', '训练', '复测', '档案'] as const
 
@@ -45,7 +48,7 @@ function stepIndex(screen: Screen, diagnosis: Diagnosis | null): number {
   const map: Record<Screen, number> = {
     register: 0, consent: 1, goal: 2, study: 3, assessment: 4, portrait: 5,
     list: 6, flow: 8, profile: 13,
-    material: 7, qa: 6,
+    material: 7, qa: 6, custom_quiz: 6,
   }
   if (screen !== 'flow') return map[screen]
   if (!diagnosis) return 8
@@ -66,14 +69,25 @@ export default function App() {
   const [goal, setGoal] = useState<string>('期末冲绩')
   const [portrait, setPortrait] = useState<PortraitResult | null>(null)
   const [materialDomain, setMaterialDomain] = useState<string | null>(null)
+  const [showEvalModal, setShowEvalModal] = useState(false)
+  const [qaPrefill, setQaPrefill] = useState<{ context?: string; question?: string } | null>(null)
 
-  // 主壳（可切换视图的页面：今日待办/错题本/问AI/档案），全屏子流程(材料/练习/onboarding)不显示底部导航
-  const isShell = screen === 'list' || screen === 'profile' || screen === 'qa'
+  // 主壳（可切换视图的页面：今日待办/错题本/问AI/档案/自适应组卷），全屏子流程(材料/练习/onboarding)不显示底部导航
+  const isShell = screen === 'list' || screen === 'profile' || screen === 'qa' || screen === 'custom_quiz'
   function goNav(v: View) {
     setError(null); setView(v)
-    setScreen(v === 'todo' ? 'list' : v === 'qa' ? 'qa' : 'profile')
+    setScreen(v === 'todo' ? 'list' : v === 'qa' ? 'qa' : v === 'custom_quiz' ? 'custom_quiz' : 'profile')
     setActiveQuestion(null)
   }
+
+  function handleAskAi(context: string, defaultQ?: string) {
+    setQaPrefill({ context, question: defaultQ || '' })
+    setView('qa')
+    setScreen('qa')
+    setActiveQuestion(null)
+    window.scrollTo(0, 0)
+  }
+
   // 屏幕/视图切换时清掉上一页残留报错，避免错误条跨页误显示
   const prevNavKey = useRef('')
   useEffect(() => {
@@ -81,9 +95,16 @@ export default function App() {
     if (prevNavKey.current !== k) { prevNavKey.current = k; setError(null) }
   }, [screen, view])
 
-  function onRegistered(id: string) {
+  function onRegistered(id: string, consented?: boolean) {
     localStorage.setItem(USER_KEY, id)
-    setUserId(id); setScreen('consent')
+    setUserId(id)
+    if (consented) {
+      // 老用户重新登录：跳过知情同意，直接回到系统待办列表与学情全景
+      setScreen('list')
+      setView('todo')
+    } else {
+      setScreen('consent')
+    }
   }
   function onConsented() {
     setScreen('goal')
@@ -172,7 +193,17 @@ export default function App() {
                 <span className="font-serif text-[15px] font-bold">药知</span>
                 <span className="rounded-full border border-gold/40 bg-gold-soft px-2 py-0.5 text-[10.5px] font-semibold text-gold">演示原型 · MVP</span>
               </div>
-              <button onClick={logout} className="btn rounded-full px-3 py-1 text-xs text-ink-3 hover:bg-paper-2 hover:text-ink">退出账号</button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowEvalModal(true)}
+                  className="btn flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary-soft/70 px-3 py-1 text-xs font-semibold text-primary shadow-xs transition hover:bg-primary-soft hover:shadow-sm"
+                  title="查看错因诊断保护测试集三级红线门禁与混淆矩阵"
+                >
+                  <Sparkle size={13} weight="fill" />
+                  算法评测与门禁
+                </button>
+                <button onClick={logout} className="btn rounded-full px-3 py-1 text-xs text-ink-3 hover:bg-paper-2 hover:text-ink">退出账号</button>
+              </div>
             </div>
             <div className="mx-auto flex w-full max-w-[1140px] flex-nowrap items-center gap-0.5 overflow-x-auto py-1.5
               [mask-image:linear-gradient(90deg,transparent,#000_28px,#000_calc(100%-28px),transparent)]">
@@ -215,7 +246,7 @@ export default function App() {
           {error && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
           <AnimatePresence mode="wait">
-            {screen === 'register' && <Welcome key="register" onRegistered={onRegistered} onError={setError} />}
+            {screen === 'register' && <Welcome key="register" onRegistered={onRegistered} onError={setError} onOpenEval={() => setShowEvalModal(true)} />}
             {screen === 'consent' && userId && <Consent key="consent" userId={userId} onConsented={onConsented} onBack={() => setScreen('register')} onError={setError} />}
             {screen === 'goal' && (
               <GoalPicker key="goal" goal={goal}
@@ -226,7 +257,8 @@ export default function App() {
               <StudyMapOnboard key="study" userId={userId} goal={goal} onError={setError}
                 onProceed={() => setScreen('assessment')}
                 onSkip={() => setScreen('assessment')}
-                onBack={() => setScreen('goal')} />
+                onBack={() => setScreen('goal')}
+                onAskAi={handleAskAi} />
             )}
             {screen === 'assessment' && userId && (
               <Assessment key="assess" userId={userId}
@@ -246,22 +278,27 @@ export default function App() {
             {screen === 'material' && materialDomain && userId && (
               <MaterialRoute key={materialDomain} userId={userId} domainId={materialDomain} goal={goal} onError={setError}
                 onPractice={(q) => { setActiveQuestion(q); setScreen('flow'); setDiagnosis(null) }}
-                onBack={() => { setScreen('list'); setView('todo') }} />
+                onBack={() => { setScreen('list'); setView('todo') }}
+                onAskAi={handleAskAi} />
             )}
             {screen === 'flow' && userId && activeQuestion && (
               <PracticeFlow key={activeQuestion.id} userId={userId} question={activeQuestion}
                 onDiagnosis={setDiagnosis} onError={setError}
                 onStep={() => {}}
+                onAskAi={handleAskAi}
                 onExit={() => { setScreen('list'); setActiveQuestion(null); setDiagnosis(null); setView('todo') }} />
             )}
             {screen === 'profile' && userId && view === 'profile' && (
               <Profile key="profile" userId={userId} onGoTodo={() => goNav('todo')} />
             )}
             {screen === 'profile' && userId && view === 'wrongbook' && (
-              <WrongBook key="wrongbook" userId={userId} onGoTodo={() => goNav('todo')} />
+              <WrongBook key="wrongbook" userId={userId} onGoTodo={() => goNav('todo')} onAskAi={handleAskAi} />
+            )}
+            {screen === 'custom_quiz' && userId && (
+              <CustomQuizView key="custom_quiz" userId={userId} onExit={() => goNav('todo')} onAskAi={handleAskAi} />
             )}
             {screen === 'qa' && userId && view === 'qa' && (
-              <QAView key="qa" userId={userId} onError={setError} />
+              <QAView key="qa" userId={userId} onError={setError} prefill={qaPrefill} onClearPrefill={() => setQaPrefill(null)} />
             )}
 
           </AnimatePresence>
@@ -276,6 +313,7 @@ export default function App() {
         </>
       )}
       <BackToTop />
+      {showEvalModal && <EvalBenchmarkModal onClose={() => setShowEvalModal(false)} />}
     </div>
     </MotionConfig>
   )
@@ -354,6 +392,7 @@ function Sidebar({ view, currentScreen, onNav, onGoMap }: {
             </button>
           )}
           {item('todo', '今日待办', <CalendarBlank size={15} />)}
+          {item('custom_quiz', '自适应组卷', <BookOpenText size={15} />)}
           {item('wrongbook', '错题本', <ClockCounterClockwise size={15} />)}
           {item('qa', '问AI', <ChatCircle size={15} />)}
         </div>
@@ -423,7 +462,11 @@ function BackToTop() {
 
 /* ---------- 第 1 步 · 注册（英雄区 + 演示账号登录） ---------- */
 
-function Welcome({ onRegistered, onError }: { onRegistered: (id: string) => void; onError: (m: string) => void }) {
+function Welcome({ onRegistered, onError, onOpenEval }: {
+  onRegistered: (id: string, consented?: boolean) => void
+  onError: (m: string) => void
+  onOpenEval?: () => void
+}) {
   const [account, setAccount] = useState('yaozhi_student01')
   const [invite, setInvite] = useState('')
   const [busy, setBusy] = useState(false)
@@ -431,7 +474,7 @@ function Welcome({ onRegistered, onError }: { onRegistered: (id: string) => void
   function enter() {
     setBusy(true)
     api.demoSession(account, invite)
-      .then((r) => onRegistered(r.user_id))
+      .then((r) => onRegistered(r.user_id, r.consented))
       .catch((e) => onError(String(e).replace('API 403: ', '邀请码不正确 — ')))
       .finally(() => setBusy(false))
   }
@@ -492,6 +535,19 @@ function Welcome({ onRegistered, onError }: { onRegistered: (id: string) => void
         <p className="mt-4 text-center text-xs text-ink-3">
           进入后将要求逐份确认<span className="font-semibold text-ink-2">《用户协议》《隐私政策》《学习数据采集知情同意书》</span>
         </p>
+        {onOpenEval && (
+          <div className="mt-5 pt-4 border-t border-line/60 flex items-center justify-between">
+            <span className="text-xs text-ink-3">评委/专家快速核验：</span>
+            <button
+              onClick={onOpenEval}
+              type="button"
+              className="btn flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary-soft/60 px-3 py-1 text-xs font-semibold text-primary transition hover:bg-primary-soft"
+            >
+              <Sparkle size={13} weight="fill" />
+              查看算法评测门禁报告
+            </button>
+          </div>
+        )}
       </motion.div>
       </div>
     </div>
@@ -855,15 +911,17 @@ function CourseGraph({ data, goal, onOpen, onSkip, onProceed }: {
 }
 
 /* 单章学习内容 + 随堂摸底：真实呈现该章「知识点图谱」，不伪造未整理内容 */
-function ChapterStudy({ userId, node, goal, onError, onDone }: {
+function ChapterStudy({ userId, node, goal, onError, onDone, onAskAi }: {
   userId: string; node: StudyNode; goal: string; onError: (m: string) => void
   onDone: (passed: boolean, score: number, total: number) => void
+  onAskAi?: (ctx: string, defaultQ?: string) => void
 }) {
   type Detail =
     | { source: 'seed'; graph: { chain: { level: number; title: string; summary: string }[]; relations: { source: { type: string; name: string }; edge: string; target: { type: string; name: string }; note?: string; evidence?: KgEvidence; review_status?: string }[]; confusion: { drug_a: string; drug_b: string; distinction: string; evidence?: KgEvidence }[] } }
     | { source: 'syllabus'; chapter: { no: number; title: string; objectives: Record<string, string[]> | Record<string, string>; key_points: string[]; difficulties: string[]; sections: { title: string; points: string[] }[] }; relations?: KgEdgeT[]; confusion?: { drug_a: string; drug_b: string; distinction: string; evidence?: KgEvidence }[] }
     | { source: 'none'; chapter: null }
   const [detail, setDetail] = useState<Detail | null>(null)
+  const [selectedPoint, setSelectedPoint] = useState<string | null>(null)
   const [quiz, setQuiz] = useState<{ id: string; code: string; stem: string; options: { key: string; text: string }[] }[] | null>(null)
   const [picks, setPicks] = useState<Record<string, string>>({})
   const [res, setRes] = useState<{ passed: boolean; correct: number; total: number } | null>(null)
@@ -973,11 +1031,17 @@ function ChapterStudy({ userId, node, goal, onError, onDone }: {
 
             {/* 知识点树：章节 → 节 → 知识点 */}
             <div className="spot-card p-6">
-              <p className="mb-4 flex items-center gap-2 text-sm font-semibold"><span className="capsule" />知识点图谱 · {detail.chapter.title}</p>
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-line-2 pb-3">
+                <p className="flex items-center gap-2 text-sm font-semibold"><span className="capsule" />知识点精讲图谱 · {detail.chapter.title}</p>
+                <span className="flex items-center gap-1 rounded-full bg-primary-soft px-2.5 py-0.5 text-[11px] font-medium text-primary">
+                  <Sparkle size={12} weight="fill" />
+                  点击任意标签展开人卫 9 版教材精讲与机制卡片
+                </span>
+              </div>
               {detail.chapter.sections.length === 0 ? (
                 <p className="text-[13px] text-ink-3">本章大纲暂未录入分节知识点（待内容化）。可先用下方题库随堂摸底，检验掌握度。</p>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-4">
                   {detail.chapter.sections.map((s, si) => (
                     <div key={si} className="flex gap-3">
                       <div className="flex flex-col items-center">
@@ -985,11 +1049,23 @@ function ChapterStudy({ userId, node, goal, onError, onDone }: {
                         {si < detail.chapter.sections.length - 1 && <span className="w-px flex-1 bg-line" />}
                       </div>
                       <div className="flex-1">
-                        <p className="text-[13.5px] font-semibold">{s.title}</p>
+                        <p className="text-[13.5px] font-semibold text-ink">{s.title}</p>
                         {(s.points ?? []).length > 0 && (
-                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          <div className="mt-2 flex flex-wrap gap-2">
                             {(s.points ?? []).map((p, pi) => (
-                              <span key={pi} className="rounded-lg border border-line-2 bg-white px-2 py-0.5 text-[11px] text-ink-2">{p}</span>
+                              <button
+                                key={pi}
+                                type="button"
+                                onClick={() => setSelectedPoint(p)}
+                                className="group inline-flex items-center gap-1.5 rounded-xl border border-line-2 bg-white px-3 py-1.5 text-xs font-medium text-ink transition-all hover:border-primary/60 hover:bg-primary-soft/40 hover:text-primary active:scale-[0.98] shadow-2xs"
+                                title="点击查看该知识点的核心机制、代表药、临床用途与人卫9版教材原文"
+                              >
+                                <BookOpenText size={13} className="text-primary/70 group-hover:text-primary" />
+                                <span>{p}</span>
+                                <span className="rounded bg-paper-2 px-1 text-[10px] text-ink-3 group-hover:bg-primary-soft group-hover:text-primary">
+                                  精讲 ↗
+                                </span>
+                              </button>
                             ))}
                           </div>
                         )}
@@ -1000,8 +1076,28 @@ function ChapterStudy({ userId, node, goal, onError, onDone }: {
               )}
               {(detail.chapter.key_points.length > 0 || detail.chapter.difficulties.length > 0) && (
                 <div className="mt-5 flex flex-wrap gap-2 border-t border-dashed border-line pt-4">
-                  {detail.chapter.key_points.map((k, i) => <span key={i} className="rounded-full bg-gold-soft px-2.5 py-1 text-[11px] text-gold">重点 · {k}</span>)}
-                  {detail.chapter.difficulties.map((d2, i) => <span key={i} className="rounded-full bg-cat-red-soft px-2.5 py-1 text-[11px] text-cat-red">难点 · {d2}</span>)}
+                  {detail.chapter.key_points.map((k, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setSelectedPoint(k)}
+                      className="rounded-full bg-gold-soft px-3 py-1 text-[11px] font-semibold text-gold transition hover:opacity-80 active:scale-[0.98]"
+                      title="点击查看重点精讲"
+                    >
+                      重点 · {k} ↗
+                    </button>
+                  ))}
+                  {detail.chapter.difficulties.map((d2, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setSelectedPoint(d2)}
+                      className="rounded-full bg-cat-red-soft px-3 py-1 text-[11px] font-semibold text-cat-red transition hover:opacity-80 active:scale-[0.98]"
+                      title="点击查看难点精讲"
+                    >
+                      难点 · {d2} ↗
+                    </button>
+                  ))}
                 </div>
               )}
               {(detail.relations ?? []).length > 0 && (
@@ -1074,14 +1170,26 @@ function ChapterStudy({ userId, node, goal, onError, onDone }: {
           <p className="text-sm text-ink-2">本章暂无自测题，可直接进入正式摸底。</p>
         )}
       </div>
+
+      {selectedPoint && (
+        <KnowledgeDetailModal
+          userId={userId}
+          chapterNo={node.book_chapter_no || (detail && 'chapter' in detail && detail.chapter ? detail.chapter.no : 1) || 1}
+          pointName={selectedPoint}
+          domainId={node.domain_id}
+          onClose={() => setSelectedPoint(null)}
+          onAskAi={onAskAi}
+        />
+      )}
     </motion.div>
   )
 }
 
 /* 学习地图编排：目标后进入；默认停在总览，点章节进学习，学完回总览再决定进摸底 */
-function StudyMapOnboard({ userId, goal, onError, onBack, onProceed, onSkip }: {
+function StudyMapOnboard({ userId, goal, onError, onBack, onProceed, onSkip, onAskAi }: {
   userId: string; goal: string; onError: (m: string) => void
   onBack: () => void; onProceed: () => void; onSkip: () => void
+  onAskAi?: (ctx: string, defaultQ?: string) => void
 }) {
   const [map, setMap] = useState<StudyMapData | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
@@ -1116,7 +1224,7 @@ function StudyMapOnboard({ userId, goal, onError, onBack, onProceed, onSkip }: {
           </button>
         </div>
         <ChapterStudy userId={userId} node={open} goal={goal} onError={onError}
-          onDone={() => load()} />
+          onDone={() => load()} onAskAi={onAskAi} />
         <div className="mt-6 flex flex-wrap items-center gap-3">
           <button onClick={onProceed} className="btn btn-primary">学得差不多，进入正式摸底<ArrowRight size={15} weight="bold" /></button>
           <button onClick={() => { setStudy('list'); setOpenId(null) }} className="btn rounded-full border border-line bg-white px-5 py-3 text-sm font-medium text-ink-2 hover:border-primary hover:text-primary">继续学习下一节</button>
@@ -1660,13 +1768,34 @@ function RetestCapsuleCard({ userId, onDone }: { userId: string; onDone: () => v
 
 /* ---------- 学习路径（今日待办） ---------- */
 
-type PlanTask = { type: 'material' | 'practice'; domain_id: string; domain: string; category: string | null; state: string; title: string; guide?: string; goal?: string }
+type PlanTask = {
+  type: 'material' | 'practice'
+  domain_id: string
+  domain: string
+  category: string | null
+  state: string
+  title: string
+  guide?: string
+  goal?: string
+  bkt_probability?: number
+  urgency_score?: number
+}
 type DoneTask = { domain_id: string; domain: string; category: string | null; state: string; title: string }
+type DailyRec = {
+  domain_id: string
+  domain_name: string
+  category: string | null
+  bkt_probability: number
+  urgency_score: number
+  urgency_level: string
+  suggested_action: string
+  reason: string
+}
 
 function LearningPathHome({ userId, onPick, onMaterial }: {
   userId: string; onPick: (q: Question) => void; onMaterial: (domainId: string) => void
 }) {
-  const [plan, setPlan] = useState<{ tasks: PlanTask[]; done_tasks?: DoneTask[]; note: string } | null>(null)
+  const [plan, setPlan] = useState<{ tasks: PlanTask[]; done_tasks?: DoneTask[]; daily_recommendation?: DailyRec[]; note: string } | null>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -1705,6 +1834,51 @@ function LearningPathHome({ userId, onPick, onMaterial }: {
       <div className="mt-4">
         <RetestCapsuleCard userId={userId} onDone={() => load()} />
       </div>
+
+      {/* BKT 认知追踪驱动的今日自适应推荐 */}
+      {plan.daily_recommendation && plan.daily_recommendation.length > 0 && (
+        <div className="card relative overflow-hidden mt-5 mb-5 border-2 border-primary/20 bg-gradient-to-br from-primary-soft/40 via-white to-gold-soft/30 p-5 !rounded-[22px] shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <span className="grid size-7 place-items-center rounded-lg bg-primary text-white text-xs font-bold font-mono">BKT</span>
+              <div>
+                <h4 className="text-sm font-bold text-ink flex items-center gap-1.5">
+                  今日自适应突破推荐 · 贝叶斯认知模型推断
+                </h4>
+                <p className="text-xs text-ink-3">动态追踪掌握概率 P(L)，优先攻克失误概率最高的脆弱考点</p>
+              </div>
+            </div>
+            <span className="badge-capsule gold">
+              <span className="capsule gold" />
+              认知推断
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {plan.daily_recommendation.map((rec) => (
+              <div key={rec.domain_id} className="rounded-xl border border-line bg-white/95 p-3.5 flex flex-col justify-between hover:border-primary transition shadow-2xs">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${rec.urgency_level === '高危薄弱' ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                      {rec.urgency_level}
+                    </span>
+                    <span className="text-[11px] font-semibold text-primary font-mono">
+                      掌握度 {Math.round(rec.bkt_probability * 100)}%
+                    </span>
+                  </div>
+                  <p className="text-sm font-bold text-ink truncate">{rec.domain_name}</p>
+                  {rec.category && <p className="text-xs text-ink-3 mt-0.5">{rec.category}</p>}
+                  <p className="text-[11px] text-ink-3 mt-1.5 line-clamp-2 leading-relaxed">{rec.reason}</p>
+                </div>
+                <button
+                  onClick={() => onMaterial(rec.domain_id)}
+                  className="mt-3 w-full btn btn-primary !py-1.5 !text-xs flex items-center justify-center gap-1">
+                  <Sparkle size={12} weight="fill" /> {rec.suggested_action}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <p className="text-sm leading-relaxed text-ink-2">{plan.note}</p>
         {hasTasks && (
@@ -1853,20 +2027,38 @@ const QA_EXAMPLES = [
   '为什么闭角型青光眼禁用阿托品？',
 ]
 
-function QAView({ userId, onError }: { userId: string; onError: (m: string) => void }) {
+const QA_SMART_SUGGESTIONS = [
+  '🔍 为什么该药物选项在此情境下是错误的或禁忌的？',
+  '⚖️ 简要辨析我选的干扰药物与正确答案的机制靶点差异',
+  '⚠️ 该考点涉及的代表药物有哪些核心不良反应与风险？',
+  '💡 请结合人卫第9版教材，总结本题考查的核心受体通路与助记口诀',
+]
+
+function QAView({
+  userId,
+  onError,
+  prefill,
+  onClearPrefill
+}: {
+  userId: string
+  onError: (m: string) => void
+  prefill?: { context?: string; question?: string } | null
+  onClearPrefill?: () => void
+}) {
   const [msgs, setMsgs] = useState<QAMsg[]>([])
-  const [input, setInput] = useState('')
+  const [input, setInput] = useState(prefill?.question || '')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => { window.scrollTo(0, 0) }, [])
 
-  async function ask(text: string) {
+  async function ask(text: string, contextOverride?: string) {
     const question = text.trim().slice(0, 500)
     if (!question || busy) return
     setBusy(true)
     setInput('')
+    const ctx = contextOverride !== undefined ? contextOverride : prefill?.context
     try {
-      const r = await api.qa(userId, question)
+      const r = await api.qa(userId, question, ctx)
       setMsgs((m) => [...m, {
         q: question, a: r.answer, citations: r.citations ?? [],
         refused: !!r.refused, provider: r.provider ?? '', note: r.note,
@@ -1883,7 +2075,40 @@ function QAView({ userId, onError }: { userId: string; onError: (m: string) => v
         检索不到会直说不知道；用药决策类问题会拒绝（本系统不提供用药建议）。
       </p>
 
-      {msgs.length === 0 && (
+      {/* 错题 / 诊断卡一键联动上下文与智能追问建议 */}
+      {prefill?.context && (
+        <div className="card mt-5 p-5 border-2 border-amber-500/30 bg-amber-50/50 rounded-2xl">
+          <div className="flex items-center justify-between mb-2">
+            <span className="flex items-center gap-1.5 text-xs font-bold text-amber-800">
+              <ChatCircle size={14} weight="fill" />已深度联动当前错题 / 诊断卡上下文
+            </span>
+            {onClearPrefill && (
+              <button onClick={onClearPrefill} className="text-[11px] text-ink-3 hover:text-ink">
+                ✕ 清除关联
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-ink-2 whitespace-pre-line leading-relaxed bg-white/80 p-3 rounded-xl border border-amber-200/60 font-mono">
+            {prefill.context}
+          </p>
+          <div className="mt-3">
+            <p className="text-xs font-semibold text-ink-2 mb-2">一键追问推荐：</p>
+            <div className="flex flex-wrap gap-1.5">
+              {QA_SMART_SUGGESTIONS.map((sug) => (
+                <button
+                  key={sug}
+                  onClick={() => ask(sug)}
+                  disabled={busy}
+                  className="rounded-full border border-amber-500/40 bg-white px-3 py-1.5 text-xs text-amber-900 hover:bg-amber-100/80 transition text-left">
+                  {sug}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {msgs.length === 0 && !prefill?.context && (
         <div className="card mt-6 p-6">
           <p className="mb-3 text-sm font-semibold">试试这样问</p>
           <div className="flex flex-wrap gap-2">
@@ -2064,9 +2289,10 @@ function ChapterWarmupCard({ userId, domainId }: { userId: string; domainId: str
  * 先查 study-map 明细判来源 —— 种子域（顾问深图谱）渲染 MaterialView；
  * 章节渲染 ChapterStudy（大纲知识点树 + 随堂自测 + 去本章练习），保证每个薄弱项
  * 都有对等的「学」内容可点，不再出现只有练、没有学的分组。 */
-function MaterialRoute({ userId, domainId, goal, onPractice, onBack, onError }: {
+function MaterialRoute({ userId, domainId, goal, onPractice, onBack, onError, onAskAi }: {
   userId: string; domainId: string; goal: string
   onPractice: (q: Question) => void; onBack: () => void; onError: (m: string) => void
+  onAskAi?: (ctx: string, defaultQ?: string) => void
 }) {
   type RouteDetail = {
     source: 'seed' | 'syllabus' | 'none'; is_seed: boolean
@@ -2126,7 +2352,7 @@ function MaterialRoute({ userId, domainId, goal, onPractice, onBack, onError }: 
         </button>
       </div>
       <ChapterWarmupCard userId={userId} domainId={domainId} />
-      <ChapterStudy userId={userId} node={node} goal={goal} onError={onError} onDone={() => {}} />
+      <ChapterStudy userId={userId} node={node} goal={goal} onError={onError} onDone={() => {}} onAskAi={onAskAi} />
       <div className="mt-6 flex flex-wrap items-center gap-3">
         <button onClick={goPractice} disabled={qBusy} className="btn btn-primary">
           {qBusy ? '进入中…' : '学完了，去本章练习'}<ArrowRight size={15} weight="bold" />
@@ -2352,7 +2578,7 @@ type Analysis = {
 }
 
 type WrongRow = {
-  attempt_id: string; question_code: string; stem: string
+  attempt_id: string; question_id?: string; question_code: string; stem: string
   selected: string; answer: string
   misconception: { name: string; category: string } | null
   case_evidence?: { scenario: string; lesson: string; source: string } | null
@@ -2370,6 +2596,7 @@ type RecallData = {
   misconception: { code: string; name: string; category: string } | null
   case_evidence: { scenario: string; lesson: string; source: string } | null
   evidence_level: string | null
+  ai_rationale?: string | null
   relations: { source: { type: string; name: string }; edge: string; target: { type: string; name: string }; note?: string; evidence?: KgEvidence; review_status?: string }[]
   confusion_pairs: { drug_a: string; drug_b: string; distinction: string; evidence?: KgEvidence; relevant?: boolean }[]
   textbook_anchors: { chapter: string; page: number; book_page: number; score: number; text: string; source_ref: string }[]
@@ -2387,7 +2614,7 @@ type ArchiveData = {
   domain_stats: { domain_id: string; domain: string; chapter_ref: string; attempts: number; correct: number; rate: number }[]
   heatmap: { domains: string[]; categories: string[]; values: number[][] }
   category_dist: Record<string, number>
-  mastery: { domain_id: string; domain: string; category: string | null; state: string; reason: string }[]
+  mastery: { domain_id: string; domain: string; category: string | null; state: string; reason: string; probability?: number; attempts_count?: number }[]
 }
 
 function Profile({ userId, onGoTodo }: { userId: string; onGoTodo: () => void }) {
@@ -2687,13 +2914,40 @@ function Profile({ userId, onGoTodo }: { userId: string; onGoTodo: () => void })
                   <span className="text-xs text-ink-3">{g.items.length} 项</span>
                 </div>
                 <div className="space-y-1.5">
-                  {g.items.map((m, i) => (
-                    <div key={i} className="rounded-lg border border-line px-3 py-2 text-[12px]">
-                      <span className="font-medium">{m.domain}</span>
-                      {m.category && <span className="ml-2 text-ink-3">{m.category}</span>}
-                      {m.reason && <span className="block text-[11px] text-ink-3">{m.reason}</span>}
-                    </div>
-                  ))}
+                  {g.items.map((m, i) => {
+                    const probPct = m.probability != null ? Math.round(m.probability * 100) : null
+                    return (
+                      <div key={i} className="rounded-xl border border-line bg-paper/60 px-3.5 py-2.5 text-[12px] transition hover:border-primary/40">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <span className="font-semibold text-ink">{m.domain}</span>
+                            {m.category && <span className="ml-2 text-ink-3">· {m.category}</span>}
+                          </div>
+                          {probPct != null && (
+                            <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold text-primary" style={{ background: 'var(--color-primary-soft)' }}>
+                              BKT掌握率 {probPct}%
+                            </span>
+                          )}
+                        </div>
+                        {probPct != null && (
+                          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-line-2">
+                            <div className="h-full rounded-full transition-all duration-500"
+                              style={{
+                                width: `${Math.min(100, Math.max(6, probPct))}%`,
+                                background: probPct >= 80 ? 'var(--color-ok)' : probPct >= 60 ? 'var(--color-primary)' : probPct >= 35 ? 'var(--color-gold)' : 'var(--color-cat-red)'
+                              }}
+                            />
+                          </div>
+                        )}
+                        <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-3">
+                          <span className="truncate">{m.reason || 'BKT贝叶斯追踪计算'}</span>
+                          {m.attempts_count != null && m.attempts_count > 0 && (
+                            <span className="flex-none ml-2">已作答 {m.attempts_count} 次</span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             ))}
@@ -2905,7 +3159,7 @@ function WrongAwakenModal({
   )
 }
 
-function WrongBook({ userId, onGoTodo }: { userId: string; onGoTodo: () => void }) {
+function WrongBook({ userId, onGoTodo, onAskAi }: { userId: string; onGoTodo: () => void; onAskAi?: (ctx: string, defaultQ?: string, qid?: string) => void }) {
   const [wrong, setWrong] = useState<WrongRow[] | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
   const [awakenAttemptId, setAwakenAttemptId] = useState<string | null>(null)
@@ -2991,7 +3245,7 @@ function WrongBook({ userId, onGoTodo }: { userId: string; onGoTodo: () => void 
           {wrong && wrong.length > 0 && (
             <WrongGroups wrong={wrong} openId={openId}
               loadingRecall={loadingRecall} recallMap={recallMap} onToggle={toggleRecall}
-              onAwaken={(aid) => setAwakenAttemptId(aid)} />
+              onAwaken={(aid) => setAwakenAttemptId(aid)} onAskAi={onAskAi} />
           )}
         </section>
       </div>
@@ -3011,10 +3265,11 @@ function WrongBook({ userId, onGoTodo }: { userId: string; onGoTodo: () => void 
 }
 
 /* 错题分组（按错因归档：同类错因归一组，可折叠；待归因沉底） */
-function WrongGroups({ wrong, openId, loadingRecall, recallMap, onToggle, onAwaken }: {
+function WrongGroups({ wrong, openId, loadingRecall, recallMap, onToggle, onAwaken, onAskAi }: {
   wrong: WrongRow[]; openId: string | null; loadingRecall: string | null
   recallMap: Record<string, RecallData | null>; onToggle: (id: string) => void
   onAwaken: (attemptId: string) => void
+  onAskAi?: (ctx: string, defaultQ?: string, qid?: string) => void
 }) {
   const groups: { key: string; label: string | null; items: WrongRow[] }[] = []
   for (const w of wrong) {
@@ -3096,6 +3351,23 @@ function WrongGroups({ wrong, openId, loadingRecall, recallMap, onToggle, onAwak
                             <Lightning size={13} weight="fill" className="text-amber-500" />
                             ⚡ 一键抗遗忘唤醒
                           </button>
+                          {onAskAi && (
+                            <button
+                              onClick={() => {
+                                const ctx = `错题编码：${w.question_code}
+题干：${w.stem}
+学生选项：${w.selected}
+正确答案：${w.answer}
+${w.misconception ? `归因错因：${w.misconception.name} (${w.misconception.category || ''})` : ''}
+${w.case_evidence ? `关联临床案例：${w.case_evidence.scenario} (要点：${w.case_evidence.lesson})` : ''}`
+                                onAskAi(ctx, `请帮我深入剖析这道错题：我选了 ${w.selected}，正确答案是 ${w.answer}。请结合药理机制与临床考点分析我混淆了什么？`, w.question_id)
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/30 bg-sky-500/10 px-3.5 py-1.5 text-xs font-semibold text-sky-700 transition hover:bg-sky-500/20 dark:text-sky-300"
+                            >
+                              <ChatCircleText size={13} weight="bold" className="text-sky-500" />
+                              💬 针对此题向 AI 追问
+                            </button>
+                          )}
                         </div>
                         {openId === w.attempt_id && (
                           <div className="mt-3 rounded-xl border border-primary/20 bg-primary-soft/40 px-4 py-4">
@@ -3578,6 +3850,15 @@ function RecallCardView({ data }: { data: RecallData }) {
           : <span className="text-xs text-ink-3">尚未归因到四类错因（可回到作答流程完成诊断细化）</span>}
       </div>
 
+      {data.ai_rationale && (
+        <div className="rounded-xl border border-primary/25 bg-primary-soft/60 px-4 py-3">
+          <p className="flex items-center gap-1.5 text-[11.5px] font-semibold text-primary">
+            <Sparkle size={13} weight="fill" />AI 导师临床归因剖析 · 大模型智能推理
+          </p>
+          <p className="mt-1.5 text-[13px] font-medium leading-relaxed text-ink">{data.ai_rationale}</p>
+        </div>
+      )}
+
       {/* 知识关系图谱 */}
       <div>
         <p className="flex items-center gap-1.5 text-[11px] font-semibold text-primary">
@@ -3657,10 +3938,11 @@ function RecallCardView({ data }: { data: RecallData }) {
   )
 }
 
-function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }: {
+function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep, onAskAi }: {
   userId: string; question: Question
   onDiagnosis: (d: Diagnosis | null) => void; onError: (m: string) => void; onExit: () => void
   onStep: (n: number) => void
+  onAskAi?: (ctx: string, defaultQ?: string, qid?: string) => void
 }) {
   const [selected, setSelected] = useState<string | null>(null)
   const [retest, setRetest] = useState<{ training_id: string; questions: { id: string; stem: string; options: { key: string; text: string }[] }[] } | null>(null)
@@ -3674,10 +3956,11 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
   const [tikuFeedback, setTikuFeedback] = useState<{ feedback: TikuFeedback; is_correct: boolean } | null>(null)
   const [training, setTraining] = useState<{
     training_id: string; mode: string; note: string
-    questions: { id: string; stem: string; options: { key: string; text: string }[] }[]
+    questions: { id: string; stem: string; options: { key: string; text: string }[]; is_ai_variant?: boolean }[]
     cards?: { front: string; back: string }[]
     reteach?: { level: number; title: string; summary: string } | null
   } | null>(null)
+  const [generatingVariant, setGeneratingVariant] = useState(false)
   const [flipped, setFlipped] = useState<Record<number, boolean>>({})
   const [trainingPicks, setTrainingPicks] = useState<Record<string, string>>({})
   const [trainingResult, setTrainingResult] = useState<{ score: number } | null>(null)
@@ -3706,6 +3989,27 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
   }
 
   async function refresh(id: string) { pushDiagnosis(await api.diagnosis(id)) }
+
+  async function handleGenerateAiVariant() {
+    if (!training) return
+    setGeneratingVariant(true)
+    try {
+      const res = await api.generateAiVariant(training.training_id)
+      if (res && res.variant) {
+        setTraining((prev) => {
+          if (!prev) return prev
+          return {
+            ...prev,
+            questions: [...prev.questions, res.variant]
+          }
+        })
+      }
+    } catch (e) {
+      setError('生成变式题失败：' + String(e))
+    } finally {
+      setGeneratingVariant(false)
+    }
+  }
 
   // 键盘答题：选项键直选 + 回车提交；输入框聚焦 / 已出结论时不劫持
   const submitRef = useRef(submit)
@@ -3813,7 +4117,7 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
         {diagnosis && (
           <DiagnosisPanel key={diagnosis.session_id}
             diagnosis={diagnosis} questionId={question.id} onRefresh={refresh}
-            onStartTraining={startTraining} onExit={onExit} onError={setError} />
+            onStartTraining={startTraining} onExit={onExit} onError={setError} onAskAi={onAskAi} />
         )}
       </AnimatePresence>
 
@@ -3864,8 +4168,17 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
               </div>
             ) : (
               training.questions.map((q, i) => (
-                <div key={q.id} className="rounded-2xl border border-line-2 p-6">
-                  <p className="mb-3.5 text-sm font-medium leading-relaxed">{i + 1}. {q.stem}</p>
+                <div key={q.id} className={`rounded-2xl border p-6 ${q.is_ai_variant ? 'border-primary/40 bg-primary-soft/20' : 'border-line-2'}`}>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs text-ink-3">第 {i + 1} 题</span>
+                    {q.is_ai_variant && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-primary-soft px-2.5 py-0.5 text-[11px] font-semibold text-primary">
+                        <Sparkle size={12} weight="fill" />
+                        ⚡ AI 高仿真变式 · 盲答双审通过
+                      </span>
+                    )}
+                  </div>
+                  <p className="mb-3.5 text-sm font-medium leading-relaxed">{q.stem}</p>
                   <div className="space-y-2.5">
                     {q.options.map((o) => (
                       <motion.button key={o.key} whileTap={{ scale: 0.99 }}
@@ -3885,6 +4198,17 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep }
                 </div>
               ))
             )}
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={handleGenerateAiVariant}
+                disabled={generatingVariant}
+                className="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-white px-4 py-2 text-xs font-semibold text-primary shadow-xs transition hover:bg-primary-soft disabled:opacity-50"
+              >
+                <Sparkle size={13} weight="fill" />
+                {generatingVariant ? 'AI 正在根据本题考点生成高仿真变式并进行反向交叉盲审…' : '⚡ 现场生成一道 AI 变式题（双盲交叉审校）'}
+              </button>
+            </div>
           </div>
           )}
           {training.mode !== '记忆卡' && (
@@ -4049,9 +4373,10 @@ function TikuFeedbackCard({ feedback, isCorrect, onExit }: {
   )
 }
 
-function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onExit, onError }: {
+function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onExit, onError, onAskAi }: {
   diagnosis: Diagnosis; questionId: string; onRefresh: (id: string) => void
   onStartTraining: () => void; onExit: () => void; onError: (m: string) => void
+  onAskAi?: (ctx: string, defaultQ?: string, qid?: string) => void
 }) {
   const [answering, setAnswering] = useState(false)
   const [showEvidence, setShowEvidence] = useState(false)
@@ -4283,6 +4608,21 @@ function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onE
               <p className="text-[15.5px] font-medium">{diagnosis.card.misconception.name}</p>
             </div>
 
+            {diagnosis.card.ai_rationale && (
+              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={spring}
+                className="mt-4 rounded-2xl border border-primary/30 bg-primary-soft/70 px-5 py-4 shadow-sm">
+                <p className="flex items-center gap-1.5 text-[11.5px] font-bold tracking-wide text-primary">
+                  <Sparkle size={14} weight="fill" />AI 导师临床归因剖析 · 大模型智能推理
+                </p>
+                <p className="mt-2 text-sm font-medium leading-relaxed text-ink">
+                  {diagnosis.card.ai_rationale}
+                </p>
+                <p className="mt-2 text-[11px] text-ink-3">
+                  由 GLM-5.2 基于题干考点、选项药理机制与作答思维链深度比对生成
+                </p>
+              </motion.div>
+            )}
+
             {diagnosis.card.case_evidence && (
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={spring}
                 className="mt-4 rounded-2xl border-2 border-gold/25 bg-gold-soft/40 px-5 py-4">
@@ -4355,6 +4695,25 @@ function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onE
                 <button onClick={onStartTraining} className="btn btn-primary">
                   按此诊断开具靶向训练<ArrowRight size={15} weight="bold" />
                 </button>
+                {onAskAi && diagnosis.card && (
+                  <button
+                    onClick={() => {
+                      const card = diagnosis.card
+                      if (!card) return
+                      const ctx = `错因诊断卡：
+类别：${card.misconception.category}
+错因：${card.misconception.name}
+证据等级：${card.evidence_level}
+${card.ai_rationale ? `AI 归因剖析：${card.ai_rationale}` : ''}
+${card.case_evidence ? `临床案例：${card.case_evidence.scenario} (要点：${card.case_evidence.lesson})` : ''}`
+                      onAskAi(ctx, `我想进一步了解「${card.misconception.name}」相关的药理机制与典型考题辨析，请结合临床案例为我深度拆解。`, questionId)
+                    }}
+                    className="btn rounded-full border border-sky-500/40 bg-sky-500/10 px-4 py-3 text-sm font-semibold text-sky-700 transition hover:bg-sky-500/20 dark:text-sky-300"
+                  >
+                    <ChatCircleText size={16} weight="bold" className="text-sky-500" />
+                    💬 针对此错因向 AI 追问
+                  </button>
+                )}
                 <button onClick={onExit} className="btn rounded-full border border-line bg-white px-5 py-3 text-sm text-ink-2 transition hover:border-primary hover:text-primary">
                   稍后训练，返回待办
                 </button>

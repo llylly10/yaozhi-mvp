@@ -66,6 +66,8 @@ BATCH_FILES = [
     ("CH42", "P4d-CH42解析批注稿-20260903.json"),
     # P4e 批：CH3 单章剩余 3 题（钙拮抗药，章映射偏差已标注待裁决）
     ("CH3", "P4e-CH3钙拮抗药3题解析批注稿-20260903.json"),
+    # P5 批：63 道并列题权威仲裁解析批注稿（2026-09-12，全库 786 题 100% 收官）
+    ("*", "P5-并列题63题解析批注稿-20260912.json"),
 ]
 
 COG_ANALYSIS_WORDS = re.compile(r"机制|为什么|药理基础|理由是|原因是")
@@ -129,16 +131,27 @@ def _import_batch(db, chapter_ref: str, json_path: Path) -> int:
         if key == "meta":
             continue
         paper_no, qid = key.split("-", 1)
-        q = (db.query(TikuQuestion)
-             .filter(TikuQuestion.paper_no == paper_no,
-                     TikuQuestion.qid == int(qid),
-                     TikuQuestion.chapter_ref == chapter_ref).first())
+        query = db.query(TikuQuestion).filter(
+            TikuQuestion.paper_no == paper_no,
+            TikuQuestion.qid == int(qid)
+        )
+        if chapter_ref and chapter_ref != "*":
+            query = query.filter(TikuQuestion.chapter_ref == chapter_ref)
+        q = query.first()
         if not q:
             print(f"  ⚠ 未找到 {chapter_ref}-{key}，跳过")
             continue
-        # 兼容两种批注稿写法：{"key": {"analysis": "..."}} 与 {"key": "解析文本"}
+        # 兼容两种批注稿写法：{"key": {"analysis": "...", ...}} 与 {"key": "解析文本"}
         if isinstance(item, dict):
             analysis = (item.get("analysis") or "").strip()
+            if item.get("cognitive_level"):
+                q.cognitive_level = item["cognitive_level"]
+            if item.get("difficulty"):
+                q.difficulty = item["difficulty"]
+            if item.get("source_ref"):
+                q.source_ref = item["source_ref"]
+            if item.get("chapter_ref") and q.chapter_ref != item["chapter_ref"]:
+                q.chapter_ref = item["chapter_ref"]
         elif isinstance(item, str):
             analysis = item.strip()
         else:

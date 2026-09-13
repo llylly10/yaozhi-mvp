@@ -21,9 +21,10 @@ settings.database_url = "sqlite:///./test_recall.db"
 settings.seed_on_startup = True
 
 from app.main import app  # noqa: E402
-from app.db import Base, SessionLocal, engine  # noqa: E402
+from app.db import Base, SessionLocal, engine, migrate  # noqa: E402
 
 Base.metadata.create_all(engine)
+migrate()
 from seed.seed import seed  # noqa: E402
 
 _s = SessionLocal()

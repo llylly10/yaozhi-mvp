@@ -144,6 +144,11 @@ def start_session_tiku(db: Session, attempt: Attempt) -> DiagnosisSession | None
         content=f"学生选择 {attempt.selected_option}，正确答案为 {question.answer}"
                 f"（通用四分类归因：{chosen.category}，证据等级{evidence_level}"
                 f"{rationale_note}，可追问细化）"))
+    if rationale:
+        db.add(DiagnosisEvidence(
+            session_id=session.id, evidence_type="作答理由",
+            source_ref="model:glm-5.2",
+            content=rationale))
     # W3 RAG：题库题答错时按题干检索教材切片，补充"知识库切片"证据（讲解更贴近教材）
     for etype, ref, content in _rag_evidence(question, attempt):
         db.add(DiagnosisEvidence(session_id=session.id, evidence_type=etype, source_ref=ref, content=content))

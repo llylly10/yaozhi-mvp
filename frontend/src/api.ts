@@ -12,6 +12,70 @@ async function handle(res: Response) {
   return res.json()
 }
 
+function transformBackendEvalReport(data: any): EvalReportData {
+  if (!data) return {} as EvalReportData
+  const cats: string[] = data.categories || Object.keys(data.category_stats || {})
+  const matrix: number[][] = Array.isArray(data.confusion_matrix?.matrix)
+    ? data.confusion_matrix.matrix
+    : cats.map((row) => cats.map((col) => data.confusion_matrix?.[row]?.[col] ?? data.confusion_matrix?.raw?.[row]?.[col] ?? 0))
+
+  const zeroCats = Object.entries(data.category_stats || {})
+    .filter(([_, s]: [string, any]) => s.recall === 0)
+    .map(([c]) => c)
+
+  return {
+    run_id: data.run_id || `RUN-${(data.run_at || '').replace(/[- :]/g, '').slice(0, 14)}`,
+    dataset_version: data.dataset_version || 'v1.0 (80题黄金保护测试集)',
+    timestamp: data.timestamp || data.run_at || new Date().toLocaleString(),
+    provider: data.provider || (data.provider_mode === 'mock' ? '规则基线引擎 (Mock)' : '智谱 GLM-4-Flash'),
+    case_count: data.case_count ?? data.total_cases ?? 80,
+    overall: {
+      accuracy: data.overall?.accuracy ?? data.accuracy ?? 0,
+      macro_recall: data.overall?.macro_recall ?? data.macro_recall ?? 0,
+      macro_precision: data.overall?.macro_precision ?? data.macro_precision ?? 0,
+      macro_f1: data.overall?.macro_f1 ?? data.macro_f1 ?? 0,
+    },
+    category_metrics: Array.isArray(data.category_metrics)
+      ? data.category_metrics
+      : cats.map((c) => ({
+          category: c,
+          support: data.category_stats?.[c]?.expected_count ?? 20,
+          recall: data.category_stats?.[c]?.recall ?? 0,
+          precision: data.category_stats?.[c]?.precision ?? 0,
+          f1: data.category_stats?.[c]?.f1 ?? 0,
+          passed_redline: (data.category_stats?.[c]?.recall ?? 0) > 0,
+        })),
+    confusion_matrix: {
+      labels: data.confusion_matrix?.labels || cats,
+      matrix,
+    },
+    gates: {
+      gate1_no_zero_recall: {
+        name: data.gates?.gate1_no_zero_recall?.name || data.gates?.gate_no_zero_recall?.name || '单类零召回死刑门禁',
+        passed: data.gates?.gate1_no_zero_recall?.passed ?? data.gates?.gate_no_zero_recall?.passed ?? true,
+        message: data.gates?.gate1_no_zero_recall?.message || data.gates?.gate_no_zero_recall?.detail || '全部类别召回率 > 0',
+        zero_recall_categories: data.gates?.gate1_no_zero_recall?.zero_recall_categories || zeroCats,
+      },
+      gate2_macro_recall: {
+        name: data.gates?.gate2_macro_recall?.name || data.gates?.gate_recall_threshold?.name || '宏平均召回率门禁 (>= 0.60)',
+        passed: data.gates?.gate2_macro_recall?.passed ?? data.gates?.gate_recall_threshold?.passed ?? true,
+        current: data.gates?.gate2_macro_recall?.current ?? data.gates?.gate_recall_threshold?.current ?? data.macro_recall ?? 0,
+        threshold: data.gates?.gate2_macro_recall?.threshold ?? data.gates?.gate_recall_threshold?.threshold ?? 0.60,
+        message: '宏召回率达成',
+      },
+      gate3_macro_f1: {
+        name: data.gates?.gate3_macro_f1?.name || data.gates?.gate_f1_threshold?.name || '宏平均 Macro-F1 门禁 (>= 0.65)',
+        passed: data.gates?.gate3_macro_f1?.passed ?? data.gates?.gate_f1_threshold?.passed ?? true,
+        current: data.gates?.gate3_macro_f1?.current ?? data.gates?.gate_f1_threshold?.current ?? data.macro_f1 ?? 0,
+        threshold: data.gates?.gate3_macro_f1?.threshold ?? data.gates?.gate_f1_threshold?.threshold ?? 0.65,
+        message: '宏 F1 达成',
+      },
+      all_passed: data.gates?.all_passed ?? data.overall_passed ?? (data.status_label === 'PASSED'),
+      status_label: data.gates?.status_label || data.status_label || 'PASSED',
+    },
+  }
+}
+
 export const api = {
   // 探活：localStorage 里的 userId 在服务器可能已被重置/撤回，无效返回 false（不抛通用 404 文案）
   userExists: async (userId: string) => {
@@ -19,7 +83,7 @@ export const api = {
     return res.ok
   },
 
-  demoSession: (account: string, inviteCode: string) =>
+  demoSession: (account: string, inviteCode: string): Promise<{ user_id: string; display_name: string; consented: boolean }> =>
     fetch('/api/sessions/demo', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ account, invite_code: inviteCode }) }).then(handle),
 
   consent: (userId: string, docs: { user_agreement: boolean; privacy_policy: boolean; data_collection: boolean }) =>
@@ -47,8 +111,41 @@ export const api = {
 
   learningPlan: (userId: string) => fetch(`/api/users/${userId}/learning-plan`).then(handle),
 
-  qa: (userId: string, question: string) =>
-    fetch(`/api/users/${userId}/qa/ask`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ question }) }).then(handle),
+  qa: (userId: string, question: string, context?: string, questionId?: string) =>
+    fetch(`/api/users/${userId}/qa/ask`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ question, context, question_id: questionId }),
+    }).then(handle),
+
+  customQuizConfig: (userId: string) =>
+    fetch(`/api/users/${userId}/custom-quiz/config`).then(handle),
+
+  generateCustomQuiz: (
+    userId: string,
+    body: {
+      mode?: string
+      total_count?: number
+      chapter_ids?: string[]
+      cognitive_levels?: string[]
+      difficulties?: string[]
+    }
+  ) =>
+    fetch(`/api/users/${userId}/custom-quiz/generate`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify(body),
+    }).then(handle),
+
+  submitCustomQuiz: (
+    userId: string,
+    body: { quiz_id: string; mode: string; answers: Record<string, string> }
+  ) =>
+    fetch(`/api/users/${userId}/custom-quiz/submit`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify(body),
+    }).then(handle),
 
   questionAnalysis: (questionId: string) => fetch(`/api/questions/${questionId}/analysis`).then(handle),
 
@@ -58,6 +155,12 @@ export const api = {
 
   studyDetail: (userId: string, domainId: string) =>
     fetch(`/api/users/${userId}/study-map/${domainId}`).then(handle),
+
+  knowledgeDetail: (userId: string, chapterNo: number, pointName: string, domainId?: string): Promise<KnowledgePointDetail> =>
+    fetch(`/api/users/${userId}/study/knowledge-detail?chapter_no=${chapterNo}&point_name=${encodeURIComponent(pointName)}${domainId ? `&domain_id=${domainId}` : ''}`).then(handle),
+
+  getEvalLatest: () => fetch('/api/eval/latest').then(handle).then(transformBackendEvalReport),
+  runEval: (provider = 'mock') => fetch('/api/eval/run', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ provider }) }).then(handle).then(transformBackendEvalReport),
 
   studyQuiz: (userId: string, domainId: string) =>
     fetch(`/api/users/${userId}/study-map/${domainId}/quiz`).then(handle),
@@ -96,6 +199,9 @@ export const api = {
 
   training: (sessionId: string) => fetch(`/api/training/${sessionId}`).then(handle),
 
+  generateAiVariant: (trainingId: string) =>
+    fetch(`/api/training/${trainingId}/generate-ai-variant`, { method: 'POST' }).then(handle),
+
   submitTraining: (trainingId: string, answers: Record<string, string>) =>
     fetch(`/api/training/${trainingId}/submit`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answers }) }).then(handle),
 
@@ -126,6 +232,7 @@ export type Diagnosis = {
     misconception: { code: string; name: string; category: string }
     evidence_level: string
     case_evidence?: { scenario: string; lesson: string; source: string } | null
+    ai_rationale?: string | null
     evidences: { type: string; source: string; content: string }[]
     alternatives?: { code: string; name: string; primary: boolean }[]
     can_refine?: boolean
@@ -180,4 +287,55 @@ export type WrongBookItem = {
   stage?: number
   schedule_id?: string | null
 }
+
+export interface EvalCategoryMetric {
+  category: string
+  support: number
+  recall: number
+  precision: number
+  f1: number
+  passed_redline: boolean
+}
+
+export interface EvalReportData {
+  run_id: string
+  dataset_version: string
+  timestamp: string
+  provider: string
+  case_count: number
+  overall: {
+    accuracy: number
+    macro_recall: number
+    macro_precision: number
+    macro_f1: number
+  }
+  category_metrics: EvalCategoryMetric[]
+  confusion_matrix: {
+    labels: string[]
+    matrix: number[][]
+  }
+  gates: {
+    gate1_no_zero_recall: { name: string; passed: boolean; message: string; zero_recall_categories: string[] }
+    gate2_macro_recall: { name: string; passed: boolean; current: number; threshold: number; message: string }
+    gate3_macro_f1: { name: string; passed: boolean; current: number; threshold: number; message: string }
+    all_passed: boolean
+    status_label: 'PASSED' | 'REJECTED'
+  }
+}
+
+export type KnowledgePointDetail = {
+  point_name: string
+  clean_name: string
+  chapter_no: number
+  chapter_title: string
+  representative_drugs: string[]
+  core_mechanism: string
+  clinical_applications: string[]
+  cautions_and_adverse: string
+  mnemonic: string
+  textbook_anchors: { book_page: number; chapter: string; source: string; text: string }[]
+  related_confusions: { drug_a: string; drug_b: string; distinction: string }[]
+  key_takeaways: string[]
+}
+
 

@@ -413,6 +413,11 @@ def _restore_course_assets(db):
         n_a = apply_a_fixes(db)
         if n_a:
             print(f"[seed] A类修正恢复: {n_a} 题映射强制回写（人工判定优先级>词表）")
+        # 并列题人工仲裁 63 题不随 reset-demo 丢失：将并列映射裁定为主章
+        from seed.apply_tie_arbitration import apply_tie_fixes
+        n_tie = apply_tie_fixes(db)
+        if n_tie:
+            print(f"[seed] 并列题仲裁恢复: {n_tie} 题并列映射裁定为主章")
         db.commit()
         # 内容化成果（解析/认知层级/难度/来源）不随 reset-demo 丢失：重放批注稿。
         # 注：先 commit 章节映射，再跑 contentize（批注稿按 chapter_ref 定位）。
@@ -438,6 +443,11 @@ def _restore_course_assets(db):
         g = apply_chapter_graphs(db)
         if g["relations"] or g["pairs"]:
             print(f"[seed] 章节图谱恢复: 新增边 {g['relations']}，混淆候选 {g['pairs']}")
+        # 34 章深度混淆对精细化（人卫第9版临床鉴别知识库）：权威机制辨析与教材出处
+        from seed.seed_chapter_confusion_distinctions import apply_refined_confusion_pairs
+        r_cp = apply_refined_confusion_pairs(db)
+        if r_cp["updated"] or r_cp["created"]:
+            print(f"[seed] 34章混淆对精细化恢复: 更新 {r_cp['updated']} 对，补全 {r_cp['created']} 对，清理脏数据 {r_cp['deleted_bad']}")
     except Exception as e:  # noqa: BLE001
         # 醒目提示：异常会导致补章(4章)与内容化(published)静默缺失，reset-demo
         # 接口仍返回 ok，演示方不易察觉。打印类型便于定位（如枚举非法值拦截）。

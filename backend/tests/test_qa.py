@@ -110,12 +110,15 @@ def test_external_provider_defaults_glm(monkeypatch):
     from app.llm import provider as pv
     monkeypatch.setattr(cfg, "external_api_key", "")
     monkeypatch.setattr(cfg, "qwen_api_key", "")
+    monkeypatch.delenv("YAOZHI_EXTERNAL_API_KEY", raising=False)
+    monkeypatch.delenv("YAOZHI_QWEN_API_KEY", raising=False)
     try:
         pv.ExternalApiProvider()
         raise AssertionError("无 key 应抛 ProviderError")
     except Exception as e:
         assert "YAOZHI_EXTERNAL_API_KEY" in str(e)
     monkeypatch.setattr(cfg, "external_api_key", "test-key")
+    monkeypatch.setattr(cfg, "external_base_url", "https://open.bigmodel.cn/api/paas/v4/")
     p = pv.ExternalApiProvider()
     assert p.model == "glm-5.2", p.model
     assert p._base_url == "https://open.bigmodel.cn/api/paas/v4/", p._base_url
@@ -124,12 +127,20 @@ def test_external_provider_defaults_glm(monkeypatch):
     monkeypatch.setattr(cfg, "external_model", "")
     monkeypatch.setattr(cfg, "external_base_url", "")
     monkeypatch.setattr(cfg, "qwen_api_key", "qwen-key")
+    monkeypatch.setattr(cfg, "qwen_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     p2 = pv.ExternalApiProvider()
     assert p2._api_key == "qwen-key" and p2.model == "qwen-plus"
 
 
 def test_qa_mock_fallback_with_citations(monkeypatch):
     """无 key 环境 → Mock 摘录降级，引用与检索切片一一对应（含双源字段）。"""
+    from app.config import settings as cfg
+    from app.llm import provider as pv
+    monkeypatch.setattr(cfg, "external_api_key", "")
+    monkeypatch.setattr(cfg, "qwen_api_key", "")
+    monkeypatch.delenv("YAOZHI_EXTERNAL_API_KEY", raising=False)
+    monkeypatch.delenv("YAOZHI_QWEN_API_KEY", raising=False)
+    pv._cached_external = None
     _rebuild()
     uid = _new_user("qa_mock")
     _consent(uid)

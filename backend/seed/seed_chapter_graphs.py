@@ -167,12 +167,12 @@ PHRASE_JUNK = (
     "降低", "升高", "加大", "使用", "兴奋", "促进", "抑制", "阻断", "激动",
     "拮抗", "对抗", "合用", "联合", "单用", "停用", "服用", "口服", "静脉",
     "滴注", "注射", "肌注", "静注", "静滴", "外用", "吸入", "含服", "滴眼",
-    "细菌", "二氢", "难逆性", "易逆性", "可逆性",
+    "细菌", "二氢", "难逆性", "易逆性", "可逆性", "阻止", "阻碍",
 )
 # 前导杂字：短语剥离后仍残留的单字，从左逐字剥离
-LEAD_JUNK = set("者禁慎用过不敏宜忌停对於于需须应可治疗作用的与及或等小大剂量服注选药合单每初维持负荷静滴注肌眼吸入舌下含服缓控释片胶囊注射液滴丸气雾颗粒散冲服汤煎膏丹协同拮抗增强减弱延长缩短取消阻断激动抑制脉射将使加降给")
+LEAD_JUNK = set("者禁慎用过不敏宜忌停对於于需须应可治疗作用的与及或等小大剂量服注选药合单每初维持负荷静滴注肌眼吸入舌下含服缓控释片胶囊注射液滴丸气雾颗粒散冲服汤煎膏丹协同拮抗增强减弱延长缩短取消阻断激动抑制脉射将使加降给止")
 # 命中整体非法（含这些则整条丢弃，如药效描述/检验值）
-BAD_HIT_RE = re.compile(r"[0-9A-Za-z/%]|作用|机制|表现|亲和|活性|效能|强度|受体|通道|缺乏|水肿|头痛|头晕|恶心|呕吐|腹泻|皮疹|休克|阻滞|传导|心律|心肌|血压|心率|血糖|综合征|反应|现象|试验|检查|诊断|首选|不宜|禁用|慎用|除外|错误|正确|疾病|休克|菌痢|伤寒|溃疡|哮喘|心衰")
+BAD_HIT_RE = re.compile(r"[0-9A-Za-z/%]|作用|机制|表现|亲和|活性|效能|强度|受体|通道|缺乏|水肿|头痛|头晕|恶心|呕吐|腹泻|皮疹|休克|阻滞|传导|心律|心肌|血压|心率|血糖|综合征|反应|现象|试验|检查|诊断|首选|不宜|禁用|慎用|除外|错误|正确|疾病|休克|菌痢|伤寒|溃疡|哮喘|心衰|合成|还原|转移|多聚|异构")
 
 
 def _clean_hit(raw: str) -> str | None:
@@ -373,18 +373,39 @@ def apply_chapter_graphs(db) -> dict:
                 if (a, b) in have_pairs:
                     continue
                 refs = ch_pair_refs[ch][(a, b)]
+                from seed.seed_chapter_confusion_distinctions import lookup_curated_pair
+                cur = lookup_curated_pair(dom.code, a, b)
+                if cur:
+                    d_text = cur["distinction"]
+                    ev_info = cur["evidence"]
+                    v_temp = "正向"
+                else:
+                    d_text = f"{a}与{b}在 {c} 道同章题目的选项中共现，易混淆，辨析待药理顾问撰写（题号 {', '.join(refs[:5])}）。"
+                    ev_info = {"source": "题库共现", "chapter": ch_title, "refs": refs[:5], "count": c, "text": f"同题选项共现 {c} 次：{', '.join(refs[:5])}", "verified": "题库选项原文共现计数"}
+                    v_temp = "正向"
                 db.add(ConfusionPair(
                     domain_id=dom.id, drug_a=a, drug_b=b,
-                    distinction_text=f"{a}与{b}在 {c} 道同章题目的选项中共现，"
-                                    f"易混淆，辨析待药理顾问撰写（题号 {', '.join(refs[:5])}）。",
-                    variant_template="正向",
-                    evidence={"source": "题库共现", "chapter": ch_title,
-                              "refs": refs[:5], "count": c,
-                              "text": f"同题选项共现 {c} 次：{', '.join(refs[:5])}",
-                              "verified": "题库选项原文共现计数"}))
+                    distinction_text=d_text,
+                    variant_template=v_temp,
+                    evidence=ev_info))
                 have_pairs.add((a, b))
                 n_pair += 1
                 made += 1
+
+            # 若本章无候选，注入精细化知识库对应章节经典对
+            if made == 0:
+                from seed.seed_chapter_confusion_distinctions import get_all_curated_pairs
+                for cp_data in get_all_curated_pairs().get(dom.code, []):
+                    db.add(ConfusionPair(
+                        domain_id=dom.id,
+                        drug_a=cp_data["drug_a"],
+                        drug_b=cp_data["drug_b"],
+                        distinction_text=cp_data["distinction"],
+                        variant_template="正向",
+                        evidence=cp_data["evidence"],
+                    ))
+                    n_pair += 1
+                    made += 1
 
     if n_rel or n_pair:
         audit(db, "seed", "chapter_graphs.seeded", "DOM-CH*",

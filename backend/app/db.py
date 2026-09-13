@@ -58,6 +58,14 @@ def migrate():
     if "case_evidence" not in existing_m:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE misconceptions ADD COLUMN case_evidence TEXT"))
+    # mastery_states BKT 掌握概率与作答计数列
+    existing_ms = {c["name"] for c in inspect(engine).get_columns("mastery_states")}
+    if "probability" not in existing_ms:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE mastery_states ADD COLUMN probability NUMERIC(4, 3) DEFAULT 0.15"))
+    if "attempts_count" not in existing_ms:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE mastery_states ADD COLUMN attempts_count SMALLINT DEFAULT 0"))
     # 图谱证据锚点列（2026-09-11，旧库补列）：知识关系边 + 混淆对辨析的教材出处
     for tbl in ("knowledge_relations", "confusion_pairs"):
         try:

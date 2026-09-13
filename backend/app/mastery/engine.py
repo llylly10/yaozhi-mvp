@@ -1,45 +1,73 @@
-"""掌握度规则状态机（ADR-05，v1.1 §5.5）：纯函数转移，非法转移抛异常。
+"""掌握度贝叶斯知识追踪与状态机双轨引擎（ADR-05，v1.1 §5.5升级版）。
 
-章级行（category=None）落库注意：MasteryState 复合主键含 category 列，
-SQLAlchemy ORM 不支持对 NULL 主键列行生成 UPDATE（flush 抛
-FlushError: Can't update ... using NULL for primary key value）。
-因此凡需改写已有 NULL-category 行，一律经 _apply() 走原生 UPDATE + expire，
-绕过 ORM flush（2026-09-03 章级练习闭环补口时实测暴露）。
+将 Corbett & Anderson 贝叶斯知识追踪（BKT）连续后验概率推断与业务状态机融合：
+1. 概率层：MasteryState.probability 持续追踪知识点后验掌握概率 P(L)；
+2. 状态层：维护离散业务状态（未评估/薄弱/学习中/初步掌握/掌握/稳定掌握），兼容既有契约；
+3. 统计层：记录 attempts_count 累计做题样本数；
+4. 章级行（category=None）仍走原生 UPDATE + expire，绕过 ORM NULL 主键约束。
 """
 from sqlalchemy import update
 
 from ..models import VALID_MASTERY_TRANSITIONS, MasteryState, audit
+from .bkt import BKTOnlineTracker, BKTParameters, DEFAULT_BKT_PARAMS
 
 
 class IllegalTransition(Exception):
     pass
 
 
-def _apply(db, st: MasteryState, state: str, reason: str) -> None:
-    """落库状态变更：pending 新行直接赋值（flush 时一次 INSERT 带最终值）；
-    persistent 且 category=NULL 的行走原生 UPDATE（ORM 对 NULL 主键 UPDATE 会炸）。
-    已在目标状态的幂等判断由调用方提前完成，本函数不重复。"""
+def _apply(db, st: MasteryState, state: str, reason: str,
+           probability: float | None = None, attempts_inc: int = 0) -> None:
+    """落库状态与 BKT 概率变更：
+    - pending 新行直接赋值（flush 时一次 INSERT 带最终值）；
+    - persistent 且 category=NULL 的行走原生 UPDATE（ORM 对 NULL 主键 UPDATE 会报错）；
+    - probability 为 None 时按 state 给默认先验打底。
+    """
+    prob = probability if probability is not None else BKTOnlineTracker.state_to_default_probability(state)
+    attempts = int(getattr(st, "attempts_count", 0) or 0) + attempts_inc
+
     if st.category is None and st not in db.new:
         db.execute(
             update(MasteryState)
             .where(MasteryState.user_id == st.user_id,
                    MasteryState.domain_id == st.domain_id,
                    MasteryState.category.is_(None))
-            .values(state=state, reason=reason))
+            .values(state=state, reason=reason, probability=prob, attempts_count=attempts))
         db.expire(st)  # 行已被原生 UPDATE 改写，让 ORM 对象在下一次 flush 时重载
     else:
         st.state, st.reason = state, reason
+        st.probability = prob
+        st.attempts_count = attempts
 
 
-def transition(db, user_id: str, domain_id: str, category: str | None, event: str) -> MasteryState:
-    """event: misdiagnosed(摸底/诊断失败) | diagnosed | training_passed | training_failed |
-    retest_passed | retest_failed | delayed_passed | forgot |
-    practice_passed/practice_failed（章级练习，题库物化题专用推进）|
-    material_passed（种子域学习材料随堂自测通过，薄弱→学习中，2026-09-08）"""
+def update_by_bkt(db, user_id: str, domain_id: str, category: str | None,
+                  is_correct: bool, reason: str = "") -> MasteryState:
+    """纯 BKT 驱动的增量更新：每次作答后直接根据贝叶斯后验计算新掌握度概率并平滑映射业务状态。"""
     st = db.get(MasteryState, (user_id, domain_id, category))
     if st is None:
         st = MasteryState(user_id=user_id, domain_id=domain_id, category=category, state="未评估")
         db.add(st)
+
+    curr_p = float(getattr(st, "probability", None) or BKTOnlineTracker.state_to_default_probability(st.state))
+    next_p = BKTOnlineTracker.update_posterior(curr_p, is_correct)
+    next_state = BKTOnlineTracker.probability_to_state(next_p, st.state)
+
+    act_reason = reason or (f"BKT实时推断：答{'对' if is_correct else '错'}，后验掌握概率 {next_p * 100:.1f}%")
+    _apply(db, st, next_state, act_reason, probability=next_p, attempts_inc=1)
+    db.commit()
+    audit(db, "system", "mastery.bkt_update", f"{user_id}/{domain_id}",
+          to=next_state, prob=next_p, is_correct=is_correct)
+    return st
+
+
+def transition(db, user_id: str, domain_id: str, category: str | None, event: str) -> MasteryState:
+    """业务事件驱动的状态机迁移（向后兼容原有全部事件），内部自动结合 BKT 更新连续概率。"""
+    st = db.get(MasteryState, (user_id, domain_id, category))
+    if st is None:
+        st = MasteryState(user_id=user_id, domain_id=domain_id, category=category, state="未评估")
+        db.add(st)
+
+    curr_p = float(getattr(st, "probability", None) or BKTOnlineTracker.state_to_default_probability(st.state))
 
     REASONS = {
         "misdiagnosed": "摸底/诊断发现薄弱项",
@@ -66,58 +94,86 @@ def transition(db, user_id: str, domain_id: str, category: str | None, event: st
         "delayed_passed": ("掌握", "稳定掌握"),
         "forgot": ("掌握", "薄弱"),
     }
+
     if event == "training_started":
         if st.state in ("学习中", "初步掌握", "掌握", "稳定掌握"):
-            return st  # 幂等：重复开始训练不报错
+            return st
         if st.state not in ("薄弱", "未评估"):
             raise IllegalTransition(f"{st.state} -training_started-> ?")
-        _apply(db, st, "学习中", REASONS[event])
+        _apply(db, st, "学习中", REASONS[event], probability=max(curr_p, 0.42))
         db.commit()
         audit(db, "system", "mastery.transition", f"{user_id}/{domain_id}", to=st.state, event=event)
         return st
 
     if event == "material_passed":
-        # 种子域学习材料随堂自测通过：薄弱→学习中（表示已完成该薄弱错因的主动学习、
-        # 可进入练习/训练推进）。学习中以上不因学习再推进（需训练/复测事件到掌握）。
         if st.state in ("学习中", "初步掌握", "掌握", "稳定掌握"):
             return st
         if st.state not in ("薄弱", "未评估"):
             raise IllegalTransition(f"{st.state} -material_passed-> ?")
-        _apply(db, st, "学习中", REASONS[event])
+        _apply(db, st, "学习中", REASONS[event], probability=0.48)
         db.commit()
         audit(db, "system", "mastery.transition", f"{user_id}/{domain_id}", to=st.state, event=event)
         return st
 
     if event == "practice_passed":
-        # 章级练习（题库物化题无错因标注 → 无训练/复测资产）的唯一推进事件：
-        # 薄弱→学习中（首答对）→初步掌握（再答对）；未评估（未摸底直接练对）→学习中；
-        # 已初步掌握以上不因练习再推进（掌握需复测/延迟复测事件）。2026-09-03 闭环补口。
+        # 答对：使用 BKT 计算下一后验概率
+        p_next = BKTOnlineTracker.update_posterior(curr_p, is_correct=True)
         if st.state in ("初步掌握", "掌握", "稳定掌握"):
+            # 维持原有幂等，但继续平滑抬升连续概率
+            _apply(db, st, st.state, f"{REASONS[event]}（BKT后验 {p_next*100:.1f}%）",
+                   probability=max(curr_p, p_next), attempts_inc=1)
+            db.commit()
             return st
         if st.state == "学习中":
-            _apply(db, st, "初步掌握", REASONS[event])
-        else:  # 未评估 / 薄弱 → 学习中
-            _apply(db, st, "学习中", REASONS[event])
+            target_state = "初步掌握" if p_next >= 0.60 else "学习中"
+            _apply(db, st, target_state, f"{REASONS[event]}（BKT后验 {p_next*100:.1f}%）",
+                   probability=p_next, attempts_inc=1)
+        else:  # 未评估 / 薄弱 -> 学习中
+            _apply(db, st, "学习中", f"{REASONS[event]}（BKT后验 {p_next*100:.1f}%）",
+                   probability=max(0.40, p_next), attempts_inc=1)
         db.commit()
         audit(db, "system", "mastery.transition", f"{user_id}/{domain_id}", to=st.state, event=event)
         return st
 
     if event == "practice_failed":
-        # 章级练习答错：未评估→薄弱（建薄弱）；学习中→薄弱（回退）；薄弱保持（幂等）；
-        # 已初步掌握以上不因单次答错降级（保守，避免一题抖动状态）。
+        # 答错：使用 BKT 计算衰减后验概率
+        p_next = BKTOnlineTracker.update_posterior(curr_p, is_correct=False)
         if st.state in ("薄弱", "初步掌握", "掌握", "稳定掌握"):
+            # 已初步掌握以上不因单次答错降级，但连续概率微降
+            _apply(db, st, st.state, f"{REASONS[event]}（BKT后验 {p_next*100:.1f}%）",
+                   probability=min(curr_p, p_next), attempts_inc=1)
+            db.commit()
             return st
-        _apply(db, st, "薄弱", REASONS[event])
+        _apply(db, st, "薄弱", f"{REASONS[event]}（BKT后验 {p_next*100:.1f}%）",
+               probability=min(0.25, p_next), attempts_inc=1)
         db.commit()
         audit(db, "system", "mastery.transition", f"{user_id}/{domain_id}", to=st.state, event=event)
         return st
 
+    if event == "training_passed":
+        p_next = max(curr_p, 0.72)
+    elif event == "training_failed":
+        p_next = min(curr_p, 0.28)
+    elif event == "retest_passed":
+        p_next = max(curr_p, 0.86)
+    elif event == "retest_failed":
+        p_next = min(curr_p, 0.30)
+    elif event == "delayed_passed":
+        p_next = 0.96
+    elif event == "forgot":
+        p_next = BKTOnlineTracker.apply_decay(curr_p, days_passed=14.0)
+    elif event in ("misdiagnosed", "diagnosed"):
+        p_next = 0.20
+    else:
+        p_next = None
+
     src, dst = table[event]
     if st.state == dst:
-        return st  # 幂等：重复事件（如摸底+练习双诊断）不降级不报错
+        return st
     if (src, dst) not in VALID_MASTERY_TRANSITIONS or st.state != src:
         raise IllegalTransition(f"{st.state} -{event}-> ?（合法起点 {src}）")
-    _apply(db, st, dst, REASONS.get(event, ""))
+
+    _apply(db, st, dst, REASONS.get(event, ""), probability=p_next)
     db.commit()
     audit(db, "system", "mastery.transition", f"{user_id}/{domain_id}", to=dst, event=event)
     return st

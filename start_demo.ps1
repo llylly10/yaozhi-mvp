@@ -1,9 +1,12 @@
-﻿# 药知 MVP 一键演示启动脚本（Windows）
-# 用法：在 PowerShell 中运行  .\start_demo.ps1
+param(
+    [switch]$Reset = $false
+)
+# 药知 MVP 一键演示启动脚本（Windows）
+# 用法：在 PowerShell 中运行  .\start_demo.ps1 [-Reset]
 # 说明：
 #  - 后端用 uvicorn 起在 127.0.0.1:8000（项目本地 venv .venv，依赖自包含，无需管理员装包）
 #  - 前端用 vite dev 起在 127.0.0.1:5173（始终编译最新源码，规避旧的 dist 构建）
-#  - 启动后自动调用 /admin/reset-demo 复位为初始种子数据，保证演示可重现
+#  - 默认保留所有本地学习和做题历史数据；如需彻底重置演示环境，运行 .\start_demo.ps1 -Reset
 #  - 两个服务各自开独立窗口，关闭窗口即停止
 # 环境准备（首次）：python -m venv .venv && .venv\Scripts\pip install -r backend\requirements.txt
 
@@ -71,13 +74,16 @@ for ($i = 0; $i -lt 25; $i++) {
 }
 if (-not $up) { Write-Error "后端未能在 25s 内就绪，请检查 backend 依赖与端口"; exit 1 }
 Write-Host "后端就绪 http://127.0.0.1:8000"
-
-# 3) 复位演示数据（保证每次演示从干净种子开始）
-try {
-    Invoke-RestMethod -Uri "http://127.0.0.1:8000/admin/reset-demo" -Method Post | Out-Null
-    Write-Host "演示数据已复位为初始种子"
-} catch {
-    Write-Warning "复位失败（将使用现有数据）：$_"
+# 3) 复位演示数据（默认保留现有学习数据，若需彻底重置请加 -Reset 参数）
+if ($Reset) {
+    try {
+        Invoke-RestMethod -Uri "http://127.0.0.1:8000/admin/reset-demo" -Method Post | Out-Null
+        Write-Host "演示数据已复位为初始种子"
+    } catch {
+        Write-Warning "复位失败（将使用现有数据）：$_"
+    }
+} else {
+    Write-Host "保留现有学习与做题历史（如需全新重置，请运行 .\start_demo.ps1 -Reset）"
 }
 
 # 4) 启动前端（vite dev，始终最新源码）
