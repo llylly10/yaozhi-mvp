@@ -10,9 +10,16 @@ interface ClinicalCaseSummary {
   id: string
   title: string
   category: string
+  chapter_id?: string
+  chapter_name?: string
+  real_case_source?: string
+  guideline_ref?: string
   patient_name: string
+  patient_gender?: string
+  patient_age?: number
   chief_complaint: string
-  question_count: number
+  questions_count: number
+  drugs_count?: number
 }
 
 interface Question {
@@ -25,6 +32,10 @@ interface CaseDetail {
   id: string
   title: string
   category: string
+  chapter_id?: string
+  chapter_name?: string
+  real_case_source?: string
+  guideline_ref?: string
   patient: {
     name: string
     gender: string
@@ -32,10 +43,12 @@ interface CaseDetail {
     chief_complaint: string
     history: string
     vitals: string
-    labs: { name: string; val: string; ref: string; status: 'normal' | 'high' | 'low' | 'low_normal' }[]
+    labs: { name: string; val: string; ref: string; status: 'normal' | 'high' | 'low' | 'low_normal' | 'critical_high' | 'critical_low' | 'abnormal' | string }[]
     current_prescription: { drug_name: string; spec: string; usage: string; role: string }[]
   }
   questions: Question[]
+  pharmacist_summary?: string
+  textbook_reference?: string
 }
 
 interface EvalResult {
@@ -52,6 +65,10 @@ interface CaseEvalResponse {
   case_id: string
   title: string
   category: string
+  chapter_id?: string
+  chapter_name?: string
+  real_case_source?: string
+  guideline_ref?: string
   total_questions: number
   correct_count: number
   score: number
@@ -63,6 +80,18 @@ interface CaseEvalResponse {
   pharmacist_summary: string
   textbook_reference: string
 }
+
+const CHAPTERS = [
+  { id: 'all', name: '全部篇章 (16)' },
+  { id: 'ans', name: '① 传出神经' },
+  { id: 'cns', name: '② 中枢神经' },
+  { id: 'nsaid', name: '③ 解热抗炎痛风' },
+  { id: 'cvs', name: '④ 心血管系统' },
+  { id: 'resp', name: '⑤ 呼吸系统' },
+  { id: 'gi', name: '⑥ 消化系统' },
+  { id: 'endo_blood', name: '⑦ 内分泌血液' },
+  { id: 'anti', name: '⑧ 抗感染化疗' },
+]
 
 interface Props {
   userId: string
@@ -79,17 +108,32 @@ export const ClinicalCaseView: React.FC<Props> = ({ userId, onAskAi, onBackToTod
   const [evalResult, setEvalResult] = useState<CaseEvalResponse | null>(null)
   const [loading, setLoading] = useState(true)
 
+  const [activeChapter, setActiveChapter] = useState<string>('all')
+
   // 1. Fetch case summaries
   useEffect(() => {
     api.clinicalCases(userId)
       .then((res: { cases: ClinicalCaseSummary[] }) => {
-        setCases(res.cases || [])
-        if (res.cases && res.cases.length > 0) {
-          setSelectedCaseId(res.cases[0].id)
+        const fetchedCases = res.cases || []
+        setCases(fetchedCases)
+        if (fetchedCases.length > 0) {
+          setSelectedCaseId(fetchedCases[0].id)
         }
       })
       .catch((err) => console.error('Failed to load clinical cases', err))
   }, [userId])
+
+  const filteredCases = activeChapter === 'all'
+    ? cases
+    : cases.filter((c) => c.chapter_id === activeChapter)
+
+  const handleSelectChapter = (chId: string) => {
+    setActiveChapter(chId)
+    const available = chId === 'all' ? cases : cases.filter((c) => c.chapter_id === chId)
+    if (available.length > 0 && !available.some((c) => c.id === selectedCaseId)) {
+      setSelectedCaseId(available[0].id)
+    }
+  }
 
   // 2. Fetch specific case detail
   useEffect(() => {
@@ -132,8 +176,8 @@ export const ClinicalCaseView: React.FC<Props> = ({ userId, onAskAi, onBackToTod
 
   const handleAskAiAboutCase = () => {
     if (!caseDetail) return
-    const ctx = `【真实病例沙盘】案例：${caseDetail.title}\n患者：${caseDetail.patient.name} (${caseDetail.patient.gender}, ${caseDetail.patient.age}岁)\n主诉与病史：${caseDetail.patient.chief_complaint} ${caseDetail.patient.history}\n体征与化验：${caseDetail.patient.vitals}\n拟定处方：${caseDetail.patient.current_prescription.map((m) => `${m.drug_name} (${m.role})`).join('、')}`
-    const prompt = `请作为资深临床药理专家，针对该病例（${caseDetail.title}）为我深入剖析：\n1. 处方中的主要不合理用药风险与禁忌；\n2. 相关的分子药理与受体/转运体竞争机制；\n3. 指南推荐的更优替代治疗策略与监护要点。`
+    const ctx = `【真实病例沙盘】案例：${caseDetail.title}\n真实出处：${caseDetail.real_case_source || '核心临床文献'}\n指南参考：${caseDetail.guideline_ref || '人卫第9版药理学'}\n患者：${caseDetail.patient.name} (${caseDetail.patient.gender}, ${caseDetail.patient.age}岁)\n主诉与病史：${caseDetail.patient.chief_complaint} ${caseDetail.patient.history}\n体征与化验：${caseDetail.patient.vitals}\n拟定处方：${caseDetail.patient.current_prescription.map((m) => `${m.drug_name} (${m.role})`).join('、')}`
+    const prompt = `请作为资深临床药理专家，针对该真实案例（${caseDetail.title}）为我深入剖析：\n1. 处方中的主要不合理用药风险与禁忌；\n2. 相关的分子药理与受体/转运体竞争机制；\n3. 指南推荐的更优替代治疗策略与监护要点。`
     onAskAi(ctx, prompt)
   }
 
@@ -147,7 +191,7 @@ export const ClinicalCaseView: React.FC<Props> = ({ userId, onAskAi, onBackToTod
               <FirstAid size={20} weight="fill" />
             </span>
             <span className="text-xs font-semibold tracking-wider text-emerald-300">
-              真实临床实战沙盘 · 处方合理性审核
+              人卫第 9 版《药理学》全真沙盘 · 8 大篇章 16 套真实案例
             </span>
           </div>
           {onBackToTodo && (
@@ -164,13 +208,34 @@ export const ClinicalCaseView: React.FC<Props> = ({ userId, onAskAi, onBackToTod
             临床处方审核与药物相互作用沙盘
           </h2>
           <p className="mt-1 max-w-2xl text-xs text-slate-300 leading-relaxed">
-            药学专硕 / 执业药师高分综合案例大题情境实训：全真电子病历（EMR）化验单排查 + 禁用/慎用靶向甄别 + 细胞药理机制推导 + 临床指南规范赋分。
+            药学专硕 / 执业药师高分综合大题情境实训：覆盖教材 8 大核心篇章（每篇精选 2 套真实文献案例），全真电子病历（EMR）+ 实验室生化排查 + 禁用慎用甄别 + 细胞受体机制推导 + 专家指南决策。
           </p>
         </div>
 
+        {/* Chapter Filter Pills */}
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 pt-2 border-t border-white/10">
+          <span className="text-[11px] text-emerald-300 font-semibold mr-1">篇章切换:</span>
+          {CHAPTERS.map((ch) => {
+            const isActive = ch.id === activeChapter
+            return (
+              <button
+                key={ch.id}
+                onClick={() => handleSelectChapter(ch.id)}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition ${
+                  isActive
+                    ? 'bg-emerald-400 text-slate-950 font-bold shadow-sm'
+                    : 'bg-white/10 text-slate-300 hover:bg-white/20'
+                }`}
+              >
+                {ch.name}
+              </button>
+            )
+          })}
+        </div>
+
         {/* Case Switcher Tabs */}
-        <div className="mt-2 flex flex-wrap gap-2 pt-2 border-t border-white/10">
-          {cases.map((c) => {
+        <div className="flex flex-wrap gap-2 pt-1">
+          {filteredCases.map((c) => {
             const isSelected = c.id === selectedCaseId
             return (
               <button
@@ -183,7 +248,7 @@ export const ClinicalCaseView: React.FC<Props> = ({ userId, onAskAi, onBackToTod
                 }`}
               >
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                <span>{c.title.slice(0, 16)}...</span>
+                <span className="font-medium truncate max-w-[200px]">{c.title}</span>
               </button>
             )
           })}
@@ -206,15 +271,39 @@ export const ClinicalCaseView: React.FC<Props> = ({ userId, onAskAi, onBackToTod
                 <div className="flex items-center gap-2">
                   <Heartbeat size={18} className="text-emerald-700" weight="fill" />
                   <span className="text-xs font-bold uppercase tracking-wider text-emerald-800">
-                    电子病历 (EMR) · 门诊病历夹
+                    电子病历 (EMR) · 真实临床病历夹
                   </span>
                 </div>
-                <span className="rounded bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
-                  {caseDetail.category}
-                </span>
+                <div className="flex items-center gap-2">
+                  {caseDetail.chapter_name && (
+                    <span className="rounded bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+                      {caseDetail.chapter_name}
+                    </span>
+                  )}
+                  <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                    {caseDetail.category}
+                  </span>
+                </div>
               </div>
 
               <div className="p-5 space-y-4 text-xs leading-relaxed text-ink-2">
+                {/* Real Case Source & Literature Banner */}
+                {caseDetail.real_case_source && (
+                  <div className="rounded-xl bg-gradient-to-r from-emerald-50 to-teal-50/70 border border-emerald-200 p-3 text-xs text-emerald-950 shadow-sm">
+                    <div className="flex items-center gap-1.5 font-bold text-emerald-800">
+                      <Sparkle size={15} className="text-emerald-600" weight="fill" />
+                      <span>【真实临床案例出处与文献溯源】</span>
+                    </div>
+                    <p className="mt-1 font-medium leading-relaxed text-emerald-900">
+                      {caseDetail.real_case_source}
+                    </p>
+                    {caseDetail.guideline_ref && (
+                      <p className="mt-1 text-[11px] text-emerald-700 leading-snug">
+                        📚 权威指南与教材出处：{caseDetail.guideline_ref}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {/* Patient Info Row */}
                 <div className="flex flex-wrap items-center gap-6 rounded-lg bg-surface/70 p-3 border border-line/40">
                   <div>

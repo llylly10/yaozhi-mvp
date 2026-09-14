@@ -18,18 +18,35 @@ from app.router import export_wrong_book, learning_plan
 
 
 def test_clinical_cases_sandbox():
-    # 1. Summary has all 5 realistic cases
+    # 1. Summary has all 16 realistic cases covering 8 core chapters
     summaries = get_clinical_cases_summary()
-    assert len(summaries) >= 5
+    assert len(summaries) == 16
     case_ids = [c["id"] for c in summaries]
-    assert "case_cvs_01" in case_ids
-    assert "case_resp_02" in case_ids
-    assert "case_anti_03" in case_ids
-    assert "case_cardio_04" in case_ids
-    assert "case_gi_05" in case_ids
+    assert "case_ans_01" in case_ids
+    assert "case_ans_02" in case_ids
+    assert "case_cns_03" in case_ids
+    assert "case_cns_04" in case_ids
+    assert "case_nsaid_05" in case_ids
+    assert "case_gout_06" in case_ids
+    assert "case_cvs_07" in case_ids
+    assert "case_cvs_08" in case_ids
+    assert "case_resp_09" in case_ids
+    assert "case_resp_10" in case_ids
+    assert "case_gi_11" in case_ids
+    assert "case_gi_12" in case_ids
+    assert "case_endo_13" in case_ids
+    assert "case_blood_14" in case_ids
+    assert "case_anti_15" in case_ids
+    assert "case_anti_16" in case_ids
+
+    # Check chapter metadata and sources
+    for c in summaries:
+        assert c["chapter_id"] != ""
+        assert c["chapter_name"] != ""
+        assert c["real_case_source"] != ""
 
     # 2. Case detail has full EMR attributes
-    detail = get_clinical_case_detail("case_cvs_01")
+    detail = get_clinical_case_detail("case_cvs_07")
     assert detail is not None
     assert detail["patient"]["gender"] == "男"
     assert "BP" in detail["patient"]["vitals"]
@@ -37,13 +54,13 @@ def test_clinical_cases_sandbox():
     assert len(detail["questions"]) == 3
 
     # 3. Full correct evaluation (100 pts)
-    eval_full = evaluate_clinical_case("case_cvs_01", {"q1": "B", "q2": "B", "q3": "B"})
+    eval_full = evaluate_clinical_case("case_cvs_07", {"q1": "B", "q2": "B", "q3": "A"})
     assert eval_full["score"] == 100
     assert eval_full["passed"] is True
     assert eval_full["star_rating"] == 3
 
     # 4. Partial error evaluation
-    eval_partial = evaluate_clinical_case("case_cvs_01", {"q1": "A", "q2": "B", "q3": "B"})
+    eval_partial = evaluate_clinical_case("case_cvs_07", {"q1": "A", "q2": "B", "q3": "A"})
     assert eval_partial["score"] < 100
     assert eval_partial["evaluations"]["q1"]["is_correct"] is False
     assert eval_partial["evaluations"]["q2"]["is_correct"] is True
