@@ -12,6 +12,7 @@ import { CustomQuizView } from './CustomQuizView'
 import { KnowledgeDetailModal } from './KnowledgeDetailModal'
 import { WrongBookExportModal } from './WrongBookExportModal'
 import { ClinicalCaseView } from './ClinicalCaseView'
+import { SettingsModal } from './SettingsModal'
 
 /*
  * 药知 · 「现代药房 × 分子美学」
@@ -72,6 +73,7 @@ export default function App() {
   const [portrait, setPortrait] = useState<PortraitResult | null>(null)
   const [materialDomain, setMaterialDomain] = useState<string | null>(null)
   const [showEvalModal, setShowEvalModal] = useState(false)
+  const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [qaPrefill, setQaPrefill] = useState<{ context?: string; question?: string } | null>(null)
 
   // 主壳（可切换视图的页面：今日待办/错题本/问AI/档案/自适应组卷/临床沙盘），全屏子流程(材料/练习/onboarding)不显示底部导航
@@ -241,6 +243,7 @@ export default function App() {
             currentScreen={screen}
             onNav={goNav}
             onGoMap={() => { setActiveQuestion(null); setScreen('study'); window.scrollTo(0, 0); }}
+            onOpenSettings={() => setShowSettingsModal(true)}
           />
         )}
 
@@ -319,6 +322,19 @@ export default function App() {
       )}
       <BackToTop />
       {showEvalModal && <EvalBenchmarkModal onClose={() => setShowEvalModal(false)} />}
+      {showSettingsModal && (
+        <SettingsModal
+          open={showSettingsModal}
+          onClose={() => setShowSettingsModal(false)}
+          userId={userId}
+          accountName={localStorage.getItem('yaozhi_account_name') || undefined}
+          onLogout={logout}
+          onResetCache={() => {
+            localStorage.clear()
+            window.location.reload()
+          }}
+        />
+      )}
     </div>
     </MotionConfig>
   )
@@ -367,8 +383,8 @@ function MolField() {
 
 /* ---------- 左侧学习栏 ---------- */
 
-function Sidebar({ view, currentScreen, onNav, onGoMap }: {
-  view: View; currentScreen?: Screen; onNav: (v: View) => void; onGoMap?: () => void
+function Sidebar({ view, currentScreen, onNav, onGoMap, onOpenSettings }: {
+  view: View; currentScreen?: Screen; onNav: (v: View) => void; onGoMap?: () => void; onOpenSettings?: () => void
 }) {
   const item = (v: View, label: string, icon: React.ReactNode, disabled = false) => (
     <button key={v + label} disabled={disabled} onClick={() => onNav(v)}
@@ -380,7 +396,7 @@ function Sidebar({ view, currentScreen, onNav, onGoMap }: {
           className="absolute inset-0 rounded-xl bg-primary-soft" aria-hidden />
       )}
       <span className="relative z-10 flex items-center gap-2.5">{icon}{label}</span>
-      {disabled && <span className="relative z-10 ml-auto text-[10px] text-ink-3">W3</span>}
+      {disabled && <span className="relative z-10 ml-auto text-[10px] text-ink-3">待开放</span>}
     </button>
   )
   return (
@@ -408,8 +424,11 @@ function Sidebar({ view, currentScreen, onNav, onGoMap }: {
         </div>
         <div>
           <p className="mb-1.5 px-3.5 text-[11px] font-semibold text-ink-3">账户</p>
-          <button disabled className="btn !justify-start w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm text-ink-2 opacity-45">
-            <Gear size={15} />设置 · 隐私<span className="ml-auto text-[10px] text-ink-3">W3</span>
+          <button
+            onClick={onOpenSettings}
+            className="btn !justify-start w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm text-ink-2 hover:bg-paper-2 transition-colors cursor-pointer"
+          >
+            <Gear size={15} />设置 · 隐私中心
           </button>
         </div>
       </div>

@@ -89,6 +89,32 @@ export const api = {
   consent: (userId: string, docs: { user_agreement: boolean; privacy_policy: boolean; data_collection: boolean }) =>
     fetch(`/api/users/${userId}/consent`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(docs) }).then(handle),
 
+  getConsent: (userId: string): Promise<{
+    user_id: string;
+    display_name: string;
+    consented: boolean;
+    consented_at: string | null;
+    withdrawn_at: string | null;
+    deletion_receipt: string | null;
+    logical_deleted_at: string | null;
+    purged_at: string | null;
+    physical_delete_after_days: number;
+  }> => fetch(`/api/users/${userId}/consent`).then(handle),
+
+  withdrawConsent: (userId: string, reason: string = '学生自主申请撤回'): Promise<{
+    user_id: string;
+    consented: boolean;
+    deletion_receipt: string;
+    logical_deleted_at: string;
+    physical_delete_after_days: number;
+    status: string;
+  }> =>
+    fetch(`/api/users/${userId}/consent/withdraw`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ reason }),
+    }).then(handle),
+
   wrongBook: (userId: string) => fetch(`/api/users/${userId}/wrong-book`).then(handle),
 
   exportWrongBook: (userId: string) => fetch(`/api/users/${userId}/wrong-book/export`).then(handle),
