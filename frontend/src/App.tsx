@@ -195,7 +195,7 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <span className="grid size-7 place-items-center rounded-lg bg-primary text-white"><Pill size={14} weight="fill" /></span>
                 <span className="font-serif text-[15px] font-bold">药知</span>
-                <span className="rounded-full border border-gold/40 bg-gold-soft px-2 py-0.5 text-[10.5px] font-semibold text-gold">演示原型 · MVP</span>
+                <span className="rounded-full border border-gold/40 bg-gold-soft px-2 py-0.5 text-[10.5px] font-semibold text-gold">v1.0</span>
               </div>
               <div className="flex items-center gap-2">
                 <button

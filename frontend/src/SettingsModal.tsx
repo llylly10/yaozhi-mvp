@@ -126,7 +126,7 @@ export const SettingsModal: React.FC<Props> = ({
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-bold text-ink">系统设置 · 知情同意与数据中心</h2>
                 <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 border border-emerald-200">
-                  v1.2 演示就绪
+                  v1.0
                 </span>
               </div>
               <p className="text-xs text-ink-3">管理个人学习账号、知情同意书授权与合规数据生命周期</p>
