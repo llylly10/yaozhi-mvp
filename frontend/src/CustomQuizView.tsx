@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { ArrowLeft, ArrowRight, Clock, ChatCircle, FileText } from '@phosphor-icons/react'
+import { ArrowLeft, ArrowRight, Clock, ChatCircle, FileText, BookmarkSimple } from '@phosphor-icons/react'
 import { api, type Question } from './api'
+import { useToast } from './Toast'
 
 type CustomQuizConfig = {
   chapters: { id: string; code: string; chapter_ref: string; name: string; question_count: number }[]
@@ -69,6 +70,60 @@ export function CustomQuizView({
   const [submitting, setSubmitting] = useState(false)
   const [quizResult, setQuizResult] = useState<QuizResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [flaggedQuestions, setFlaggedQuestions] = useState<Record<string, boolean>>({})
+  const toast = useToast()
+
+  const toggleFlag = (qid: string) => {
+    setFlaggedQuestions((prev) => {
+      const next = !prev[qid]
+      if (next) toast.warning(`已标记第 ${currentIdx + 1} 题为存疑题目（交卷前可在答题卡复查）`)
+      else toast.info(`已取消第 ${currentIdx + 1} 题存疑标记`)
+      return { ...prev, [qid]: next }
+    })
+  }
+
+  // 键盘快捷键盲打与切题
+  useEffect(() => {
+    if (!activeQuiz || quizResult) return
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      const q = activeQuiz.questions[currentIdx]
+      if (!q) return
+
+      const keyUpper = e.key.toUpperCase()
+      const hit = q.options.find((o) => o.key.toUpperCase() === keyUpper)
+      if (hit) {
+        e.preventDefault()
+        setUserAnswers((prev) => ({ ...prev, [q.id]: hit.key }))
+        return
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        setCurrentIdx((i) => Math.max(0, i - 1))
+        return
+      }
+      if (e.key === 'ArrowRight' || e.key === ' ') {
+        e.preventDefault()
+        setCurrentIdx((i) => Math.min(activeQuiz.questions.length - 1, i + 1))
+        return
+      }
+      if (e.key === 'f' || e.key === 'F' || e.key === 'm' || e.key === 'M') {
+        e.preventDefault()
+        toggleFlag(q.id)
+        return
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        if (currentIdx < activeQuiz.questions.length - 1) {
+          setCurrentIdx((i) => i + 1)
+        }
+        return
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [activeQuiz, quizResult, currentIdx, toggleFlag])
 
   useEffect(() => {
     setLoading(true)
@@ -264,6 +319,11 @@ export function CustomQuizView({
                   </span>
                   <span className="text-xs font-semibold text-ink-3">{r.chapter_name}</span>
                   <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[10px] text-ink-3">{r.cognitive_level} · {r.difficulty}</span>
+                  {flaggedQuestions[r.id] && (
+                    <span className="rounded-full border border-amber-400 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 flex items-center gap-0.5">
+                      <BookmarkSimple size={10} weight="fill" /> 考时存疑
+                    </span>
+                  )}
                 </div>
                 <div className="text-xs flex items-center gap-2">
                   <span className={r.is_correct ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
@@ -299,10 +359,13 @@ export function CustomQuizView({
 
               <div className="flex justify-end">
                 <button
-                  onClick={() => onAskAi(
-                    `【自适应试卷试题】${r.stem}\n【你的作答】${r.user_answer || '未作答'} (正确答案: ${r.correct_answer})\n【解析要点】${r.analysis}`,
-                    `关于本题考查的 ${r.chapter_name} 知识点，请问为什么 ${r.user_answer || '该干扰项'} 是错误的？`
-                  )}
+                  onClick={() => {
+                    toast.info('已将试卷考点带入「问 AI」...')
+                    onAskAi(
+                      `【自适应试卷试题】${r.stem}\n【你的作答】${r.user_answer || '未作答'} (正确答案: ${r.correct_answer})\n【解析要点】${r.analysis}`,
+                      `关于本题考查的 ${r.chapter_name} 知识点，请问为什么 ${r.user_answer || '该干扰项'} 是错误的？`
+                    )
+                  }}
                   className="btn !py-1.5 !px-3.5 !text-xs border border-primary/30 text-primary bg-primary-soft/60 hover:bg-primary hover:text-white transition flex items-center gap-1">
                   <ChatCircle size={13} weight="bold" />向 AI 深度追问此题
                 </button>
@@ -344,14 +407,29 @@ export function CustomQuizView({
 
         {/* 题目卡 */}
         <div className="card !rounded-[24px] border border-line-2 bg-white p-8">
-          <div className="flex items-center justify-between text-xs text-ink-3 border-b border-line-2 pb-4 mb-6">
+          <div className="flex flex-wrap items-center justify-between text-xs text-ink-3 border-b border-line-2 pb-4 mb-6 gap-3">
             <div className="flex items-center gap-2">
               <span className="font-bold text-primary text-sm">第 {currentIdx + 1} / {activeQuiz.questions.length} 题</span>
               <span>·</span>
               <span>{q.chapter_name || q.chapter || '药理学'}</span>
               <span className="rounded-full bg-paper px-2 py-0.5 text-[10px]">{q.cognitive_level || '理解'} · 难度{q.difficulty || '中'}</span>
             </div>
-            <span>已作答 {answeredCount} / {activeQuiz.questions.length}</span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => toggleFlag(q.id)}
+                className={`flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold transition ${
+                  flaggedQuestions[q.id]
+                    ? 'bg-amber-500/15 text-amber-700 border border-amber-500/40 shadow-xs'
+                    : 'bg-paper-2 text-ink-3 hover:text-ink hover:bg-paper border border-transparent'
+                }`}
+                title="快捷键 F 或 M 切换存疑标记"
+              >
+                <BookmarkSimple size={13} weight={flaggedQuestions[q.id] ? 'fill' : 'regular'} className={flaggedQuestions[q.id] ? 'text-amber-600' : ''} />
+                {flaggedQuestions[q.id] ? '已标记存疑' : '标记存疑 (F)'}
+              </button>
+              <span className="font-mono">已作答 {answeredCount} / {activeQuiz.questions.length}</span>
+            </div>
           </div>
 
           <p className="display text-lg leading-relaxed mb-6">{q.stem}</p>
@@ -377,35 +455,53 @@ export function CustomQuizView({
             })}
           </div>
 
-          <div className="mt-8 pt-6 border-t border-line-2 flex items-center justify-between">
-            <button
-              onClick={() => setCurrentIdx((i) => Math.max(0, i - 1))}
-              disabled={currentIdx === 0}
-              className="btn border border-line px-4 py-2 text-xs text-ink-2 disabled:opacity-30">
-              <ArrowLeft size={12} />上一题
-            </button>
-            <div className="flex items-center gap-1.5 max-w-[320px] overflow-x-auto py-1">
-              {activeQuiz.questions.map((item, idx) => (
-                <button
-                  key={item.id}
-                  onClick={() => setCurrentIdx(idx)}
-                  className={`size-6 text-[10px] font-bold rounded-md flex items-center justify-center transition ${
-                    idx === currentIdx
-                      ? 'ring-2 ring-primary ring-offset-1 bg-primary text-white'
-                      : userAnswers[item.id]
-                      ? 'bg-emerald-100 text-emerald-800'
-                      : 'bg-paper-2 text-ink-3'
-                  }`}>
-                  {idx + 1}
-                </button>
-              ))}
+          <div className="mt-8 pt-6 border-t border-line-2 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <button
+                onClick={() => setCurrentIdx((i) => Math.max(0, i - 1))}
+                disabled={currentIdx === 0}
+                className="btn border border-line px-4 py-2 text-xs text-ink-2 disabled:opacity-30">
+                <ArrowLeft size={12} />上一题 (←)
+              </button>
+              <div className="flex items-center gap-1.5 max-w-[480px] overflow-x-auto py-1 px-1">
+                {activeQuiz.questions.map((item, idx) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setCurrentIdx(idx)}
+                    title={`第 ${idx + 1} 题${userAnswers[item.id] ? '（已答）' : '（未答）'}${flaggedQuestions[item.id] ? ' · 存疑待查' : ''}`}
+                    className={`relative size-7 text-[10.5px] font-bold rounded-lg flex items-center justify-center transition flex-none ${
+                      idx === currentIdx
+                        ? 'ring-2 ring-primary ring-offset-1 bg-primary text-white shadow-xs'
+                        : userAnswers[item.id]
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300/60'
+                        : 'bg-paper-2 text-ink-3 hover:bg-paper'
+                    }`}>
+                    {idx + 1}
+                    {flaggedQuestions[item.id] && (
+                      <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-amber-500 ring-1 ring-white" />
+                    )}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setCurrentIdx((i) => Math.min(activeQuiz.questions.length - 1, i + 1))}
+                disabled={currentIdx === activeQuiz.questions.length - 1}
+                className="btn border border-line px-4 py-2 text-xs text-ink-2 disabled:opacity-30">
+                下一题 (→)<ArrowRight size={12} />
+              </button>
             </div>
-            <button
-              onClick={() => setCurrentIdx((i) => Math.min(activeQuiz.questions.length - 1, i + 1))}
-              disabled={currentIdx === activeQuiz.questions.length - 1}
-              className="btn border border-line px-4 py-2 text-xs text-ink-2 disabled:opacity-30">
-              下一题<ArrowRight size={12} />
-            </button>
+
+            {/* 键盘与状态提示栏 */}
+            <div className="flex flex-wrap items-center justify-between text-[11px] text-ink-3 bg-paper/60 px-4 py-2 rounded-xl">
+              <div className="flex items-center gap-3">
+                <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-emerald-500 inline-block" /> 已作答</span>
+                <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-amber-500 inline-block" /> 存疑题</span>
+                <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-primary inline-block" /> 当前题</span>
+              </div>
+              <div>
+                快捷键：<kbd className="px-1 py-0.5 rounded bg-white border border-line font-mono text-[10px]">A~E</kbd> 直选 · <kbd className="px-1 py-0.5 rounded bg-white border border-line font-mono text-[10px]">←/→</kbd> 切题 · <kbd className="px-1 py-0.5 rounded bg-white border border-line font-mono text-[10px]">F</kbd> 存疑标记
+              </div>
+            </div>
           </div>
         </div>
       </div>

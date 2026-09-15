@@ -18,7 +18,12 @@ export function EvalBenchmarkModal({ onClose }: Props) {
 
   useEffect(() => {
     loadLatest()
-  }, [])
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   async function loadLatest() {
     setLoading(true)

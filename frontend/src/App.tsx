@@ -4,7 +4,7 @@ import { motion, AnimatePresence, MotionConfig, useReducedMotion, useScroll, use
 import {
   CheckCircle, XCircle, Warning, MagnifyingGlass, SkipForward, ArrowRight, ArrowUp, CaretDown, Pill,
   CalendarBlank, ClockCounterClockwise, SquaresFour, Gear, BookOpenText, ChatCircle, ChatCircleText,
-  Lightning, Hourglass, Sparkle, ShareNetwork, FirstAid, Printer,
+  Lightning, Hourglass, Sparkle, ShareNetwork, FirstAid, Printer, BookmarkSimple,
 } from '@phosphor-icons/react'
 import { api, type Diagnosis, type Question, type TikuFeedback, type RetestCapsuleData } from './api'
 import { EvalBenchmarkModal } from './EvalBenchmarkModal'
@@ -13,6 +13,7 @@ import { KnowledgeDetailModal } from './KnowledgeDetailModal'
 import { WrongBookExportModal } from './WrongBookExportModal'
 import { ClinicalCaseView } from './ClinicalCaseView'
 import { SettingsModal } from './SettingsModal'
+import { ToastProvider, useToast } from './Toast'
 
 /*
  * 药知 · 「现代药房 × 分子美学」
@@ -63,6 +64,15 @@ function stepIndex(screen: Screen, diagnosis: Diagnosis | null): number {
 }
 
 export default function App() {
+  return (
+    <ToastProvider>
+      <AppInner />
+    </ToastProvider>
+  )
+}
+
+function AppInner() {
+  const toast = useToast()
   const [userId, setUserId] = useState<string | null>(() => localStorage.getItem(USER_KEY))
   const [screen, setScreen] = useState<Screen>(() => (localStorage.getItem(USER_KEY) ? 'list' : 'register'))
   const [view, setView] = useState<View>('todo')
@@ -78,6 +88,7 @@ export default function App() {
 
   // 主壳（可切换视图的页面：今日待办/错题本/问AI/档案/自适应组卷/临床沙盘），全屏子流程(材料/练习/onboarding)不显示底部导航
   const isShell = screen === 'list' || screen === 'profile' || screen === 'qa' || screen === 'custom_quiz' || screen === 'clinical_cases'
+  const isDedicatedHub = screen === 'clinical_cases' || screen === 'custom_quiz' || screen === 'qa' || screen === 'profile'
   function goNav(v: View) {
     setError(null); setView(v)
     setScreen(v === 'todo' ? 'list' : v === 'qa' ? 'qa' : v === 'custom_quiz' ? 'custom_quiz' : v === 'clinical_cases' ? 'clinical_cases' : 'profile')
@@ -85,6 +96,7 @@ export default function App() {
   }
 
   function handleAskAi(context: string, defaultQ?: string) {
+    toast.info('已提取考点与错因上下文，正在跳转「问 AI」...')
     setQaPrefill({ context, question: defaultQ || '' })
     setView('qa')
     setScreen('qa')
@@ -209,28 +221,61 @@ export default function App() {
                 <button onClick={logout} className="btn rounded-full px-3 py-1 text-xs text-ink-3 hover:bg-paper-2 hover:text-ink">退出账号</button>
               </div>
             </div>
-            <div className="mx-auto flex w-full max-w-[1140px] flex-nowrap items-center gap-0.5 overflow-x-auto py-1.5
-              [mask-image:linear-gradient(90deg,transparent,#000_28px,#000_calc(100%-28px),transparent)]">
-              {STEPS.map((s, i) => {
-                const enabled = i === 0 || !!userId
-                return (
-                  <span key={s} className="flex flex-none items-center">
-                    {i > 0 && <span className="mx-0.5 text-[9px] text-line">▸</span>}
-                    <button onClick={() => goStep(i)} disabled={!enabled} title={stepHint(i)}
-                      className={`relative flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] transition-colors
-                        ${i === step ? 'font-semibold text-white' : 'text-ink-3 hover:bg-paper-2 hover:text-primary'}
-                        ${!enabled ? 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-ink-3' : ''}`}>
-                      {i === step && (
-                        <motion.span layoutId="step-pill" transition={spring}
-                          className="absolute inset-0 rounded-full bg-primary" aria-hidden />
-                      )}
-                      <span className={`relative z-10 size-1.5 rounded-full ${i <= step ? (i === step ? 'bg-white' : 'bg-primary') : 'bg-line'}`} />
-                      <span className="relative z-10">{s}</span>
-                    </button>
+            {isDedicatedHub ? (
+              <div className="mx-auto flex w-full max-w-[1140px] items-center justify-between py-2 text-xs">
+                <div className="flex items-center gap-2 text-ink-2">
+                  <span className="text-ink-3">拓展学习</span>
+                  <span className="text-line text-[10px]">▸</span>
+                  <span className="font-semibold text-ink flex items-center gap-1.5">
+                    {screen === 'clinical_cases' && (
+                      <><FirstAid size={14} className="text-rose-600" /> 真实临床处方与病例沙盘 · 16套权威住院病历审核</>
+                    )}
+                    {screen === 'custom_quiz' && (
+                      <><BookOpenText size={14} className="text-primary" /> 全题库自适应出卷与模考 · 723题覆盖与BKT动态组卷</>
+                    )}
+                    {screen === 'qa' && (
+                      <><ChatCircle size={14} className="text-sky-600" /> 药学助手 · 问 AI · 人卫9版教材全文与题库解析双路检索</>
+                    )}
+                    {screen === 'profile' && view === 'wrongbook' && (
+                      <><ClockCounterClockwise size={14} className="text-amber-600" /> 错题本 · 四分类归档与艾宾浩斯抗遗忘小册导出</>
+                    )}
+                    {screen === 'profile' && view === 'profile' && (
+                      <><SquaresFour size={14} className="text-primary" /> 学习档案 · 贝叶斯掌握度雷达与成长轨迹</>
+                    )}
                   </span>
-                )
-              })}
-            </div>
+                </div>
+                <button
+                  onClick={() => goNav('todo')}
+                  className="btn flex items-center gap-1 rounded-full border border-line bg-white/80 px-3 py-1 text-xs text-ink-2 hover:border-primary hover:text-primary transition shadow-xs cursor-pointer"
+                >
+                  <ArrowRight size={12} className="rotate-180" />
+                  返回今日待办
+                </button>
+              </div>
+            ) : (
+              <div className="mx-auto flex w-full max-w-[1140px] flex-nowrap items-center gap-0.5 overflow-x-auto py-1.5
+                [mask-image:linear-gradient(90deg,transparent,#000_28px,#000_calc(100%-28px),transparent)]">
+                {STEPS.map((s, i) => {
+                  const enabled = i === 0 || !!userId
+                  return (
+                    <span key={s} className="flex flex-none items-center">
+                      {i > 0 && <span className="mx-0.5 text-[9px] text-line">▸</span>}
+                      <button onClick={() => goStep(i)} disabled={!enabled} title={stepHint(i)}
+                        className={`relative flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] transition-colors
+                          ${i === step ? 'font-semibold text-white' : 'text-ink-3 hover:bg-paper-2 hover:text-primary'}
+                          ${!enabled ? 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-ink-3' : ''}`}>
+                        {i === step && (
+                          <motion.span layoutId="step-pill" transition={spring}
+                            className="absolute inset-0 rounded-full bg-primary" aria-hidden />
+                        )}
+                        <span className={`relative z-10 size-1.5 rounded-full ${i <= step ? (i === step ? 'bg-white' : 'bg-primary') : 'bg-line'}`} />
+                        <span className="relative z-10">{s}</span>
+                      </button>
+                    </span>
+                  )
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -297,7 +342,7 @@ export default function App() {
               <Profile key="profile" userId={userId} onGoTodo={() => goNav('todo')} />
             )}
             {screen === 'profile' && userId && view === 'wrongbook' && (
-              <WrongBook key="wrongbook" userId={userId} onGoTodo={() => goNav('todo')} onAskAi={handleAskAi} />
+              <WrongBook key="wrongbook" userId={userId} onGoTodo={() => goNav('todo')} onAskAi={handleAskAi} onGoMap={() => { setActiveQuestion(null); setScreen('study'); window.scrollTo(0, 0); }} />
             )}
             {screen === 'custom_quiz' && userId && (
               <CustomQuizView key="custom_quiz" userId={userId} onExit={() => goNav('todo')} onAskAi={handleAskAi} />
@@ -1280,7 +1325,9 @@ function Assessment({ userId, onDone, onError, onBack }: {
 }) {
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [flagged, setFlagged] = useState<Record<string, boolean>>({})
   const [submitting, setSubmitting] = useState(false)
+  const toast = useToast()
 
   useEffect(() => { window.scrollTo(0, 0) }, [])
   useEffect(() => { api.assessment(userId).then((r) => setQuestions(r.questions)).catch((e) => onError(String(e))) }, [userId])
@@ -1292,6 +1339,15 @@ function Assessment({ userId, onDone, onError, onBack }: {
       const r = await api.submitAssessment(userId, answers)
       onDone(r as PortraitResult)
     } catch (e) { onError(String(e)) } finally { setSubmitting(false) }
+  }
+
+  const toggleFlag = (qid: string, idx: number) => {
+    setFlagged((prev) => {
+      const next = !prev[qid]
+      if (next) toast.warning(`已将第 ${idx + 1} 题标记为存疑题目`)
+      else toast.info(`已取消第 ${idx + 1} 题存疑标记`)
+      return { ...prev, [qid]: next }
+    })
   }
 
   const answered = Object.keys(answers).length
@@ -1314,13 +1370,28 @@ function Assessment({ userId, onDone, onError, onBack }: {
       {questions && (
         <div className="mt-7 space-y-5">
           {questions.map((q, i) => (
-            <div key={q.id} className="card p-6">
-              <div className="mb-3 flex items-center gap-2 text-xs text-ink-3">
-                <span className="grid size-6 place-items-center rounded-full bg-primary-soft font-serif font-bold text-primary">{i + 1}</span>
-                <span className="font-semibold">{q.code}</span>
-                {q.chapter_name && (
-                  <span className="rounded-full border border-line-2 px-2.5 py-0.5 text-[11px]">{q.chapter_name}</span>
-                )}
+            <div key={q.id} id={`assess-q-${i}`} className="card scroll-mt-28 p-6">
+              <div className="mb-3 flex items-center justify-between text-xs text-ink-3">
+                <div className="flex items-center gap-2">
+                  <span className="grid size-6 place-items-center rounded-full bg-primary-soft font-serif font-bold text-primary">{i + 1}</span>
+                  <span className="font-semibold">{q.code}</span>
+                  {q.chapter_name && (
+                    <span className="rounded-full border border-line-2 px-2.5 py-0.5 text-[11px]">{q.chapter_name}</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleFlag(q.id, i)}
+                  className={`flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium transition ${
+                    flagged[q.id]
+                      ? 'bg-amber-500/15 text-amber-700 border border-amber-500/30'
+                      : 'text-ink-3 hover:text-ink bg-paper-2'
+                  }`}
+                  title="标记本题存疑"
+                >
+                  <BookmarkSimple size={12} weight={flagged[q.id] ? 'fill' : 'regular'} className={flagged[q.id] ? 'text-amber-600' : ''} />
+                  {flagged[q.id] ? '已存疑' : '标记存疑'}
+                </button>
               </div>
               <p className="mb-4 text-[15px] font-medium leading-relaxed">{q.stem}</p>
               <div className="space-y-2.5">
@@ -1343,7 +1414,27 @@ function Assessment({ userId, onDone, onError, onBack }: {
 
       {questions && (
         <div className="sticky bottom-4 mt-6 flex justify-center">
-          <div className="glass liquid relative flex items-center gap-3 rounded-full py-2 pl-5 pr-2 shadow-lg">
+          <div className="glass liquid relative flex flex-wrap items-center gap-3 rounded-full py-2 pl-4 pr-2 shadow-lg">
+            {/* 快速题号跳卡 */}
+            <div className="hidden sm:flex items-center gap-1 overflow-x-auto max-w-[260px] py-1 border-r border-line-2 pr-3">
+              {questions.map((item, idx) => (
+                <button
+                  key={item.id}
+                  onClick={() => document.getElementById(`assess-q-${idx}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                  className={`relative size-6 text-[10px] font-bold rounded-md flex items-center justify-center transition flex-none ${
+                    answers[item.id]
+                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300/60'
+                      : 'bg-paper-2 text-ink-3 hover:bg-paper'
+                  }`}
+                  title={`第 ${idx + 1} 题${answers[item.id] ? '（已答）' : '（未答）'}${flagged[item.id] ? ' · 存疑待查' : ''}`}
+                >
+                  {idx + 1}
+                  {flagged[item.id] && (
+                    <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-amber-500 ring-1 ring-white" />
+                  )}
+                </button>
+              ))}
+            </div>
             <span className="text-xs font-medium text-ink-2">
               已答 <span className={answered === questions.length ? 'font-bold text-ok' : 'font-bold text-ink'}>{answered}/{questions.length}</span>
               {answered < questions.length && (
@@ -3286,7 +3377,7 @@ function WrongAwakenModal({
   )
 }
 
-function WrongBook({ userId, onGoTodo, onAskAi }: { userId: string; onGoTodo: () => void; onAskAi?: (ctx: string, defaultQ?: string, qid?: string) => void }) {
+function WrongBook({ userId, onGoTodo, onAskAi, onGoMap }: { userId: string; onGoTodo: () => void; onAskAi?: (ctx: string, defaultQ?: string, qid?: string) => void; onGoMap?: () => void }) {
   const [wrong, setWrong] = useState<WrongRow[] | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
   const [awakenAttemptId, setAwakenAttemptId] = useState<string | null>(null)
@@ -3387,7 +3478,7 @@ function WrongBook({ userId, onGoTodo, onAskAi }: { userId: string; onGoTodo: ()
           {wrong && wrong.length > 0 && (
             <WrongGroups wrong={wrong} openId={openId}
               loadingRecall={loadingRecall} recallMap={recallMap} onToggle={toggleRecall}
-              onAwaken={(aid) => setAwakenAttemptId(aid)} onAskAi={onAskAi} />
+              onAwaken={(aid) => setAwakenAttemptId(aid)} onAskAi={onAskAi} onGoMap={onGoMap} />
           )}
         </section>
       </div>
@@ -3414,11 +3505,12 @@ function WrongBook({ userId, onGoTodo, onAskAi }: { userId: string; onGoTodo: ()
 }
 
 /* 错题分组（按错因归档：同类错因归一组，可折叠；待归因沉底） */
-function WrongGroups({ wrong, openId, loadingRecall, recallMap, onToggle, onAwaken, onAskAi }: {
+function WrongGroups({ wrong, openId, loadingRecall, recallMap, onToggle, onAwaken, onAskAi, onGoMap }: {
   wrong: WrongRow[]; openId: string | null; loadingRecall: string | null
   recallMap: Record<string, RecallData | null>; onToggle: (id: string) => void
   onAwaken: (attemptId: string) => void
   onAskAi?: (ctx: string, defaultQ?: string, qid?: string) => void
+  onGoMap?: () => void
 }) {
   const groups: { key: string; label: string | null; items: WrongRow[] }[] = []
   for (const w of wrong) {
@@ -3493,6 +3585,17 @@ function WrongGroups({ wrong, openId, loadingRecall, recallMap, onToggle, onAwak
                             <BookOpenText size={13} />
                             {openId === w.attempt_id ? '收起错因图谱 · 记忆助记' : '看这张错题的图谱 & 临床助记'}
                           </button>
+                          {onGoMap && (
+                            <button
+                              type="button"
+                              onClick={onGoMap}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary-soft/60 px-3.5 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary hover:text-white"
+                              title="在全景知识图谱中定位该题所属药理章节与易混淆对"
+                            >
+                              <ShareNetwork size={13} weight="bold" />
+                              在全景图谱中溯源
+                            </button>
+                          )}
                           <button
                             onClick={() => onAwaken(w.attempt_id)}
                             className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-3.5 py-1.5 text-xs font-semibold text-amber-700 transition hover:bg-amber-500/20 dark:text-amber-300"
@@ -4261,7 +4364,7 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep, 
       <AnimatePresence mode="wait">
         {tikuFeedback && (
           <TikuFeedbackCard key={`tiku-${question.id}`} feedback={tikuFeedback.feedback}
-            isCorrect={tikuFeedback.is_correct} onExit={onExit} />
+            isCorrect={tikuFeedback.is_correct} question={question} onExit={onExit} onAskAi={onAskAi} />
         )}
         {diagnosis && (
           <DiagnosisPanel key={diagnosis.session_id}
@@ -4472,8 +4575,9 @@ function TrainingResult({ score, onExit }: { score: number; onExit: () => void }
 
 /* 题库物化题（无错因标注）的解析型反馈卡：答对/答错均即时展示教材解析。
    区别于种子域的错因诊断卡——不硬归因到四分类错因（诚实口径，见演示手册）。 */
-function TikuFeedbackCard({ feedback, isCorrect, onExit }: {
-  feedback: TikuFeedback; isCorrect: boolean; onExit: () => void
+function TikuFeedbackCard({ feedback, isCorrect, question, onExit, onAskAi }: {
+  feedback: TikuFeedback; isCorrect: boolean; question: Question; onExit: () => void
+  onAskAi?: (ctx: string, defaultQ?: string, qid?: string) => void
 }) {
   return (
     <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="mt-5 space-y-5">
@@ -4515,7 +4619,26 @@ function TikuFeedbackCard({ feedback, isCorrect, onExit }: {
               解析来源：{feedback.source}
             </p>
           )}
-          <button onClick={onExit} className="btn btn-primary mt-7">返回今日待办</button>
+          <div className="mt-7 flex flex-wrap items-center gap-3">
+            <button onClick={onExit} className="btn btn-primary">返回今日待办</button>
+            {onAskAi && !isCorrect && (
+              <button
+                type="button"
+                onClick={() => {
+                  const ctx = `题库考题：
+章节：${feedback.chapter_name || question.chapter_name || '药理学'}
+题目：${question.stem}
+解析依据：${feedback.analysis || '暂无详细文本'}
+出处：${feedback.source || '人卫第9版教材考纲'}`
+                  onAskAi(ctx, `关于该题考查的 ${feedback.chapter_name || '药理'} 考点，请老师帮我详细剖析核心药理机制与临床易混淆点。`, question.id)
+                }}
+                className="btn rounded-full border border-sky-500/40 bg-sky-500/10 px-4 py-2.5 text-xs font-semibold text-sky-700 transition hover:bg-sky-500/20 dark:text-sky-300 flex items-center gap-1.5"
+              >
+                <ChatCircleText size={15} weight="bold" className="text-sky-500" />
+                💬 针对此题向 AI 追问
+              </button>
+            )}
+          </div>
         </div>
       </motion.div>
     </motion.div>

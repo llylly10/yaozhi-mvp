@@ -55,7 +55,13 @@ export const WrongBookExportModal: React.FC<Props> = ({ userId, onClose }) => {
         console.error('Failed to export wrong book', err)
       })
       .finally(() => setLoading(false))
-  }, [userId])
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [userId, onClose])
 
   const filteredItems = (data?.items || []).filter((it) => {
     if (highRiskOnly) {

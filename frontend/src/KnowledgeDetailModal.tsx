@@ -43,10 +43,15 @@ export function KnowledgeDetailModal({
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
     return () => {
       cancelled = true
+      window.removeEventListener('keydown', onKey)
     }
-  }, [userId, chapterNo, pointName, domainId])
+  }, [userId, chapterNo, pointName, domainId, onClose])
 
   const handleAskTutor = () => {
     if (!data || !onAskAi) return
