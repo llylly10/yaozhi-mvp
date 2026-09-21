@@ -1,9 +1,11 @@
+import json
 import random
 import time
 import uuid
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Literal
 from sqlalchemy import delete, func, select
@@ -2285,11 +2287,12 @@ class QAIn(BaseModel):
     context: str | None = None
     question_id: str | None = None
     history: list[dict] | None = None
+    thinking: bool | None = True
 
 
 @router.post("/users/{user_id}/qa/ask")
 def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
-    """问 AI 单轮问答（支持结合错题/诊断卡上下文追问）。"""
+    """问 AI 单轮问答（支持结合错题/诊断卡上下文追问与思考链）。"""
     user = _active_user(user_id, db)
     if not user.consented:
         raise HTTPException(403, "请先完成知情同意（含学习数据采集同意）后再使用问 AI")
@@ -2303,7 +2306,7 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
         db.commit()
         return {"answer": "这个问题涉及具体用药决策，本系统不提供用药建议。你可以问我课程里的机制、分类与辨析（比如「阿托品为什么会散瞳」），用药问题请咨询医师或药师。",
                 "citations": [], "refused": True, "refuse_reason": "medication",
-                "provider": "rule", "note": "规则前置拒绝，未调用模型。"}
+                "provider": "rule", "thinking": "", "note": "规则前置拒绝，未调用模型。"}
 
     context_str = (body.context or "").strip()
     if body.question_id and not context_str:
@@ -2326,7 +2329,7 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
         db.commit()
         return {"answer": "课程库里暂时没找到相关内容（教材切片与题库解析均无命中）。换个问法试试（带上药物名或章节名），也可以先去「今日待办」学对应章节再来问。",
                 "citations": [], "refused": True, "refuse_reason": "no_evidence",
-                "provider": "retriever", "note": "无检索命中，未调用模型。"}
+                "provider": "retriever", "thinking": "", "note": "无检索命中，未调用模型。"}
     refs = [{"ref": f"[{i + 1}]", "source": h.source,
              "chapter": h.chapter, "book_page": h.book_page, "code": h.code,
              "label": h.label}
@@ -2339,6 +2342,7 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
         slices = f"【错题联动追问上下文】\n{context_str}\n\n【教材与题库切片】\n" + slices
 
     full_question = f"【针对错题与诊断追问】\n{q}" if context_str else q
+    enable_thinking = True if body.thinking is None else bool(body.thinking)
 
     # 3) 生成：有 key 走真模型；无 key/失败走 Mock 摘录
     try:
@@ -2353,18 +2357,18 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
         return {"answer": f"{hint}（演示模式：真模型未接入）课程库中找到 {len(refs)} 处相关知识依据（{cites}）。针对你的追问，请重点抓住该药所作用的受体亚型、产生的特异性效应及与其易混淆药物的核心辨析点。",
                 "citations": refs, "refused": False, "refuse_reason": None,
                 "follow_ups": ["该药作用的受体亚型与特异性效应是什么？", "在易混淆同类药物中，临床选择的关键指征有何不同？"],
-                "provider": "mock", "note": "计划态：真模型（GLM）接入后此条由模型结合错题背景 grounded 生成。"}
+                "provider": "mock", "thinking": "", "note": "计划态：真模型（GLM）接入后此条由模型结合错题背景 grounded 生成。"}
 
     from .llm.provider import ProviderError
     try:
-        r = provider.answer_with_refs(question=full_question, slices=slices, n_refs=len(refs), history=body.history)
+        r = provider.answer_with_refs(question=full_question, slices=slices, n_refs=len(refs), history=body.history, enable_thinking=enable_thinking)
     except ProviderError as e:
         audit(db, user_id, "qa.provider_error", f"user:{user_id}", q_len=len(q),
               reason=str(e)[:80])
         db.commit()
         return {"answer": "刚才模型开小差了（已自动降级）。你可以先去对应章节看看材料，稍后再问一次。",
                 "citations": refs, "refused": True, "refuse_reason": "provider_error",
-                "provider": "mock", "note": "真模型调用失败，已降级，引用为本次检索切片。"}
+                "provider": "mock", "thinking": "", "note": "真模型调用失败，已降级，引用为本次检索切片。"}
     cites = [refs[i - 1] for i in r["used_refs"] if 1 <= i <= len(refs)]
     audit(db, user_id, "qa.answered", f"user:{user_id}", q_len=len(q),
           answer_len=len(r["answer"]), used_refs=r["used_refs"], refused=r["refused"])
@@ -2374,7 +2378,111 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
             "refuse_reason": "no_grounding" if r["refused"] else None,
             "follow_ups": r.get("follow_ups") or ["该药作用的受体亚型与特异性效应是什么？", "在易混淆同类药物中，临床选择的关键指征有何不同？"],
             "provider": "external_api",
+            "thinking": r.get("thinking") or "",
             "note": "回答由课程资料切片（教材原文 + 题库题目解析）结合错题情境 grounded 生成，仅供学习参考，不保证完全正确；不提供用药建议。"}
+
+
+@router.post("/users/{user_id}/qa/stream")
+def qa_stream(user_id: str, body: QAIn, db: Session = Depends(get_db)):
+    """问 AI 流式问答接口（打字机流式输出思考链与回答正文）。"""
+    user = _active_user(user_id, db)
+    if not user.consented:
+        raise HTTPException(403, "请先完成知情同意（含学习数据采集同意）后再使用问 AI")
+    q = (body.question or "").strip()
+    if not q:
+        raise HTTPException(422, "问题不能为空")
+
+    # 1) 用药决策类：规则前置拒绝
+    if any(k in q for k in QA_REFUSE_MEDICATION):
+        audit(db, user_id, "qa.refused_medication", f"user:{user_id}", q_len=len(q))
+        db.commit()
+        def _refuse_gen():
+            data = json.dumps({
+                "type": "done",
+                "answer": "这个问题涉及具体用药决策，本系统不提供用药建议。你可以问我课程里的机制、分类与辨析（比如「阿托品为什么会散瞳」），用药问题请咨询医师或药师。",
+                "citations": [], "refused": True, "refuse_reason": "medication",
+                "provider": "rule", "thinking": "", "follow_ups": []
+            }, ensure_ascii=False)
+            yield f"data: {data}\n\n"
+        return StreamingResponse(_refuse_gen(), media_type="text/event-stream")
+
+    context_str = (body.context or "").strip()
+    if body.question_id and not context_str:
+        q_obj = db.get(Question, body.question_id)
+        if q_obj:
+            ev = db.execute(select(QuestionEvidence).where(
+                QuestionEvidence.question_id == q_obj.id,
+                QuestionEvidence.support_type == "解析")).scalar_one_or_none()
+            context_str = f"【关联原题】{q_obj.stem[:120]} (正确答案: {q_obj.answer})\n【解析要点】{ev.content_text[:120] if ev else ''}"
+
+    from .rag import retrieve_mixed
+    search_q = f"{q} {context_str[:60]}" if context_str else q
+    hits = retrieve_mixed(search_q, k=QA_TOP_K, db=db)
+    if not hits and context_str:
+        hits = retrieve_mixed(q, k=QA_TOP_K, db=db)
+
+    if not hits and not context_str:
+        audit(db, user_id, "qa.refused_no_evidence", f"user:{user_id}", q_len=len(q))
+        db.commit()
+        def _no_ev_gen():
+            data = json.dumps({
+                "type": "done",
+                "answer": "课程库里暂时没找到相关内容（教材切片与题库解析均无命中）。换个问法试试（带上药物名或章节名），也可以先去「今日待办」学对应章节再来问。",
+                "citations": [], "refused": True, "refuse_reason": "no_evidence",
+                "provider": "retriever", "thinking": "", "follow_ups": []
+            }, ensure_ascii=False)
+            yield f"data: {data}\n\n"
+        return StreamingResponse(_no_ev_gen(), media_type="text/event-stream")
+
+    refs = [{"ref": f"[{i + 1}]", "source": h.source,
+             "chapter": h.chapter, "book_page": h.book_page, "code": h.code,
+             "label": h.label}
+            for i, h in enumerate(hits)]
+    slices = "\n\n".join(
+        f"[{i + 1}]({h.label}) {h.text[:QA_SLICE_CHARS]}"
+        for i, h in enumerate(hits))
+
+    if context_str:
+        slices = f"【错题联动追问上下文】\n{context_str}\n\n【教材与题库切片】\n" + slices
+
+    full_question = f"【针对错题与诊断追问】\n{q}" if context_str else q
+    enable_thinking = True if body.thinking is None else bool(body.thinking)
+
+    def event_stream():
+        try:
+            from .llm.provider import ExternalApiProvider
+            provider = ExternalApiProvider()
+            for ev in provider.answer_with_refs_stream(
+                question=full_question, slices=slices, n_refs=len(refs),
+                history=body.history, enable_thinking=enable_thinking
+            ):
+                if ev.get("type") == "done":
+                    cites = [refs[i - 1] for i in ev.get("used_refs", []) if 1 <= i <= len(refs)]
+                    ev["citations"] = cites
+                    ev["provider"] = "external_api"
+                line = json.dumps(ev, ensure_ascii=False)
+                yield f"data: {line}\n\n"
+        except Exception as e:
+            err_ev = {
+                "type": "done",
+                "answer": "刚才模型开小差了（已自动降级）。你可以先去对应章节看看材料，稍后再试。",
+                "citations": refs,
+                "refused": True,
+                "provider": "mock",
+                "thinking": "",
+                "follow_ups": ["该药作用的受体亚型与特异性效应是什么？"]
+            }
+            yield f"data: {json.dumps(err_ev, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 def _404():

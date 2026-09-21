@@ -27,7 +27,7 @@ function transformBackendEvalReport(data: any): EvalReportData {
     run_id: data.run_id || `RUN-${(data.run_at || '').replace(/[- :]/g, '').slice(0, 14)}`,
     dataset_version: data.dataset_version || 'v1.0 (80题黄金保护测试集)',
     timestamp: data.timestamp || data.run_at || new Date().toLocaleString(),
-    provider: data.provider || (data.provider_mode === 'mock' ? '规则基线引擎 (Mock)' : '智谱 GLM-4-Flash'),
+    provider: data.provider || (data.provider_mode === 'mock' ? '规则基线引擎 (Mock)' : '通义千问 Qwen 3.7 Flash'),
     case_count: data.case_count ?? data.total_cases ?? 80,
     overall: {
       accuracy: data.overall?.accuracy ?? data.accuracy ?? 0,
@@ -150,12 +150,68 @@ export const api = {
 
   learningPlan: (userId: string) => fetch(`/api/users/${userId}/learning-plan`).then(handle),
 
-  qa: (userId: string, question: string, context?: string, questionId?: string, history?: { role: string; content: string }[]) =>
+  qa: (userId: string, question: string, context?: string, questionId?: string, history?: { role: string; content: string }[], thinking?: boolean) =>
     fetch(`/api/users/${userId}/qa/ask`, {
       method: 'POST',
       headers: jsonHeaders,
-      body: JSON.stringify({ question, context, question_id: questionId, history }),
+      body: JSON.stringify({ question, context, question_id: questionId, history, thinking }),
     }).then(handle),
+
+  qaStream: async (
+    userId: string,
+    question: string,
+    context?: string,
+    questionId?: string,
+    history?: { role: string; content: string }[],
+    thinking?: boolean,
+    onThinkingDelta?: (delta: string) => void,
+    onContentDelta?: (delta: string) => void,
+    onDone?: (meta: { answer: string; thinking: string; citations: any[]; follow_ups: string[]; refused: boolean; provider: string }) => void,
+    onError?: (err: string) => void
+  ) => {
+    try {
+      const resp = await fetch(`/api/users/${userId}/qa/stream`, {
+        method: 'POST',
+        headers: jsonHeaders,
+        body: JSON.stringify({ question, context, question_id: questionId, history, thinking }),
+      })
+      if (!resp.ok) {
+        throw new Error(`请求失败 (${resp.status})`)
+      }
+      const reader = resp.body?.getReader()
+      if (!reader) throw new Error('流式读取不可用')
+      const decoder = new TextDecoder('utf-8')
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith('data:')) continue
+          const rawJson = trimmed.replace(/^data:\s*/, '')
+          if (!rawJson) continue
+          try {
+            const ev = JSON.parse(rawJson)
+            if (ev.type === 'thinking' && onThinkingDelta) {
+              onThinkingDelta(ev.delta)
+            } else if (ev.type === 'content' && onContentDelta) {
+              onContentDelta(ev.delta)
+            } else if (ev.type === 'done' && onDone) {
+              onDone(ev)
+            }
+          } catch (err) {
+            console.error('Failed to parse SSE JSON', err, rawJson)
+          }
+        }
+      }
+    } catch (e) {
+      if (onError) onError(String(e))
+    }
+  },
 
   customQuizConfig: (userId: string) =>
     fetch(`/api/users/${userId}/custom-quiz/config`).then(handle),

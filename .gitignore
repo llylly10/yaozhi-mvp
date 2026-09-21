@@ -14,3 +14,6 @@ corpus/tools/shots/
 
 # 服务运行日志（uvicorn 等），仅本地保留
 *.log
+
+# 临时测试脚本
+scratch/

@@ -147,7 +147,7 @@ def start_session_tiku(db: Session, attempt: Attempt) -> DiagnosisSession | None
     if rationale:
         db.add(DiagnosisEvidence(
             session_id=session.id, evidence_type="作答理由",
-            source_ref="model:glm-5.2",
+            source_ref="model:qwen3.7-flash",
             content=rationale))
     # W3 RAG：题库题答错时按题干检索教材切片，补充"知识库切片"证据（讲解更贴近教材）
     for etype, ref, content in _rag_evidence(question, attempt):

@@ -6,6 +6,7 @@ import {
   BookmarkSimple, ArrowsLeftRight, Check
 } from '@phosphor-icons/react'
 import { api, type KnowledgePointDetail } from './api'
+import { highlightPharmacyKeywords } from './pharmacyHighlight'
 
 interface Props {
   userId: string
@@ -166,7 +167,7 @@ ${data.related_confusions.length > 0 ? `易混药物辨析：${data.related_conf
                     核心药理机制与器官效应
                   </h4>
                   <p className="text-xs sm:text-sm leading-relaxed text-ink whitespace-pre-line font-medium">
-                    {data.core_mechanism}
+                    {highlightPharmacyKeywords(data.core_mechanism)}
                   </p>
                 </div>
 
@@ -186,7 +187,7 @@ ${data.related_confusions.length > 0 ? `易混药物辨析：${data.related_conf
                           <span className="grid size-5 shrink-0 place-items-center rounded-full bg-gold-soft text-[10px] font-bold text-gold">
                             {i + 1}
                           </span>
-                          <span className="text-ink leading-relaxed">{app}</span>
+                          <span className="text-ink leading-relaxed font-medium">{highlightPharmacyKeywords(app)}</span>
                         </div>
                       ))}
                     </div>
@@ -200,8 +201,8 @@ ${data.related_confusions.length > 0 ? `易混药物辨析：${data.related_conf
                       <Warning size={15} weight="fill" />
                       不良反应与用药禁忌红线
                     </h4>
-                    <p className="text-xs sm:text-sm leading-relaxed text-amber-950 dark:text-amber-200">
-                      {data.cautions_and_adverse}
+                    <p className="text-xs sm:text-sm leading-relaxed text-amber-950 dark:text-amber-200 font-medium">
+                      {highlightPharmacyKeywords(data.cautions_and_adverse)}
                     </p>
                   </div>
                 )}
@@ -236,9 +237,9 @@ ${data.related_confusions.length > 0 ? `易混药物辨析：${data.related_conf
                             <span className="mx-2 text-ink-3">vs</span>
                             <span className="text-gold font-semibold">{cp.drug_b}</span>
                           </p>
-                          <p className="mt-1.5 text-xs leading-relaxed text-ink-2">
-                            {cp.distinction}
-                          </p>
+                          <div className="mt-1.5 text-xs leading-relaxed text-ink-2 pl-2 border-l-2 border-gold/50 font-medium">
+                            {highlightPharmacyKeywords(cp.distinction)}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -261,9 +262,9 @@ ${data.related_confusions.length > 0 ? `易混药物辨析：${data.related_conf
                           <p className="font-semibold text-primary mb-1">
                             {anc.source || `教材第 ${anc.chapter || chapterNo} 章 · P${anc.book_page || '—'}`}
                           </p>
-                          <p className="leading-relaxed text-ink-2 whitespace-pre-line">
-                            “{anc.text}”
-                          </p>
+                          <div className="leading-relaxed text-ink-2 whitespace-pre-line pl-2 border-l-2 border-primary/40 font-medium">
+                            “{highlightPharmacyKeywords(anc.text)}”
+                          </div>
                         </div>
                       ))}
                     </div>

@@ -61,7 +61,7 @@ def evaluate_benchmark(provider_mode: str = "mock", api_key: str | None = None) 
     results = []
 
     provider = None
-    if provider_mode in ("external_api", "glm"):
+    if provider_mode in ("external_api", "glm", "qwen"):
         try:
             from app.llm.provider import get_provider
             provider = get_provider()

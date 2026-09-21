@@ -59,6 +59,7 @@ if (Test-Port 8000) { Write-Warning "8000 端口已被占用，请先关闭旧�
 if (Test-Port 5173) { Write-Warning "5173 端口已被占用，请先关闭旧的前端进程" }
 
 # 1) 启动后端
+$env:YAOZHI_EXTERNAL_MODEL = "qwen3.7-flash"
 Start-Process -FilePath $Py -ArgumentList "-m","uvicorn","app.main:app","--host","127.0.0.1","--port","8000","--reload" `
     -WorkingDirectory $Backend -WindowStyle Normal | Out-Null
 Write-Host "后端启动中..."

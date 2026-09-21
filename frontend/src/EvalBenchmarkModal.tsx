@@ -176,7 +176,7 @@ export function EvalBenchmarkModal({ onClose }: Props) {
                       className="rounded-xl border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink shadow-2xs"
                     >
                       <option value="mock">规则基线引擎 (Mock)</option>
-                      <option value="glm">智谱 GLM-4-Flash</option>
+                      <option value="qwen">通义千问 Qwen 3.7 Flash</option>
                     </select>
                     <button
                       onClick={handleRunEval}

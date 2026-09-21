@@ -5,6 +5,7 @@ import {
   Sparkle, Heartbeat, Star, Check
 } from '@phosphor-icons/react'
 import { api } from './api'
+import { highlightPharmacyKeywords } from './pharmacyHighlight'
 
 interface ClinicalCaseSummary {
   id: string
@@ -207,9 +208,20 @@ export const ClinicalCaseView: React.FC<Props> = ({ userId, onAskAi, onBackToTod
           <h2 className="text-2xl font-bold tracking-tight text-white">
             临床处方审核与药物相互作用沙盘
           </h2>
-          <p className="mt-1 max-w-2xl text-xs text-slate-300 leading-relaxed">
-            药学专硕 / 执业药师高分综合大题情境实训：覆盖教材 8 大核心篇章（每篇精选 2 套真实文献案例），全真电子病历（EMR）+ 实验室生化排查 + 禁用慎用甄别 + 细胞受体机制推导 + 专家指南决策。
-          </p>
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
+            <span className="flex items-center gap-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 px-3 py-1 font-bold text-emerald-200">
+              🏛️ 人卫 9 版 8 篇 16 套文献案例
+            </span>
+            <span className="flex items-center gap-1.5 rounded-full bg-white/10 border border-white/20 px-3 py-1 font-semibold text-slate-200">
+              📋 全真 EMR 病历 + 生化排查
+            </span>
+            <span className="flex items-center gap-1.5 rounded-full bg-amber-500/20 border border-amber-500/40 px-3 py-1 font-bold text-amber-200">
+              ⚠️ 禁忌与相互作用精准辨析
+            </span>
+            <span className="flex items-center gap-1.5 rounded-full bg-white/10 border border-white/20 px-3 py-1 font-semibold text-slate-200">
+              🎯 专硕/执业药师处方决策实战
+            </span>
+          </div>
         </div>
 
         {/* Chapter Filter Pills */}
@@ -323,16 +335,16 @@ export const ClinicalCaseView: React.FC<Props> = ({ userId, onAskAi, onBackToTod
                 {/* Chief Complaint & History */}
                 <div>
                   <h4 className="font-bold text-ink-1 mb-1">【主诉】</h4>
-                  <p className="text-ink-2 pl-2 border-l-2 border-emerald-600/40">
-                    {caseDetail.patient.chief_complaint}
-                  </p>
+                  <div className="text-ink-2 pl-2 border-l-2 border-emerald-600/40 font-medium leading-relaxed">
+                    {highlightPharmacyKeywords(caseDetail.patient.chief_complaint)}
+                  </div>
                 </div>
 
                 <div>
                   <h4 className="font-bold text-ink-1 mb-1">【现病史与既往史】</h4>
-                  <p className="text-ink-2 pl-2 border-l-2 border-emerald-600/40">
-                    {caseDetail.patient.history}
-                  </p>
+                  <div className="text-ink-2 pl-2 border-l-2 border-emerald-600/40 font-medium leading-relaxed">
+                    {highlightPharmacyKeywords(caseDetail.patient.history)}
+                  </div>
                 </div>
 
                 {/* Lab Indicators Table */}
@@ -465,7 +477,7 @@ export const ClinicalCaseView: React.FC<Props> = ({ userId, onAskAi, onBackToTod
                 <div className="mt-3 space-y-2 text-xs">
                   <div className="rounded-lg bg-white/80 p-3 text-ink-2 shadow-sm border border-emerald-100">
                     <span className="font-bold text-emerald-900 block mb-1">【临床药师专家审核意见】：</span>
-                    <p className="leading-relaxed">{evalResult.pharmacist_summary}</p>
+                    <div className="leading-relaxed font-medium">{highlightPharmacyKeywords(evalResult.pharmacist_summary)}</div>
                   </div>
                   <div className="text-[11px] text-ink-3">
                     📖 指南与出处: {evalResult.textbook_reference}

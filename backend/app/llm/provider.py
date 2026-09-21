@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 
 from ..models import ModelRun
@@ -264,6 +265,8 @@ class ExternalApiProvider(_BaseProvider):
                     content = content[4:]
             result = json.loads(content)
             self._record_success()
+            if return_thinking:
+                return result, thinking
             return result
         except CircuitOpenError:
             raise
@@ -276,6 +279,189 @@ class ExternalApiProvider(_BaseProvider):
         except Exception as e:  # openai APIError / APIConnectionError / Timeout
             self._record_failure()
             raise ProviderError(f"外部模型调用失败：{type(e).__name__}: {e}") from e
+
+    # ---- 问 AI grounded 生成（课程问答：只依据给定切片回答，引用可验）----
+    def answer_with_refs(self, *, question: str, slices: str, n_refs: int,
+                         history: list[dict] | None = None,
+                         enable_thinking: bool = True) -> dict:
+        """slices: 已编号的资料串（如 "[1](第5章·p61) …… [2]……"）。
+        返回 {"answer": str, "used_refs": [1-based int], "refused": bool, "follow_ups": list[str], "thinking": str}。
+        失败抛 ProviderError，调用方降级 Mock 摘录（问答链路永不因模型崩溃）。"""
+        think_prompt = (
+            "\n9) 在最终输出规范JSON前，请在思维链中充分展开药理学临床逻辑推导（解析题干机制靶点，核对教材依据切片，对比排查干扰项与禁忌证）。"
+            if enable_thinking else ""
+        )
+        if enable_thinking:
+            length_rule = (
+                "4) 先给出清晰明确的核心结论，随后分层次深入剖析（结合受体靶点机制、生理通路效应、临床意义与考点辨析、典型禁忌防范），层次清晰，论述详实透彻（建议500~800字），用自己的话转述，不要单纯复制原文；\n"
+            )
+        else:
+            length_rule = (
+                "4) 先给一句话结论，再列 2-4 个核心要点，总长度≤400字，用自己的话转述，不要复制原文整句；\n"
+            )
+
+        system = (
+            "你是药知课程助教，只讲授《药理学》课程内容。规则：\n"
+            "1) 只能依据【课程资料切片】回答，切片没有的信息必须说不知道，不得编造；\n"
+            "2) 切片来源有两类：教材原文，或课程题库的题目及其解析（标注「题库」）；两者都是课程资料，同样可作为依据引用；\n"
+            "3) 可以对多条切片做归纳与对比（例如把分别提到两种药的切片放在一起比较），但每条结论都必须对应到切片，不得补充切片之外的药理事实；\n"
+            f"{length_rule}"
+            "5) 每条结论后标注引用序号如[1][2]，序号只能来自给定切片编号；\n"
+            "6) 涉及具体患者用药决策（吃不吃、剂量、换药停药等）一律拒绝并提示咨询医师/药师；\n"
+            "7) 生成 2~3 个苏格拉底式进阶追问启发问题（每题≤25字），引导学生继续深入思考药理机制或临床联系；\n"
+            '8) 只输出 JSON：{"answer": "...", "used_refs": [1], "refused": false, "follow_ups": ["追问1", "追问2"]}。\n'
+            '若切片不足以回答，输出 {"answer": "课程资料里没有足够依据，建议换个问法或先学对应章节。", '
+            '"used_refs": [], "refused": true, "follow_ups": []}。'
+            f"{think_prompt}"
+        )
+        user = f"【学生问题】{question}\n【课程资料切片】\n{slices}\n只输出 JSON。"
+        t0 = time.time()
+        tokens_budget = 4096 if enable_thinking else 1500
+        result, thinking = self._chat_json(
+            system, user, temperature=0.2, max_tokens=tokens_budget, history=history,
+            enable_thinking=enable_thinking, return_thinking=True
+        )
+        latency = int((time.time() - t0) * 1000)
+        answer = str(result.get("answer") or "")[:2000]
+        used = [i for i in (result.get("used_refs") or [])
+                if isinstance(i, int) and 1 <= i <= max(n_refs, 0)]
+        raw_follow_ups = result.get("follow_ups") or []
+        follow_ups = [str(f)[:40] for f in raw_follow_ups if isinstance(f, str) and f.strip()][:3]
+        out = {
+            "answer": answer,
+            "used_refs": used,
+            "refused": bool(result.get("refused")),
+            "follow_ups": follow_ups,
+            "thinking": thinking
+        }
+        self.log_run("qa_answer", {"payload": {"q_len": len(question),
+                                               "slices_len": len(slices),
+                                               "n_refs": n_refs,
+                                               "has_history": bool(history),
+                                               "enable_thinking": enable_thinking,
+                                               "thinking_len": len(thinking)},
+                                    "result": {"answer_len": len(answer),
+                                               "used_refs": used,
+                                               "refused": out["refused"],
+                                               "follow_ups_count": len(follow_ups)}}, latency)
+        return out
+
+    # ---- 问 AI 流式生成（实时输出思考链与回答正文，SSE 打字机）----
+    def answer_with_refs_stream(self, *, question: str, slices: str, n_refs: int,
+                                 history: list[dict] | None = None,
+                                 enable_thinking: bool = True):
+        """流式输出思考链与正文（SSE 友好）。
+        逐个 chunk yield {"type": "thinking"|"content", "delta": str}。
+        最后 yield {"type": "done", "used_refs": list[int], "follow_ups": list[str], "answer": str, "thinking": str}。
+        """
+        think_prompt = (
+            "【思维链要求】：在思考链中充分展开药理学临床逻辑推导（受体靶点、作用效应、机制比对、禁忌排查）。\n"
+            if enable_thinking else ""
+        )
+        if enable_thinking:
+            stream_length_rule = (
+                "3) 先给出清晰明确的核心结论，随后分层次深入剖析（结合受体靶点机制、生理通路效应、临床意义与考点辨析、典型禁忌防范），层次清晰，论述详实透彻（建议500~800字），用自己的话转述，不要单纯复制原文；\n"
+            )
+        else:
+            stream_length_rule = (
+                "3) 先给一句话结论，再列 2-4 个核心要点，总长度≤400字，用自己的话转述，不要复制原文整句；\n"
+            )
+
+        system = (
+            "你是药知课程助教，只讲授《药理学》课程内容。\n"
+            "规则：\n"
+            "1) 只能依据【课程资料切片】回答，切片没有的信息必须说不知道，不得编造；\n"
+            "2) 切片来源有教材原文与题库解析，两者均可作为依据引用；\n"
+            f"{stream_length_rule}"
+            "4) 每条结论后标注引用序号如[1][2]，序号只能来自给定切片编号；\n"
+            "5) 涉及具体患者用药决策（吃不吃、剂量、换药停药等）一律拒绝并提示咨询医师/药师；\n"
+            "6) 正式回答末尾另起一行输出启发追问：\n"
+            "【启发追问】\n"
+            "- 追问1（≤25字）\n"
+            "- 追问2（≤25字）\n"
+            f"{think_prompt}"
+        )
+        user = f"【学生问题】{question}\n【课程资料切片】\n{slices}"
+
+        client = self._get_client()
+        messages = [{"role": "system", "content": system}]
+        if history:
+            for h in history[-6:]:
+                r = h.get("role")
+                c = h.get("content")
+                if r in {"user", "assistant"} and c:
+                    messages.append({"role": r, "content": str(c)[:1000]})
+        messages.append({"role": "user", "content": user})
+
+        call_kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": 4096 if enable_thinking else 1500,
+            "stream": True,
+        }
+        if "dashscope" in self._base_url or "qwen" in self.model:
+            if not enable_thinking:
+                call_kwargs["extra_body"] = {"enable_thinking": False}
+            else:
+                call_kwargs["extra_body"] = {
+                    "enable_thinking": True,
+                    "thinking_budget": 1536
+                }
+
+        t0 = time.time()
+        response = client.chat.completions.create(**call_kwargs)
+        thinking_acc = []
+        content_acc = []
+
+        for chunk in response:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            rc = getattr(delta, "reasoning_content", None)
+            cnt = delta.content
+            if rc:
+                thinking_acc.append(rc)
+                yield {"type": "thinking", "delta": rc}
+            if cnt:
+                content_acc.append(cnt)
+                yield {"type": "content", "delta": cnt}
+
+        full_thinking = "".join(thinking_acc)
+        full_content = "".join(content_acc)
+        latency = int((time.time() - t0) * 1000)
+
+        # 解析引用与追问
+        refs = [int(x) for x in re.findall(r"\[(\d+)\]", full_content)]
+        used = [i for i in sorted(list(set(refs))) if 1 <= i <= max(n_refs, 0)]
+
+        follow_ups = []
+        clean_answer = full_content
+        if "【启发追问】" in full_content:
+            parts = full_content.split("【启发追问】")
+            clean_answer = parts[0].strip()
+            fu_text = parts[1].strip()
+            for line in fu_text.split("\n"):
+                line = line.strip().lstrip("-*•123456789.、 ")
+                if line and len(line) <= 40:
+                    follow_ups.append(line)
+
+        if not follow_ups:
+            follow_ups = ["该药作用的受体亚型与特异性效应是什么？", "在易混淆同类药物中，临床选择的关键指征有何不同？"]
+
+        yield {
+            "type": "done",
+            "answer": clean_answer,
+            "thinking": full_thinking,
+            "used_refs": used,
+            "follow_ups": follow_ups[:3],
+            "refused": False
+        }
+        self.log_run("qa_answer_stream", {"payload": {"q_len": len(question),
+                                                       "enable_thinking": enable_thinking,
+                                                       "thinking_len": len(full_thinking)},
+                                          "result": {"answer_len": len(clean_answer),
+                                                     "used_refs": used}}, latency)
 
     # ---- 归因真推理（评审意见③核心） ----
     def attribute_misconception(self, *, question_stem: str, options_text: str,

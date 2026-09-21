@@ -4,7 +4,8 @@ import { motion, AnimatePresence, MotionConfig, useReducedMotion, useScroll, use
 import {
   CheckCircle, XCircle, Warning, MagnifyingGlass, SkipForward, ArrowRight, ArrowUp, CaretDown, Pill,
   CalendarBlank, ClockCounterClockwise, SquaresFour, Gear, BookOpenText, ChatCircle, ChatCircleText,
-  Lightning, Hourglass, Sparkle, ShareNetwork, FirstAid, Printer, BookmarkSimple,
+  Lightning, Hourglass, Sparkle, ShareNetwork, FirstAid, Printer, BookmarkSimple, Brain,
+  Plus, Minus, ArrowsCounterClockwise, CornersOut, CornersIn, X, ArrowsLeftRight,
 } from '@phosphor-icons/react'
 import { api, type Diagnosis, type Question, type TikuFeedback, type RetestCapsuleData } from './api'
 import { EvalBenchmarkModal } from './EvalBenchmarkModal'
@@ -14,6 +15,9 @@ import { WrongBookExportModal } from './WrongBookExportModal'
 import { ClinicalCaseView } from './ClinicalCaseView'
 import { SettingsModal } from './SettingsModal'
 import { ToastProvider, useToast } from './Toast'
+import { highlightPharmacyKeywords, splitClauses, splitDistinction } from './pharmacyHighlight'
+import { CommandSearchModal } from './CommandSearchModal'
+import { PharmacologyRadar } from './PharmacologyRadar'
 
 /*
  * 药知 · 「现代药房 × 分子美学」
@@ -40,28 +44,11 @@ function genUUID(): string {
 }
 
 type Screen = 'register' | 'consent' | 'goal' | 'study' | 'assessment' | 'portrait' | 'list' | 'material' | 'flow' | 'profile' | 'qa' | 'custom_quiz' | 'clinical_cases'
-type View = 'todo' | 'material' | 'wrongbook' | 'profile' | 'qa' | 'custom_quiz' | 'clinical_cases'
-
-const STEPS = ['注册', '同意', '目标', '地图', '摸底', '画像', '路径', '学习', '练习', '诊断', '追问', '训练', '复测', '档案'] as const
+type View = 'study' | 'todo' | 'material' | 'wrongbook' | 'profile' | 'qa' | 'custom_quiz' | 'clinical_cases'
 
 const spring = { type: 'spring', stiffness: 120, damping: 20 } as const
 const Rconst = 52
 const Cconst = 2 * Math.PI * Rconst
-
-function stepIndex(screen: Screen, diagnosis: Diagnosis | null): number {
-  const map: Record<Screen, number> = {
-    register: 0, consent: 1, goal: 2, study: 3, assessment: 4, portrait: 5,
-    list: 6, flow: 8, profile: 13,
-    material: 7, qa: 6, custom_quiz: 6, clinical_cases: 6,
-  }
-  if (screen !== 'flow') return map[screen]
-  if (!diagnosis) return 8
-  if (diagnosis.state === 'diagnosed') return 9
-  if (diagnosis.state === 'followup_required') return 10
-  if (diagnosis.state === 'training') return 11
-  if (diagnosis.state === 'retesting') return 12
-  return 8
-}
 
 export default function App() {
   return (
@@ -74,8 +61,9 @@ export default function App() {
 function AppInner() {
   const toast = useToast()
   const [userId, setUserId] = useState<string | null>(() => localStorage.getItem(USER_KEY))
-  const [screen, setScreen] = useState<Screen>(() => (localStorage.getItem(USER_KEY) ? 'list' : 'register'))
-  const [view, setView] = useState<View>('todo')
+  // 核心主入口：已登录用户默认直入「全景知识地图」大本营
+  const [screen, setScreen] = useState<Screen>(() => (localStorage.getItem(USER_KEY) ? 'study' : 'register'))
+  const [view, setView] = useState<View>('study')
   const [activeQuestion, setActiveQuestion] = useState<Question | null>(null)
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -85,14 +73,43 @@ function AppInner() {
   const [showEvalModal, setShowEvalModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [qaPrefill, setQaPrefill] = useState<{ context?: string; question?: string } | null>(null)
+  const [showCommandModal, setShowCommandModal] = useState(false)
 
-  // 主壳（可切换视图的页面：今日待办/错题本/问AI/档案/自适应组卷/临床沙盘），全屏子流程(材料/练习/onboarding)不显示底部导航
-  const isShell = screen === 'list' || screen === 'profile' || screen === 'qa' || screen === 'custom_quiz' || screen === 'clinical_cases'
-  const isDedicatedHub = screen === 'clinical_cases' || screen === 'custom_quiz' || screen === 'qa' || screen === 'profile'
+  // 全局快捷键 ⌘K / Ctrl+K 唤起药理指令控制台
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setShowCommandModal((prev) => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  // 主壳（可切换视图的页面：全景知识地图/今日待办/错题本/问AI/档案/自适应组卷/临床沙盘）
+  const isShell = screen === 'study' || screen === 'list' || screen === 'profile' || screen === 'qa' || screen === 'custom_quiz' || screen === 'clinical_cases'
+  const isDedicatedHub = screen === 'clinical_cases' || screen === 'custom_quiz' || screen === 'qa' || screen === 'profile' || screen === 'list'
+
   function goNav(v: View) {
     setError(null); setView(v)
-    setScreen(v === 'todo' ? 'list' : v === 'qa' ? 'qa' : v === 'custom_quiz' ? 'custom_quiz' : v === 'clinical_cases' ? 'clinical_cases' : 'profile')
+    if (v === 'study') {
+      setScreen('study')
+    } else if (v === 'todo') {
+      setScreen('list')
+    } else if (v === 'qa') {
+      setScreen('qa')
+    } else if (v === 'custom_quiz') {
+      setScreen('custom_quiz')
+    } else if (v === 'clinical_cases') {
+      setScreen('clinical_cases')
+    } else if (v === 'wrongbook') {
+      setScreen('profile')
+    } else if (v === 'profile') {
+      setScreen('profile')
+    }
     setActiveQuestion(null)
+    window.scrollTo(0, 0)
   }
 
   function handleAskAi(context: string, defaultQ?: string) {
@@ -115,9 +132,9 @@ function AppInner() {
     localStorage.setItem(USER_KEY, id)
     setUserId(id)
     if (consented) {
-      // 老用户重新登录：跳过知情同意，直接回到系统待办列表与学情全景
-      setScreen('list')
-      setView('todo')
+      // 老用户重新登录：跳过知情同意，直接直入「全景知识地图」核心主页
+      setScreen('study')
+      setView('study')
     } else {
       setScreen('consent')
     }
@@ -127,7 +144,7 @@ function AppInner() {
   }
   function logout() {
     localStorage.removeItem(USER_KEY)
-    setUserId(null); setScreen('register'); setActiveQuestion(null); setDiagnosis(null); setView('todo')
+    setUserId(null); setScreen('register'); setActiveQuestion(null); setDiagnosis(null); setView('study')
   }
 
   // 本地缓存的 userId 若在服务器已失效(演示库被重置/账号已撤回)，自动清缓存回落注册页，
@@ -140,8 +157,9 @@ function AppInner() {
     api.userExists(userId).then((ok) => { if (!ok) logout() }).catch(() => {})
   }, [userId])
 
-  const step = stepIndex(screen, diagnosis)
-  const inLearning = ['list', 'flow', 'profile', 'goal', 'study', 'assessment', 'portrait', 'material', 'qa'].includes(screen)
+  // 顶栏与侧边栏显示范围：仅在主学习壳与流转界面显示；onboarding(注册/知情同意/目标/摸底答题/摸底画像)保持纯净全屏引导，避免侧边栏干扰与误高亮
+  const showSidebar = ['study', 'list', 'flow', 'profile', 'material', 'qa', 'custom_quiz', 'clinical_cases'].includes(screen)
+  const inLearning = showSidebar
 
   // 聚光灯跟随：单次委托 pointermove 写 CSS 变量（--mx/--my），不进 React render，移动端安全
   useEffect(() => {
@@ -156,138 +174,140 @@ function AppInner() {
     return () => window.removeEventListener('pointermove', onMove)
   }, [])
 
-  // 顶部步骤轨点击跳转：注册/同意/目标/摸底/画像/路径/学习/练习/诊断/追问/训练/复测/档案
-  function goStep(i: number) {
-    setError(null)
-    if (i === 0) { setActiveQuestion(null); setView('todo'); setScreen('register'); window.scrollTo(0, 0); return }
-    if (!userId) return
-    if (i === 1) { setScreen('consent') }
-    else if (i === 2) { setActiveQuestion(null); setScreen('goal') }
-    else if (i === 3) { setActiveQuestion(null); setScreen('study') }
-    else if (i === 4) { setActiveQuestion(null); setDiagnosis(null); setScreen('assessment') }
-    else if (i === 5) { if (portrait) setScreen('portrait'); else setScreen('assessment') }
-    else if (i === 6) { setActiveQuestion(null); setView('todo'); setScreen('list') }
-    else if (i === 7) {
-      if (materialDomain) setScreen('material')
-      else { setView('todo'); setScreen('list') }
-    } else if (i >= 8 && i <= 12) {
-      if (activeQuestion) setScreen('flow')
-      else { setView('todo'); setScreen('list') }
-    } else if (i === 13) { setActiveQuestion(null); setView('profile'); setScreen('profile') }
-    window.scrollTo(0, 0)
-  }
-  function stepHint(i: number): string {
-    if (i === 0) return '去注册 / 登录'
-    if (!userId) return '请先登录'
-    const hints: Record<number, string> = {
-      1: '去知情同意', 2: '去学习目标', 3: '去学习地图（知识图谱）', 4: '去摸底测试',
-      5: portrait ? '去摸底画像' : '完成摸底后可看画像',
-      6: '去今日待办（学习路径）', 7: materialDomain ? '去学习材料' : '去今日待办选一节学习材料',
-      8: activeQuestion ? '去练习作答' : '去今日待办选一题开始练习',
-      9: activeQuestion ? '去诊断结论' : '去今日待办选一题进入诊断',
-      10: activeQuestion ? '去追问诊断' : '去今日待办选一题进入追问',
-      11: activeQuestion ? '去靶向训练' : '去今日待办选一题进入训练',
-      12: activeQuestion ? '去迁移复测' : '去今日待办选一题进入复测',
-      13: '去学习档案',
-    }
-    return hints[i] ?? ''
-  }
-
   return (
     <MotionConfig reducedMotion="user">
     <div className="relative min-h-[100dvh]">
       <div className="ambient" aria-hidden />
       <MolField />
 
-      {/* 顶栏品牌 + 通栏步骤轨 */}
+      {/* 顶栏品牌与极简导航（突出全景地图核心主线与备考目标） */}
       {inLearning && (
-        <div className="sticky top-0 z-30">
-          <div className="glass border-x-0 border-t-0 !rounded-none px-5 pt-2 pb-1">
-            <div className="mx-auto flex w-full max-w-[1140px] items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="grid size-7 place-items-center rounded-lg bg-primary text-white"><Pill size={14} weight="fill" /></span>
-                <span className="font-serif text-[15px] font-bold">药知</span>
-                <span className="rounded-full border border-gold/40 bg-gold-soft px-2 py-0.5 text-[10.5px] font-semibold text-gold">v1.0</span>
+        <header className="sticky top-0 z-30 glass border-x-0 border-t-0 !rounded-none px-5 py-2.5 backdrop-blur-md">
+          <div className={`mx-auto flex w-full ${screen === 'study' ? 'max-w-[1560px] xl:max-w-[1640px]' : 'max-w-[1240px]'} items-center justify-between transition-all duration-300`}>
+            {/* 左侧：Logo + 药知 + 备考目标胶囊 */}
+            <div className="flex items-center gap-3">
+              <div
+                className="flex items-center gap-2 cursor-pointer select-none"
+                onClick={() => goNav('study')}
+                title="返回全景知识地图首页"
+              >
+                <span className="grid size-8 place-items-center rounded-xl bg-gradient-to-br from-primary to-primary-focus text-white shadow-sm shadow-primary/25">
+                  <Pill size={16} weight="fill" />
+                </span>
+                <span className="font-serif text-[16px] font-bold text-ink">药知</span>
+                <span className="rounded-full border border-gold/40 bg-gold-soft px-2 py-0.5 text-[10px] font-semibold text-gold">v1.0</span>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setShowEvalModal(true)}
-                  className="btn flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary-soft/70 px-3 py-1 text-xs font-semibold text-primary shadow-xs transition hover:bg-primary-soft hover:shadow-sm"
-                  title="查看错因诊断保护测试集三级红线门禁与混淆矩阵"
-                >
-                  <Sparkle size={13} weight="fill" />
-                  算法评测与门禁
-                </button>
-                <button onClick={logout} className="btn rounded-full px-3 py-1 text-xs text-ink-3 hover:bg-paper-2 hover:text-ink">退出账号</button>
+              <div
+                onClick={() => setScreen('goal')}
+                className="hidden sm:flex items-center gap-1.5 rounded-full border border-line bg-paper-1/70 px-2.5 py-1 text-xs text-ink-2 hover:border-primary/40 cursor-pointer transition"
+                title="点击修改备考目标"
+              >
+                <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span>备考目标：<strong className="font-medium text-ink">{goal || '执业西药师'}</strong></span>
+              </div>
+              {/* 实时遥测引擎指示灯 */}
+              <div
+                className="hidden md:flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-50/70 px-2.5 py-1 text-[11px] text-emerald-800"
+                title="BKT 认知状态追踪引擎持续在线"
+              >
+                <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="font-semibold">BKT 在线 · 18ms</span>
+              </div>
+              {/* 考期倒计时 */}
+              <div className="hidden xl:flex items-center gap-1 rounded-full border border-amber-500/25 bg-amber-50/70 px-2.5 py-1 text-[11px] font-semibold text-amber-900">
+                <ClockCounterClockwise size={12} className="text-amber-600" />
+                <span>执考倒计：<strong>D-38</strong></span>
               </div>
             </div>
-            {isDedicatedHub ? (
-              <div className="mx-auto flex w-full max-w-[1140px] items-center justify-between py-2 text-xs">
-                <div className="flex items-center gap-2 text-ink-2">
-                  <span className="text-ink-3">拓展学习</span>
-                  <span className="text-line text-[10px]">▸</span>
-                  <span className="font-semibold text-ink flex items-center gap-1.5">
-                    {screen === 'clinical_cases' && (
-                      <><FirstAid size={14} className="text-rose-600" /> 真实临床处方与病例沙盘 · 16套权威住院病历审核</>
-                    )}
-                    {screen === 'custom_quiz' && (
-                      <><BookOpenText size={14} className="text-primary" /> 全题库自适应出卷与模考 · 723题覆盖与BKT动态组卷</>
-                    )}
-                    {screen === 'qa' && (
-                      <><ChatCircle size={14} className="text-sky-600" /> 药学助手 · 问 AI · 人卫9版教材全文与题库解析双路检索</>
-                    )}
-                    {screen === 'profile' && view === 'wrongbook' && (
-                      <><ClockCounterClockwise size={14} className="text-amber-600" /> 错题本 · 四分类归档与艾宾浩斯抗遗忘小册导出</>
-                    )}
-                    {screen === 'profile' && view === 'profile' && (
-                      <><SquaresFour size={14} className="text-primary" /> 学习档案 · 贝叶斯掌握度雷达与成长轨迹</>
-                    )}
-                  </span>
-                </div>
+
+            {/* 中间：智能流转轨（做题时显示 4 步轨迹；子模块显示当前模块与返回知识地图按钮；全景知识地图主页保持呼吸感） */}
+            {screen === 'flow' ? (
+              <div className="flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary-soft/60 px-3.5 py-1 text-xs text-primary font-medium shadow-xs">
+                <span className="flex items-center gap-1">
+                  <span className={`size-1.5 rounded-full ${!diagnosis ? 'bg-primary ring-2 ring-primary/30' : 'bg-primary/50'}`} />
+                  ① 作答
+                </span>
+                <span className="text-[10px] text-primary/40">▸</span>
+                <span className="flex items-center gap-1">
+                  <span className={`size-1.5 rounded-full ${diagnosis?.state === 'diagnosed' || diagnosis?.state === 'followup_required' ? 'bg-primary ring-2 ring-primary/30' : 'bg-primary/50'}`} />
+                  ② 诊断
+                </span>
+                <span className="text-[10px] text-primary/40">▸</span>
+                <span className="flex items-center gap-1">
+                  <span className={`size-1.5 rounded-full ${diagnosis?.state === 'training' ? 'bg-primary ring-2 ring-primary/30' : 'bg-primary/50'}`} />
+                  ③ 强化
+                </span>
+                <span className="text-[10px] text-primary/40">▸</span>
+                <span className="flex items-center gap-1">
+                  <span className={`size-1.5 rounded-full ${diagnosis?.state === 'retesting' ? 'bg-primary ring-2 ring-primary/30' : 'bg-primary/50'}`} />
+                  ④ 复测
+                </span>
+              </div>
+            ) : screen !== 'study' && isDedicatedHub ? (
+              <div className="hidden md:flex items-center gap-2 text-xs text-ink-2">
+                <span className="font-semibold text-ink flex items-center gap-1.5">
+                  {screen === 'list' && <><CalendarBlank size={14} className="text-primary" /> 今日待办 · 自适应任务路径</>}
+                  {screen === 'clinical_cases' && <><FirstAid size={14} className="text-rose-600" /> 临床病例沙盘 · 16套权威住院病历审核</>}
+                  {screen === 'custom_quiz' && <><BookOpenText size={14} className="text-primary" /> 自适应模考 · 723题动态组卷</>}
+                  {screen === 'qa' && <><ChatCircle size={14} className="text-sky-600" /> 问 AI 药学助教 · 双路检索与思考链</>}
+                  {screen === 'profile' && view === 'wrongbook' && <><ClockCounterClockwise size={14} className="text-amber-600" /> 错题本 · 艾宾浩斯抗遗忘小册</>}
+                  {screen === 'profile' && view === 'profile' && <><SquaresFour size={14} className="text-primary" /> 学习档案 · 贝叶斯能力全景画像</>}
+                </span>
                 <button
-                  onClick={() => goNav('todo')}
-                  className="btn flex items-center gap-1 rounded-full border border-line bg-white/80 px-3 py-1 text-xs text-ink-2 hover:border-primary hover:text-primary transition shadow-xs cursor-pointer"
+                  onClick={() => goNav('study')}
+                  className="ml-2 flex items-center gap-1 rounded-full border border-line bg-paper px-2.5 py-0.5 text-[11px] text-ink-3 hover:border-primary hover:text-primary transition cursor-pointer"
+                  title="返回全景知识地图首页"
                 >
-                  <ArrowRight size={12} className="rotate-180" />
-                  返回今日待办
+                  <ArrowRight size={11} className="rotate-180" />
+                  返回知识地图
                 </button>
               </div>
-            ) : (
-              <div className="mx-auto flex w-full max-w-[1140px] flex-nowrap items-center gap-0.5 overflow-x-auto py-1.5
-                [mask-image:linear-gradient(90deg,transparent,#000_28px,#000_calc(100%-28px),transparent)]">
-                {STEPS.map((s, i) => {
-                  const enabled = i === 0 || !!userId
-                  return (
-                    <span key={s} className="flex flex-none items-center">
-                      {i > 0 && <span className="mx-0.5 text-[9px] text-line">▸</span>}
-                      <button onClick={() => goStep(i)} disabled={!enabled} title={stepHint(i)}
-                        className={`relative flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] transition-colors
-                          ${i === step ? 'font-semibold text-white' : 'text-ink-3 hover:bg-paper-2 hover:text-primary'}
-                          ${!enabled ? 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-ink-3' : ''}`}>
-                        {i === step && (
-                          <motion.span layoutId="step-pill" transition={spring}
-                            className="absolute inset-0 rounded-full bg-primary" aria-hidden />
-                        )}
-                        <span className={`relative z-10 size-1.5 rounded-full ${i <= step ? (i === step ? 'bg-white' : 'bg-primary') : 'bg-line'}`} />
-                        <span className="relative z-10">{s}</span>
-                      </button>
-                    </span>
-                  )
-                })}
-              </div>
-            )}
+            ) : null}
+
+            {/* 右侧：⌘K 全局速查 + 算法评测 + 设置 + 退出 */}
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <button
+                onClick={() => setShowCommandModal(true)}
+                className="hidden lg:flex items-center gap-2 rounded-xl border border-line bg-white/90 px-3 py-1 text-xs text-ink-3 hover:border-primary/50 hover:bg-white hover:text-ink transition cursor-pointer shadow-2xs"
+                title="快捷键 ⌘K / Ctrl+K 全局药理指令检索"
+              >
+                <MagnifyingGlass size={13} className="text-primary" />
+                <span className="text-[11.5px] font-medium">速查药物/靶点...</span>
+                <kbd className="rounded bg-paper border border-line px-1.5 py-0.2 text-[10px] font-mono text-ink-3 font-semibold">⌘K</kbd>
+              </button>
+              <button
+                onClick={() => setShowEvalModal(true)}
+                className="btn flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary-soft/60 px-3 py-1 text-xs font-semibold text-primary transition hover:bg-primary-soft hover:shadow-xs"
+                title="查看错因诊断保护测试集三级红线门禁与混淆矩阵"
+              >
+                <Sparkle size={13} weight="fill" />
+                <span className="hidden sm:inline">算法评测</span>
+              </button>
+              <button
+                onClick={() => setShowSettingsModal(true)}
+                className="btn rounded-full p-1.5 text-ink-3 hover:bg-paper-2 hover:text-ink transition"
+                title="系统设置与隐私中心"
+              >
+                <Gear size={15} />
+              </button>
+              <button
+                onClick={logout}
+                className="btn rounded-full px-2.5 py-1 text-xs text-ink-3 hover:bg-paper-2 hover:text-ink transition"
+              >
+                退出
+              </button>
+            </div>
           </div>
-        </div>
+        </header>
       )}
 
-      <div className="relative z-10 mx-auto flex w-full max-w-[1140px] gap-6 px-5 pb-16 pt-6">
-        {/* 左侧学习栏 */}
-        {inLearning && (
+      <div className={`relative z-10 mx-auto flex w-full ${screen === 'study' ? 'max-w-[1560px] xl:max-w-[1640px]' : 'max-w-[1240px]'} gap-6 px-4 sm:px-6 pb-32 lg:pb-16 pt-6 transition-all duration-300`}>
+        {/* 左侧学习栏（在全景地图与主要学习场景呈现，onboarding流保持聚焦无侧栏） */}
+        {showSidebar && (
           <Sidebar
             view={view}
             currentScreen={screen}
             onNav={goNav}
-            onGoMap={() => { setActiveQuestion(null); setScreen('study'); window.scrollTo(0, 0); }}
             onOpenSettings={() => setShowSettingsModal(true)}
           />
         )}
@@ -299,15 +319,17 @@ function AppInner() {
             {screen === 'register' && <Welcome key="register" onRegistered={onRegistered} onError={setError} onOpenEval={() => setShowEvalModal(true)} />}
             {screen === 'consent' && userId && <Consent key="consent" userId={userId} onConsented={onConsented} onBack={() => setScreen('register')} onError={setError} />}
             {screen === 'goal' && (
-              <GoalPicker key="goal" goal={goal}
-                onNext={(g) => { setGoal(g); setScreen('study') }}
-                onBack={() => setScreen('consent')} />
+              <GoalPicker key="goal" goal={goal} isSubPage={Boolean(userId)}
+                onNext={(g) => { setGoal(g); setScreen('study'); setView('study') }}
+                onBack={() => setScreen(userId ? 'study' : 'consent')} />
             )}
             {screen === 'study' && userId && (
               <StudyMapOnboard key="study" userId={userId} goal={goal} onError={setError}
                 onProceed={() => setScreen('assessment')}
                 onSkip={() => setScreen('assessment')}
                 onBack={() => setScreen('goal')}
+                onGoTodo={() => goNav('todo')}
+                onGoQuiz={() => goNav('custom_quiz')}
                 onAskAi={handleAskAi} />
             )}
             {screen === 'assessment' && userId && (
@@ -317,7 +339,7 @@ function AppInner() {
             )}
             {screen === 'portrait' && portrait && (
               <Portrait key="portrait" result={portrait}
-                onEnter={() => { setError(null); setScreen('list'); setView('todo') }}
+                onEnter={() => { setError(null); setScreen('study'); setView('study') }}
                 onBack={() => setScreen('study')} />
             )}
             {screen === 'list' && userId && view === 'todo' && (
@@ -339,7 +361,7 @@ function AppInner() {
                 onExit={() => { setScreen('list'); setActiveQuestion(null); setDiagnosis(null); setView('todo') }} />
             )}
             {screen === 'profile' && userId && view === 'profile' && (
-              <Profile key="profile" userId={userId} onGoTodo={() => goNav('todo')} />
+              <Profile key="profile" userId={userId} onGoTodo={() => goNav('todo')} onAskAi={handleAskAi} />
             )}
             {screen === 'profile' && userId && view === 'wrongbook' && (
               <WrongBook key="wrongbook" userId={userId} onGoTodo={() => goNav('todo')} onAskAi={handleAskAi} onGoMap={() => { setActiveQuestion(null); setScreen('study'); window.scrollTo(0, 0); }} />
@@ -358,15 +380,21 @@ function AppInner() {
         </div>
       </div>
 
-      {/* 移动端底部导航（仅主壳显示）+ 留白防遮挡 */}
+      {/* 移动端底部导航（仅主壳显示）+ 充足留白防遮挡 */}
       {isShell && (
         <>
-          <div className="h-20 lg:hidden" aria-hidden />
+          <div className="h-28 lg:hidden" aria-hidden />
           <MobileTab current={{ screen, view }} onNav={goNav} />
         </>
       )}
       <BackToTop />
       {showEvalModal && <EvalBenchmarkModal onClose={() => setShowEvalModal(false)} />}
+      <CommandSearchModal
+        isOpen={showCommandModal}
+        onClose={() => setShowCommandModal(false)}
+        onNavigate={(v) => goNav(v as View)}
+        onAskAi={handleAskAi}
+      />
       {showSettingsModal && (
         <SettingsModal
           open={showSettingsModal}
@@ -428,52 +456,60 @@ function MolField() {
 
 /* ---------- 左侧学习栏 ---------- */
 
-function Sidebar({ view, currentScreen, onNav, onGoMap, onOpenSettings }: {
-  view: View; currentScreen?: Screen; onNav: (v: View) => void; onGoMap?: () => void; onOpenSettings?: () => void
+function Sidebar({ view, currentScreen, onNav, onOpenSettings }: {
+  view: View; currentScreen?: Screen; onNav: (v: View) => void; onOpenSettings?: () => void
 }) {
-  const item = (v: View, label: string, icon: React.ReactNode, disabled = false) => (
-    <button key={v + label} disabled={disabled} onClick={() => onNav(v)}
-      className={`btn relative !justify-start w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm
-        ${!disabled && currentScreen !== 'study' && view === v ? 'font-semibold text-primary' : 'text-ink-2 hover:bg-paper-2'}
-        ${disabled ? 'opacity-45' : ''}`}>
-      {!disabled && currentScreen !== 'study' && view === v && (
+  const item = (v: View, label: string, icon: React.ReactNode, isActive: boolean) => (
+    <button key={v + label} onClick={() => onNav(v)}
+      className={`btn relative !justify-start w-full items-center gap-2.5 rounded-xl px-3.5 py-2 text-[13.5px] transition-all cursor-pointer
+        ${isActive ? 'font-bold text-primary' : 'font-medium text-ink-2 hover:bg-paper-2 hover:text-ink'}`}>
+      {isActive && (
         <motion.span layoutId="side-active" transition={spring}
-          className="absolute inset-0 rounded-xl bg-primary-soft" aria-hidden />
+          className="absolute inset-0 rounded-xl bg-primary-soft border border-primary/25 shadow-2xs" aria-hidden />
       )}
       <span className="relative z-10 flex items-center gap-2.5">{icon}{label}</span>
-      {disabled && <span className="relative z-10 ml-auto text-[10px] text-ink-3">待开放</span>}
     </button>
   )
   return (
-    <aside className="hidden w-[212px] flex-none lg:block">
-      <div className="glass liquid sticky top-[118px] space-y-5 rounded-[20px] p-3">
+    <aside className="hidden w-[205px] flex-none lg:block">
+      <div className="glass liquid sticky top-[68px] space-y-3.5 rounded-[22px] p-3 border border-line/60 shadow-xs">
         <div>
-          <p className="mb-1.5 px-3.5 text-[11px] font-semibold text-ink-3">学习</p>
-          {onGoMap && (
-            <button onClick={onGoMap}
-              className={`btn relative !justify-start w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm transition-colors mb-0.5 ${
-                currentScreen === 'study' ? 'font-semibold text-primary bg-primary-soft' : 'text-ink-2 hover:bg-paper-2'
-              }`}>
-              <ShareNetwork size={15} />全景学习地图
-            </button>
-          )}
-          {item('todo', '今日待办', <CalendarBlank size={15} />)}
-          {item('custom_quiz', '自适应组卷', <BookOpenText size={15} />)}
-          {item('clinical_cases', '临床沙盘', <FirstAid size={15} />)}
-          {item('wrongbook', '错题本', <ClockCounterClockwise size={15} />)}
-          {item('qa', '问AI', <ChatCircle size={15} />)}
+          <p className="mb-1.5 px-3 text-[11px] font-bold text-ink-3 uppercase tracking-wider">核心总览</p>
+          <div className="space-y-0.5">
+            {item('study', '全景知识地图', <ShareNetwork size={16} weight="bold" />, currentScreen === 'study')}
+          </div>
         </div>
-        <div>
-          <p className="mb-1.5 px-3.5 text-[11px] font-semibold text-ink-3">能力</p>
-          {item('profile', '学习档案', <SquaresFour size={15} />)}
+
+        <div className="border-t border-line/50 pt-3">
+          <p className="mb-1.5 px-3 text-[11px] font-bold text-ink-3 uppercase tracking-wider">日常学习</p>
+          <div className="space-y-0.5">
+            {item('todo', '今日待办', <CalendarBlank size={16} weight="bold" />, currentScreen === 'list' && view === 'todo')}
+            {item('wrongbook', '错题本', <ClockCounterClockwise size={16} weight="bold" />, currentScreen === 'profile' && view === 'wrongbook')}
+            {item('qa', '问AI 助教', <ChatCircle size={16} weight="bold" />, currentScreen === 'qa')}
+          </div>
         </div>
-        <div>
-          <p className="mb-1.5 px-3.5 text-[11px] font-semibold text-ink-3">账户</p>
+
+        <div className="border-t border-line/50 pt-3">
+          <p className="mb-1.5 px-3 text-[11px] font-bold text-ink-3 uppercase tracking-wider">实战进阶</p>
+          <div className="space-y-0.5">
+            {item('clinical_cases', '临床沙盘', <FirstAid size={16} weight="bold" />, currentScreen === 'clinical_cases')}
+            {item('custom_quiz', '自适应模考', <BookOpenText size={16} weight="bold" />, currentScreen === 'custom_quiz')}
+          </div>
+        </div>
+
+        <div className="border-t border-line/50 pt-3">
+          <p className="mb-1.5 px-3 text-[11px] font-bold text-ink-3 uppercase tracking-wider">学情分析</p>
+          <div className="space-y-0.5">
+            {item('profile', '学习档案', <SquaresFour size={16} weight="bold" />, currentScreen === 'profile' && view === 'profile')}
+          </div>
+        </div>
+
+        <div className="border-t border-line/50 pt-2.5">
           <button
             onClick={onOpenSettings}
-            className="btn !justify-start w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm text-ink-2 hover:bg-paper-2 transition-colors cursor-pointer"
+            className="btn !justify-start w-full items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs text-ink-3 hover:bg-paper-2 hover:text-ink transition-colors cursor-pointer"
           >
-            <Gear size={15} />设置 · 隐私中心
+            <Gear size={14} />隐私与设置
           </button>
         </div>
       </div>
@@ -481,9 +517,12 @@ function Sidebar({ view, currentScreen, onNav, onGoMap, onOpenSettings }: {
   )
 }
 
-/* 移动端底部导航：窄屏(<lg)时左侧学习栏不可见，用底部 Tab 切换三大主入口 */
+/* 移动端底部导航：窄屏(<lg)时左侧学习栏不可见，用底部 Tab 切换入口 */
 function MobileTab({ current, onNav }: { current: { screen: Screen; view: View }; onNav: (v: View) => void }) {
-  const active = (screen: Screen, view: View) => current.screen === screen && current.view === view
+  const active = (screen: Screen, view: View) => {
+    if (screen === 'study') return current.screen === 'study'
+    return current.screen === screen && current.view === view
+  }
   const tab = (v: View, label: string, icon: React.ReactNode, screen: Screen, on = false) => (
     <button onClick={() => onNav(v)} disabled={on}
       className={`relative flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl py-1.5 text-[11px] font-medium transition-colors
@@ -501,6 +540,7 @@ function MobileTab({ current, onNav }: { current: { screen: Screen; view: View }
     <nav className="glass liquid fixed inset-x-3 bottom-3 z-40 rounded-[26px] px-2 pt-2 lg:hidden"
       style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
       <div className="mx-auto flex w-full max-w-[560px] items-center gap-1">
+        {tab('study', '知识地图', <ShareNetwork size={19} />, 'study')}
         {tab('todo', '今日待办', <CalendarBlank size={19} />, 'list')}
         {tab('clinical_cases', '临床沙盘', <FirstAid size={19} />, 'clinical_cases')}
         {tab('qa', '问AI', <ChatCircle size={19} />, 'qa')}
@@ -716,7 +756,9 @@ const GOALS = [
   ['备考执业药师', '对照执业药师考点组织练习，兼顾课程与考证。'],
 ] as const
 
-function GoalPicker({ onNext, goal, onBack }: { onNext: (g: string) => void; goal: string; onBack: () => void }) {
+function GoalPicker({ onNext, goal, onBack, isSubPage }: {
+  onNext: (g: string) => void; goal: string; onBack: () => void; isSubPage?: boolean
+}) {
   const [picked, setPicked] = useState<string>(goal)
   useEffect(() => { window.scrollTo(0, 0) }, [])
   return (
@@ -745,9 +787,11 @@ function GoalPicker({ onNext, goal, onBack }: { onNext: (g: string) => void; goa
       </div>
       <div className="mt-7 flex items-center gap-3">
         <button onClick={() => onNext(picked)} className="btn btn-primary">
-          保存目标，开启学习地图<ArrowRight size={15} weight="bold" />
+          保存目标，开启全景地图<ArrowRight size={15} weight="bold" />
         </button>
-        <button onClick={onBack} className="btn rounded-full border border-line bg-white px-5 py-3 text-sm font-medium text-ink-2 hover:bg-paper">上一步</button>
+        <button onClick={onBack} className="btn rounded-full border border-line bg-white px-5 py-3 text-sm font-medium text-ink-2 hover:bg-paper">
+          {isSubPage ? '返回全景地图' : '上一步'}
+        </button>
       </div>
     </motion.div>
   )
@@ -770,15 +814,239 @@ type StudyMapData = {
   note: string
 }
 
-/* 概览：课程知识图谱 = 全景交互星轨图谱 + 各药理系统分组清单 */
-function CourseGraph({ data, goal, onOpen, onSkip, onProceed }: {
-  data: StudyMapData; goal: string
+/* 随堂自测弹窗：3题速测，即刻判卷并点亮图谱节点，无需跳离全景驾驶舱 */
+function QuickQuizModal({
+  userId,
+  chapter,
+  onClose,
+  onSuccess,
+  onAskAi,
+}: {
+  userId: string
+  chapter: StudyNode
+  onClose: () => void
+  onSuccess: () => void
+  onAskAi?: (ctx: string, defaultQ?: string) => void
+}) {
+  const [quiz, setQuiz] = useState<{ id: string; code: string; stem: string; options: { key: string; text: string }[] }[] | null>(null)
+  const [picks, setPicks] = useState<Record<string, string>>({})
+  const [res, setRes] = useState<{ passed: boolean; correct: number; total: number } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [errMsg, setErrMsg] = useState<string | null>(null)
+
+  useEffect(() => {
+    setLoading(true)
+    setErrMsg(null)
+    setRes(null)
+    setPicks({})
+    api.studyQuiz(userId, chapter.domain_id)
+      .then((r) => {
+        setQuiz(r.questions ?? [])
+      })
+      .catch((e) => setErrMsg(String(e)))
+      .finally(() => setLoading(false))
+  }, [userId, chapter.domain_id])
+
+  async function handleSubmit() {
+    if (!quiz || busy) return
+    setBusy(true)
+    try {
+      const r = await api.submitStudyQuiz(userId, chapter.domain_id, picks)
+      setRes({ passed: r.passed, correct: r.correct, total: r.total })
+      if (r.passed) {
+        onSuccess()
+      }
+    } catch (e) {
+      setErrMsg(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const answeredCount = Object.keys(picks).length
+  const totalCount = quiz?.length || 0
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/60 p-4 backdrop-blur-sm">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="relative flex max-h-[90vh] w-full max-w-2xl flex-col rounded-3xl border border-line bg-white shadow-2xl overflow-hidden"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-line px-6 py-4 bg-paper-1/60">
+          <div className="flex items-center gap-3">
+            <span className="grid size-9 place-items-center rounded-xl bg-primary/10 text-primary">
+              <Pill size={20} weight="duotone" />
+            </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-primary-soft px-2 py-0.5 text-[10.5px] font-bold text-primary">
+                  随堂自测 · 3题速测
+                </span>
+                <span className="text-xs text-ink-3">第 {chapter.book_chapter_no ?? '—'} 章</span>
+              </div>
+              <h3 className="text-base font-black text-ink">{chapter.title}</h3>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="grid size-8 place-items-center rounded-full text-ink-3 hover:bg-paper-2 hover:text-ink transition cursor-pointer"
+          >
+            <X size={18} weight="bold" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {loading && (
+            <div className="space-y-4 py-8">
+              <div className="skeleton h-6 w-1/3" />
+              <div className="skeleton h-20 w-full" />
+              <div className="skeleton h-20 w-full" />
+            </div>
+          )}
+
+          {errMsg && (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-xs text-red-700">
+              {errMsg}
+            </div>
+          )}
+
+          {!loading && !errMsg && (!quiz || quiz.length === 0) && (
+            <div className="py-12 text-center text-ink-3">
+              <p className="text-sm font-semibold">该章节题库暂在编校中</p>
+              <p className="mt-1 text-xs">建议直接查阅微观图谱或呼叫 AI 助教导读</p>
+            </div>
+          )}
+
+          {!loading && quiz && quiz.length > 0 && !res && (
+            <div className="space-y-6">
+              {quiz.map((q, idx) => (
+                <div key={q.id || idx} className="rounded-2xl border border-line-2 bg-paper-1/40 p-4">
+                  <div className="flex items-start gap-2.5">
+                    <span className="grid size-6 flex-none place-items-center rounded-lg bg-primary/10 text-xs font-black text-primary">
+                      {idx + 1}
+                    </span>
+                    <p className="text-[13.5px] font-bold text-ink leading-relaxed">
+                      {q.stem}
+                    </p>
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    {q.options.map((opt) => {
+                      const isPicked = picks[q.id] === opt.key
+                      return (
+                        <button
+                          key={opt.key}
+                          onClick={() => setPicks((p) => ({ ...p, [q.id]: opt.key }))}
+                          className={`flex items-center gap-3 rounded-xl border px-3.5 py-2.5 text-left text-xs transition cursor-pointer ${
+                            isPicked
+                              ? 'border-primary bg-primary-soft/80 font-bold text-primary shadow-xs ring-1 ring-primary/40'
+                              : 'border-line bg-white text-ink-2 hover:border-primary/40 hover:bg-paper-1'
+                          }`}
+                        >
+                          <span
+                            className={`grid size-5.5 flex-none place-items-center rounded-full text-[11px] font-black ${
+                              isPicked ? 'bg-primary text-white' : 'bg-paper-2 text-ink-3'
+                            }`}
+                          >
+                            {opt.key}
+                          </span>
+                          <span className="leading-snug">{opt.text}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Quiz Result View */}
+          {res && (
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="py-6 text-center space-y-4">
+              <div className={`mx-auto grid size-16 place-items-center rounded-3xl ${res.passed ? 'bg-ok/10 text-ok' : 'bg-amber-500/10 text-amber-600'}`}>
+                {res.passed ? <CheckCircle size={36} weight="fill" /> : <Sparkle size={36} weight="fill" />}
+              </div>
+              <div>
+                <h4 className="text-xl font-black text-ink">
+                  {res.passed ? '🎉 恭喜！随堂自测达标' : '随堂自测未达标，再接再厉'}
+                </h4>
+                <p className="mt-1 text-xs text-ink-2">
+                  答对 <span className="font-bold text-ink">{res.correct}</span> / {res.total} 题
+                  {res.passed ? ' · 知识星轨对应章节已实时点亮达标勋章！' : ' · 建议对照微观图谱复习或请助教答疑'}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                {onAskAi && (
+                  <button
+                    onClick={() => {
+                      onClose()
+                      onAskAi(`药理学 - ${chapter.title}`, `老师，我在${chapter.title}随堂测中有错题，请帮我讲解本章常考混淆点与机制`)
+                    }}
+                    className="btn rounded-xl border border-primary/30 bg-primary-soft/70 px-4 py-2 text-xs font-bold text-primary hover:bg-primary-soft cursor-pointer"
+                  >
+                    <Sparkle size={13} weight="fill" />
+                    药学助教错因精讲
+                  </button>
+                )}
+                <button
+                  onClick={onClose}
+                  className="btn btn-primary rounded-xl px-5 py-2 text-xs font-bold shadow-sm cursor-pointer"
+                >
+                  返回全景驾驶舱
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </div>
+
+        {/* Footer */}
+        {!res && (
+          <div className="flex items-center justify-between border-t border-line px-6 py-3.5 bg-paper-1/40">
+            <div className="text-xs text-ink-3">
+              已作答 <span className="font-bold text-ink">{answeredCount}</span> / {totalCount} 题
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onClose}
+                className="btn rounded-xl border border-line bg-white px-3.5 py-1.5 text-xs font-medium text-ink-2 hover:border-primary/40 cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                disabled={answeredCount < totalCount || busy || totalCount === 0}
+                onClick={handleSubmit}
+                className="btn btn-primary rounded-xl px-5 py-2 text-xs font-bold shadow-sm disabled:opacity-40 cursor-pointer"
+              >
+                {busy ? '正在判卷与同步BKT...' : '提交判卷'}
+              </button>
+            </div>
+          </div>
+        )}
+      </motion.div>
+    </div>
+  )
+}
+
+/* 概览：药理全景交互驾驶舱 = 拓扑星轨主驾舱 + 实时智能监测巡航卡 */
+function CourseGraph({ data, goal, userId, onOpen, onSkip, onProceed, onGoTodo, onGoQuiz, onAskAi, onRefreshMap }: {
+  data: StudyMapData; goal: string; userId?: string
   onOpen: (n: StudyNode) => void; onSkip: () => void; onProceed: () => void
+  onGoTodo?: () => void; onGoQuiz?: () => void
+  onAskAi?: (ctx: string, defaultQ?: string) => void
+  onRefreshMap?: () => void
 }) {
   const [viewMode, setViewMode] = useState<'graph' | 'list'>('graph')
   const [selectedChapter, setSelectedChapter] = useState<StudyNode | null>(null)
+  const [activeQuizChapter, setActiveQuizChapter] = useState<StudyNode | null>(null)
 
   const doneCount = data.groups.reduce((acc, g) => acc + g.nodes.filter((n) => n.studied?.passed).length, 0)
+  const totalDomains = data.total_domains || 48
+  const overallPct = Math.round((doneCount / (totalDomains || 1)) * 100)
+  const seedCount = data.groups.reduce((acc, g) => acc + g.nodes.filter((n) => n.is_seed).length, 0)
 
   // 构建课程全景图谱的宏观节点与拓扑关系
   const { macroNodes, macroEdges, allChaptersMap } = useMemo(() => {
@@ -832,120 +1100,271 @@ function CourseGraph({ data, goal, onOpen, onSkip, onProceed }: {
     const done = n.studied?.passed
     const rec = data.recommended.includes(n.domain_id)
     const seed = n.is_seed
+    const isSelected = selectedChapter?.domain_id === n.domain_id
     return (
-      <button key={n.domain_id} onClick={() => onOpen(n)}
-        className={`group flex items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-[12px] transition
-          ${done ? 'border-ok/40 bg-[var(--color-ok-soft)]' : seed ? 'border-gold/50 bg-gold-soft/60' : rec ? 'border-primary/40 bg-primary-soft/60' : 'border-line-2 bg-white hover:border-ink-3/40'}`}>
-        <span className={`size-2 flex-none rounded-full ${done ? 'bg-ok' : seed ? 'bg-gold' : rec ? 'bg-primary' : 'bg-line'}`} />
-        <span className="leading-tight text-ink">{n.title}</span>
-        {done && <CheckCircle size={12} weight="fill" className="ml-auto flex-none text-ok" />}
-        {!done && seed && <span className="ml-auto flex-none rounded-full bg-gold px-1.5 text-[9px] font-semibold text-white">示范深挖</span>}
-        {!done && !seed && rec && <span className="ml-auto flex-none text-[9px] font-semibold text-primary">建议</span>}
+      <button key={n.domain_id} onClick={() => setSelectedChapter(n)}
+        className={`group flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs transition cursor-pointer
+          ${isSelected
+            ? 'ring-2 ring-primary border-primary bg-primary-soft/90 font-bold shadow-xs'
+            : done
+            ? 'border-line bg-white hover:border-emerald-500/50 hover:bg-emerald-50/20 text-ink shadow-2xs'
+            : seed
+            ? 'border-line bg-white hover:border-slate-400 hover:bg-slate-50 text-ink shadow-2xs'
+            : rec
+            ? 'border-line bg-white hover:border-primary/50 hover:bg-primary-soft/20 text-ink shadow-2xs'
+            : 'border-line bg-white hover:border-line hover:bg-paper-1/40 text-ink-2'}`}>
+        <span className={`size-2 flex-none rounded-full ${
+          done ? 'bg-emerald-600 ring-2 ring-emerald-200' :
+          seed ? 'bg-amber-600 ring-2 ring-amber-200' :
+          rec ? 'bg-primary ring-2 ring-primary/20' : 'bg-slate-300'
+        }`} />
+        <span className="leading-tight font-medium text-ink truncate">{n.title}</span>
+        {done && <CheckCircle size={13} weight="fill" className="ml-auto flex-none text-emerald-600" />}
+        {!done && seed && (
+          <span className="ml-auto flex-none rounded px-1.5 py-0.2 text-[9px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-200">
+            示范
+          </span>
+        )}
+        {!done && !seed && rec && (
+          <span className="ml-auto flex-none rounded px-1.5 py-0.2 text-[9px] font-mono font-bold bg-primary/10 text-primary border border-primary/20">
+            推荐
+          </span>
+        )}
       </button>
     )
   }
 
+  // 计算所选章节所属系统
+  const selectedGroup = useMemo(() => {
+    if (!selectedChapter) return null
+    return data.groups.find((g) => g.nodes.some((n) => n.domain_id === selectedChapter.domain_id)) ?? null
+  }, [data, selectedChapter])
+
   return (
     <motion.div key="study-overview" initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={spring}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      {/* 顶部临床驾驶舱状态控制台 */}
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-3 border-b border-line/70">
         <div>
-          <p className="text-xs font-semibold tracking-[0.18em] text-gold">目标驱动 · 学习地图</p>
-          <h2 className="display mt-1 text-[26px]">课程知识图谱</h2>
-          <p className="mt-2 max-w-[640px] text-sm leading-relaxed text-ink-2">
-            {goal}的下一站：按药理系统，把《药理学》拆成全景拓扑星轨。先在全景中了解章节脉络，点击章节可直接进入该章自学、查看知识图谱与完成随堂摸底。
+          <div className="flex items-center gap-2 text-[11px] font-mono tracking-wider text-ink-3 uppercase">
+            <span className="size-1.5 rounded-full bg-primary" />
+            <span>Pharmacology Topology OS</span>
+            <span>/</span>
+            <span className="text-primary font-bold">BKT Orbit Console</span>
+            <span className="hidden sm:inline text-ink-3">· 备考: {goal}</span>
+          </div>
+          <h2 className="display mt-1 text-2xl sm:text-3xl font-black text-ink tracking-tight">
+            全景药理知识拓扑星图
+          </h2>
+          <p className="mt-1 text-xs text-ink-3 max-w-xl">
+            6 大药理系统 · 35 个大纲教学单元 · 贝叶斯知识追踪 (BKT) 多维认知投影
           </p>
         </div>
-        <div className="rounded-2xl border border-line bg-white px-4 py-3 text-center">
-          <p className="display text-2xl text-primary">{doneCount}<span className="text-sm text-ink-3">/{data.total_domains}</span></p>
-          <p className="text-[11px] text-ink-3">已随堂达标</p>
-        </div>
-      </div>
 
-      {/* 视图切换与图例 */}
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
-        <div className="flex items-center gap-1 rounded-xl bg-paper-2 p-1">
+        {/* 视图切换：精密分段器 */}
+        <div className="flex items-center gap-1 rounded-xl bg-paper-2 p-1 border border-line flex-none self-start sm:self-auto">
           <button onClick={() => setViewMode('graph')}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${viewMode === 'graph' ? 'bg-white text-primary shadow-sm' : 'text-ink-3 hover:text-ink'}`}>
-            <Sparkle size={14} weight={viewMode === 'graph' ? 'fill' : 'regular'} />
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition cursor-pointer ${viewMode === 'graph' ? 'bg-white text-primary shadow-xs font-bold' : 'text-ink-3 hover:text-ink'}`}>
+            <Sparkle size={13} weight={viewMode === 'graph' ? 'fill' : 'regular'} />
             全景拓扑星轨
           </button>
           <button onClick={() => setViewMode('list')}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${viewMode === 'list' ? 'bg-white text-primary shadow-sm' : 'text-ink-3 hover:text-ink'}`}>
-            <SquaresFour size={14} weight={viewMode === 'list' ? 'fill' : 'regular'} />
-            系统章节清单 ({data.groups.length}个药理系统)
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition cursor-pointer ${viewMode === 'list' ? 'bg-white text-primary shadow-xs font-bold' : 'text-ink-3 hover:text-ink'}`}>
+            <SquaresFour size={13} weight={viewMode === 'list' ? 'fill' : 'regular'} />
+            六大系统清单 ({data.groups.length})
           </button>
-        </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-3">
-          <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-[#1d4ed8]" />药理系统</span>
-          <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-gold" />顾问深图谱（示范）</span>
-          <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-ok" />已达标</span>
-          <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-primary" />大纲章节</span>
         </div>
       </div>
 
       {/* 视图区 */}
       {viewMode === 'graph' ? (
-        <div className="mt-4 space-y-4">
-          <KnowledgeGraphView
-            title="药理学全景课程拓扑星轨"
-            nodes={macroNodes}
-            edges={macroEdges}
-            tabDefs={macroTabs}
-            height={440}
-            onNodeClick={handleNodeClick}
-          />
+        <div className="mt-5 grid grid-cols-1 lg:grid-cols-[1fr_360px] xl:grid-cols-[1fr_400px] gap-5 items-start">
+          {/* 左侧主图谱与操作区 */}
+          <div className="space-y-4 min-w-0">
+            <KnowledgeGraphView
+              title="药理学全景课程拓扑星轨"
+              nodes={macroNodes}
+              edges={macroEdges}
+              tabDefs={macroTabs}
+              height={typeof window !== 'undefined' && window.innerWidth < 768 ? 380 : 580}
+              onNodeClick={handleNodeClick}
+            />
 
-          {/* 选中章节卡片 */}
-          {selectedChapter ? (
-            <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-primary/40 bg-primary-soft/60 p-4 shadow-sm">
-              <div className="flex items-center gap-3">
-                <span className="grid size-9 place-items-center rounded-xl bg-primary text-white shadow">
-                  <Pill size={20} weight="fill" />
-                </span>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-bold text-ink">{selectedChapter.title}</p>
-                    {selectedChapter.is_seed ? (
-                      <span className="rounded-full bg-gold px-2 py-0.5 text-[10px] font-semibold text-white">专家示范深挖</span>
-                    ) : (
-                      <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[10px] text-ink-3">大纲标准章节</span>
-                    )}
-                    {selectedChapter.studied?.passed && (
-                      <span className="flex items-center gap-1 text-[11px] font-medium text-ok">
-                        <CheckCircle size={13} weight="fill" />随堂已达标 ({selectedChapter.studied.score}/{selectedChapter.studied.total})
-                      </span>
-                    )}
+            {/* 示范与推荐快捷通道 */}
+            <div className="rounded-2xl border border-line bg-white p-4 shadow-xs">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="grid size-5 place-items-center rounded-md bg-slate-100 text-slate-700 font-bold text-xs">★</span>
+                  <p className="text-xs font-bold text-ink">人卫九版示范深挖与高频考点章节</p>
+                </div>
+                <span className="text-[11px] font-mono text-ink-3">点击卡片聚焦右侧档案 ➜</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {data.groups.flatMap((g) => g.nodes).filter((n) => n.is_seed || data.recommended.includes(n.domain_id)).map((n) => node(n))}
+              </div>
+            </div>
+
+            {/* 底部功能导航操作栏 */}
+            <div className="flex flex-wrap items-center gap-3 pt-2">
+              {onGoTodo && (
+                <button onClick={onGoTodo} className="btn btn-primary !py-2.5 !px-5 !text-[13.5px] !font-bold rounded-xl shadow-xs hover:shadow-md transition cursor-pointer">
+                  进入今日自适应练习路径<ArrowRight size={15} weight="bold" />
+                </button>
+              )}
+              {onGoQuiz && (
+                <button onClick={onGoQuiz} className="btn rounded-xl border border-line bg-white px-4 py-2.5 text-xs font-semibold text-ink hover:border-primary hover:text-primary transition cursor-pointer">
+                  自适应模考组卷 (723题)
+                </button>
+              )}
+              <button onClick={onProceed} className="btn rounded-xl border border-line bg-white px-4 py-2.5 text-xs font-semibold text-ink-2 hover:border-primary hover:text-primary transition cursor-pointer">
+                全真摸底自测
+              </button>
+              <button onClick={onSkip} className="btn rounded-xl border border-transparent px-3 py-2 text-xs font-medium text-ink-3 hover:text-ink transition cursor-pointer">
+                跳过学习，直接摸底
+              </button>
+            </div>
+          </div>
+
+          {/* 右侧智能驾驶舱 HUD */}
+          <div className="space-y-4 lg:sticky lg:top-20">
+            {selectedChapter ? (
+              /* 状态 B：已选中章节临床档案 (Clinical Dossier) */
+              <motion.div
+                key={`inspector-${selectedChapter.domain_id}`}
+                initial={{ opacity: 0, scale: 0.98, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                className="rounded-2xl border border-line bg-white p-5 shadow-xs space-y-4"
+              >
+                {/* 顶栏：章节编码与关闭按钮 */}
+                <div className="flex items-start justify-between border-b border-line/60 pb-3">
+                  <div>
+                    <p className="text-[10px] font-mono tracking-wider text-ink-3 uppercase">
+                      CH.{selectedChapter.book_chapter_no ?? '00'} // {selectedGroup?.name ?? 'PHARMACOLOGY'}
+                    </p>
+                    <h3 className="text-lg font-bold text-ink leading-tight mt-0.5">{selectedChapter.title}</h3>
                   </div>
-                  <p className="text-xs text-ink-3 mt-0.5">支持查看本章知识关系图谱、易混药对辨析及随堂摸底</p>
+                  <button
+                    onClick={() => setSelectedChapter(null)}
+                    title="返回能力雷达概览"
+                    className="grid size-7 place-items-center rounded-lg text-ink-3 hover:bg-paper-2 hover:text-ink transition cursor-pointer"
+                  >
+                    <X size={15} weight="bold" />
+                  </button>
+                </div>
+
+                {/* 状态徽标 */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectedChapter.studied?.passed ? (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-xs font-mono font-bold text-emerald-800">
+                      <CheckCircle size={12} weight="fill" /> 随堂已达标 ({selectedChapter.studied.score}/{selectedChapter.studied.total})
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-paper border border-line px-2 py-0.5 text-xs font-mono text-ink-3">
+                      待随堂速测考核
+                    </span>
+                  )}
+                  {selectedChapter.is_seed && (
+                    <span className="rounded-md bg-slate-100 border border-slate-200 px-2 py-0.5 text-[10.5px] font-mono font-bold text-slate-700">
+                      人卫九版示范重点
+                    </span>
+                  )}
+                </div>
+
+                {/* 核心大纲与教学目标 */}
+                <div className="rounded-xl border border-line bg-paper-1/40 p-3 text-xs text-ink-2 space-y-1">
+                  <div className="flex items-center gap-1.5 font-bold text-ink">
+                    <BookOpenText size={13} className="text-primary" />
+                    <span>统编教材教学目标与考纲要点</span>
+                  </div>
+                  <p className="leading-relaxed text-[12px] text-ink-2">
+                    {selectedChapter.objective || '统编教材大纲核心章节，涵盖该类药物的作用机制、受体靶点效应、临床适应症及典型不良反应。'}
+                  </p>
+                </div>
+
+                {/* 章节操作流 */}
+                <div className="space-y-2 pt-1">
+                  {userId && (
+                    <button
+                      onClick={() => setActiveQuizChapter(selectedChapter)}
+                      className="w-full btn btn-primary font-bold py-2.5 px-4 rounded-xl shadow-xs hover:shadow-md transition flex items-center justify-center gap-2 cursor-pointer text-xs"
+                    >
+                      <Lightning size={14} weight="fill" />
+                      即刻随堂自测 (3题速测)
+                    </button>
+                  )}
+                  <button
+                    onClick={() => onOpen(selectedChapter)}
+                    className="w-full btn rounded-xl border border-line bg-white text-ink font-semibold py-2 px-4 hover:border-primary hover:text-primary transition flex items-center justify-center gap-1.5 cursor-pointer text-xs"
+                  >
+                    <BookOpenText size={13} />
+                    查看微观图谱与教学大纲 ➜
+                  </button>
+                  {onAskAi && (
+                    <button
+                      onClick={() => onAskAi(`药理学 - ${selectedChapter.title}`, `老师好，请为我系统梳理《${selectedChapter.title}》的核心考点、药效关系推导与常考易混药对。`)}
+                      className="w-full btn rounded-xl border border-transparent text-ink-3 hover:text-ink transition flex items-center justify-center gap-1.5 cursor-pointer text-xs"
+                    >
+                      <Sparkle size={12} />
+                      药学助教本章深度导学
+                    </button>
+                  )}
+                </div>
+              </motion.div>
+            ) : (
+              /* 状态 A：默认全域掌握度雷达与六大系统概览 */
+              <div className="space-y-4">
+                {/* 六维药理认知能力雷达图 */}
+                <PharmacologyRadar
+                  overallPct={overallPct}
+                  doneCount={doneCount}
+                  totalCount={totalDomains}
+                  seedCount={seedCount}
+                />
+
+                {/* 六大药理系统达标分解 */}
+                <div className="rounded-3xl border border-line bg-white p-5 shadow-xs space-y-3">
+                  <p className="text-xs font-black text-ink tracking-tight">
+                    六大药理系统掌握分解
+                  </p>
+                  <div className="space-y-2.5">
+                    {data.groups.map((g) => {
+                      const gDone = g.nodes.filter((n) => n.studied?.passed).length
+                      const gTotal = g.nodes.length
+                      const gPct = Math.round((gDone / (gTotal || 1)) * 100)
+                      return (
+                        <div
+                          key={g.key}
+                          onClick={() => {
+                            const firstSeed = g.nodes.find((n) => n.is_seed) || g.nodes[0]
+                            if (firstSeed) setSelectedChapter(firstSeed)
+                          }}
+                          className="group rounded-xl border border-line-2 bg-paper-1/40 p-2.5 hover:border-primary/40 hover:bg-primary-soft/30 transition cursor-pointer"
+                        >
+                          <div className="flex items-center justify-between text-xs mb-1.5">
+                            <span className="font-bold text-ink group-hover:text-primary transition">{g.name}</span>
+                            <span className="text-[11px] font-semibold text-ink-3">
+                              {gDone}/{gTotal} ({gPct}%)
+                            </span>
+                          </div>
+                          <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-primary to-emerald-500 transition-all duration-500"
+                              style={{ width: `${Math.max(gPct, 4)}%` }}
+                            />
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <p className="text-[11px] text-ink-3 text-center pt-1">
+                    💡 点击图谱中任意节点或上方系统，调取深入巡航卡
+                  </p>
                 </div>
               </div>
-              <button onClick={() => onOpen(selectedChapter)} className="btn btn-primary py-2 px-4 text-xs font-semibold shadow">
-                进入本章自学与随堂测<ArrowRight size={14} weight="bold" />
-              </button>
-            </motion.div>
-          ) : (
-            <div className="flex items-center gap-2 rounded-xl border border-line-2 bg-paper/50 px-4 py-2 text-xs text-ink-3">
-              <Sparkle size={14} className="text-primary flex-none" />
-              <span>提示：在上方全景图谱中点击任意「章节」节点，或切换系统标签聚焦相应分类，即可直接进入该章自学。</span>
-            </div>
-          )}
-
-          {/* 示范与推荐快捷通道 */}
-          <div className="rounded-2xl border border-line bg-white p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="capsule" />
-                <p className="text-xs font-semibold text-ink">示范深挖与建议先学（快捷通道）</p>
-              </div>
-              <span className="text-[11px] text-ink-3">点击任意卡片直接开启自学</span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {data.groups.flatMap((g) => g.nodes).filter((n) => n.is_seed || data.recommended.includes(n.domain_id)).map((n) => node(n))}
-            </div>
+            )}
           </div>
         </div>
       ) : (
+        /* 列表视图 */
         <div className="mt-6 space-y-4">
           {data.groups.map((g, gi) => {
             const gDone = g.nodes.filter((n) => n.studied?.passed).length
@@ -954,8 +1373,8 @@ function CourseGraph({ data, goal, onOpen, onSkip, onProceed }: {
                 transition={{ ...spring, delay: gi * 0.05 }} className="spot-card p-5">
                 <div className="mb-4 flex flex-wrap items-center gap-3">
                   <span className="capsule" />
-                  <p className="text-sm font-semibold">{g.name}</p>
-                  <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] text-ink-3">
+                  <p className="text-sm font-bold text-ink">{g.name}</p>
+                  <span className="rounded-full bg-paper-2 px-2.5 py-0.5 text-[11px] font-semibold text-ink-3">
                     {gDone}/{g.nodes.length} 达标
                   </span>
                 </div>
@@ -968,16 +1387,88 @@ function CourseGraph({ data, goal, onOpen, onSkip, onProceed }: {
         </div>
       )}
 
-      <div className="mt-7 flex flex-wrap items-center gap-3">
-        <button onClick={onProceed} className="btn btn-primary">
-          我准备好了，开始正式摸底<ArrowRight size={15} weight="bold" />
-        </button>
-        <button onClick={onSkip} className="btn rounded-full border border-line bg-white px-5 py-3 text-sm font-medium text-ink-2 hover:border-primary hover:text-primary">
-          跳过学习，直接摸底
-        </button>
-      </div>
+      {/* 随堂自测弹窗 */}
+      {activeQuizChapter && userId && (
+        <QuickQuizModal
+          userId={userId}
+          chapter={activeQuizChapter}
+          onClose={() => setActiveQuizChapter(null)}
+          onSuccess={() => {
+            onRefreshMap?.()
+          }}
+          onAskAi={onAskAi}
+        />
+      )}
+
       <p className="mt-4 text-xs text-ink-3">{data.note}</p>
     </motion.div>
+  )
+}
+
+/* 易混药对鉴别卡片：左右分栏对比呈现，确保两药机制各成连贯完整的句子 */
+function ConfusionPairCard({ p }: { p: { drug_a: string; drug_b: string; distinction: string; evidence?: { source?: string; book_page?: number; chapter?: string; text?: string } | null } }) {
+  const { partA, partB, single } = splitDistinction(p.distinction, p.drug_a, p.drug_b)
+
+  return (
+    <div className="rounded-2xl border border-line-2 bg-white/95 p-4 text-xs shadow-2xs hover:shadow-xs transition">
+      {/* 标题栏：药物 A VS 药物 B */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-2 pb-2.5 mb-3">
+        <div className="flex items-center gap-2">
+          <span className="rounded-xl bg-primary-soft/90 px-3 py-1 text-[12px] font-extrabold text-primary border border-primary/20">
+            💊 {p.drug_a}
+          </span>
+          <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[10px] font-black text-ink-3">
+            VS
+          </span>
+          <span className="rounded-xl bg-amber-50 px-3 py-1 text-[12px] font-extrabold text-amber-800 border border-amber-200">
+            💊 {p.drug_b}
+          </span>
+        </div>
+        <span className="text-[11px] font-semibold text-ink-3">常考机制对比</span>
+      </div>
+
+      {/* 对比主体：分栏对比，两句话各自独立完整 */}
+      {single ? (
+        <div className="rounded-xl bg-paper-1/50 p-3 leading-relaxed text-ink-2 font-medium">
+          {highlightPharmacyKeywords(single)}
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {/* 药 A 卡片 */}
+          <div className="rounded-xl border border-primary/20 bg-primary-soft/20 p-3.5 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center gap-1.5 font-bold text-primary mb-1.5 text-[12.5px]">
+                <span className="size-2 rounded-full bg-primary" />
+                <span>【{p.drug_a}】机制与临床特征</span>
+              </div>
+              <p className="text-xs leading-relaxed text-ink-2 font-medium">
+                {highlightPharmacyKeywords(partA)}
+              </p>
+            </div>
+          </div>
+
+          {/* 药 B 卡片 */}
+          <div className="rounded-xl border border-amber-300/50 bg-amber-50/40 p-3.5 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center gap-1.5 font-bold text-amber-800 mb-1.5 text-[12.5px]">
+                <span className="size-2 rounded-full bg-amber-600" />
+                <span>【{p.drug_b}】机制与临床特征</span>
+              </div>
+              <p className="text-xs leading-relaxed text-ink-2 font-medium">
+                {highlightPharmacyKeywords(partB)}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 教材权威依据 */}
+      {p.evidence && p.evidence.text && (
+        <div className="mt-3">
+          <EvidenceNote ev={p.evidence} />
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -1032,38 +1523,106 @@ function ChapterStudy({ userId, node, goal, onError, onDone, onAskAi }: {
 
         {detail?.source === 'seed' && (
           <div className="spot-card p-6">
-            <p className="mb-4 flex items-center gap-2 text-sm font-semibold"><span className="capsule gold" />顾问深图谱 · 药理推理链（六环）</p>
-            <div className="space-y-0">
-              {detail.graph.chain.map((c, i) => (
-                <div key={c.level} className="flex gap-3">
-                  <div className="flex flex-col items-center">
-                    <span className="grid size-7 flex-none place-items-center rounded-lg bg-primary-soft text-xs font-bold text-primary">L{c.level}</span>
-                    {i < detail.graph.chain.length - 1 && <span className="w-px flex-1 bg-line" />}
-                  </div>
-                  <div className="pb-4">
-                    <p className="text-[13px] font-semibold">{c.title}</p>
-                    <p className="mt-0.5 text-[12px] leading-relaxed text-ink-2">{c.summary}</p>
-                  </div>
-                </div>
-              ))}
+            <div className="mb-4 flex items-center justify-between">
+              <p className="flex items-center gap-2 text-sm font-black text-ink">
+                <span className="capsule gold" />
+                药理顾问深度推演链 · 六环递进结构
+              </p>
+              <span className="rounded-full bg-gold/15 border border-gold/30 px-2.5 py-0.5 text-[11px] font-bold text-amber-800">
+                ★ 专家精编考点链
+              </span>
             </div>
+
+            {/* 六环递进推演卡片 */}
+            <div className="space-y-3">
+              {detail.graph.chain.map((c, i) => {
+                const clauses = splitClauses(c.summary)
+                const levelColors = [
+                  'border-blue-300 bg-blue-50 text-blue-800',
+                  'border-cyan-300 bg-cyan-50 text-cyan-800',
+                  'border-sky-300 bg-sky-50 text-sky-800',
+                  'border-emerald-300 bg-emerald-50 text-emerald-800',
+                  'border-amber-300 bg-amber-50 text-amber-900',
+                  'border-rose-300 bg-rose-50 text-rose-800',
+                ]
+                const levelBadge = levelColors[c.level - 1] || 'border-primary/30 bg-primary-soft text-primary'
+
+                return (
+                  <div key={c.level} className="flex gap-3">
+                    <div className="flex flex-col items-center">
+                      <span className={`grid size-8 flex-none place-items-center rounded-xl border text-xs font-black shadow-2xs ${levelBadge}`}>
+                        L{c.level}
+                      </span>
+                      {i < detail.graph.chain.length - 1 && <span className="w-0.5 flex-1 bg-line-2 my-1" />}
+                    </div>
+                    <div className="flex-1 pb-2">
+                      <div className="rounded-2xl border border-line-2 bg-paper-1/40 hover:bg-paper-1/80 transition p-3.5 shadow-2xs">
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <p className="text-[13.5px] font-black text-ink">{c.title}</p>
+                          <span className="rounded-full bg-white px-2 py-0.5 text-[10.5px] font-bold text-ink-3 border border-line">
+                            第 {c.level} 环
+                          </span>
+                        </div>
+                        <div className="space-y-1.5">
+                          {clauses.length > 1 ? (
+                            clauses.map((clause, ci) => (
+                              <div key={ci} className="flex items-start gap-2 text-xs leading-relaxed text-ink-2 bg-white/85 rounded-xl p-2.5 border border-line-2 shadow-3xs">
+                                <span className="size-1.5 rounded-full bg-primary/70 mt-1.5 flex-none" />
+                                <div className="flex-1 font-medium">{highlightPharmacyKeywords(clause)}</div>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-xs leading-relaxed text-ink-2 bg-white/85 rounded-xl p-2.5 border border-line-2 font-medium shadow-3xs">
+                              {highlightPharmacyKeywords(c.summary)}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* 药效关系图谱与教材出处卡片 */}
             {detail.graph.relations.length > 0 && (
-              <>
-                <p className="mb-3 mt-5 text-sm font-semibold">药效关系（源—边→目标，含教材出处）</p>
+              <div className="mt-6 border-t border-dashed border-line pt-5">
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="text-sm font-black text-ink flex items-center gap-2">
+                    <ShareNetwork size={16} className="text-primary" />
+                    药效微观关系图谱（源—边→目标，含人卫教材精确出处）
+                  </p>
+                  <span className="text-[11px] text-ink-3">共 {detail.graph.relations.length} 条已审校药理关系</span>
+                </div>
                 <KnowledgeGraphView edges={detail.graph.relations} />
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
                   {detail.graph.relations.map((r, i) => (
-                    <div key={i} className="rounded-lg border border-line-2 bg-white px-2.5 py-2">
+                    <div key={i} className="rounded-2xl border border-line-2 bg-white p-3 shadow-2xs hover:border-primary/40 transition">
                       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
                         <NodeChip type={r.source.type} name={r.source.name} />
-                        <span className="rounded-full bg-paper-2 px-1.5 py-0.5 font-semibold text-ink-3">{r.edge}</span>
+                        <span className="rounded-full bg-paper-2 px-2 py-0.5 font-bold text-ink-3">{r.edge}</span>
                         <NodeChip type={r.target.type} name={r.target.name} />
                       </div>
                       <EvidenceNote ev={r.evidence ?? null} reviewStatus={r.review_status} />
                     </div>
                   ))}
                 </div>
-              </>
+              </div>
+            )}
+
+            {/* 种子域易混药物辨析 */}
+            {detail.graph.confusion && detail.graph.confusion.length > 0 && (
+              <div className="mt-6 border-t border-dashed border-line pt-5">
+                <p className="mb-3 text-sm font-black text-ink flex items-center gap-1.5">
+                  <ArrowsLeftRight size={15} weight="bold" className="text-primary" />
+                  本章易混药对鉴别与机制深度辨析
+                </p>
+                <div className="space-y-3">
+                  {detail.graph.confusion.map((p, i) => (
+                    <ConfusionPairCard key={i} p={p} />
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         )}
@@ -1178,14 +1737,13 @@ function ChapterStudy({ userId, node, goal, onError, onDone, onAskAi }: {
                 </div>
               )}
               {(detail.confusion ?? []).length > 0 && (
-                <div className="mt-4 space-y-2">
+                <div className="mt-5 border-t border-dashed border-line pt-4 space-y-3">
+                  <p className="text-xs font-bold text-ink flex items-center gap-1.5 mb-2">
+                    <ArrowsLeftRight size={14} className="text-primary" />
+                    高频常考易混药对机制辨析与鉴别
+                  </p>
                   {(detail.confusion ?? []).slice(0, 3).map((p, i) => (
-                    <div key={i} className="rounded-lg bg-paper px-3 py-2 text-[12px]">
-                      <span className="font-semibold text-primary">{p.drug_a}</span>
-                      <span className="mx-1.5 text-ink-3">vs</span>
-                      <span className="font-semibold text-gold">{p.drug_b}</span>
-                      <span className="ml-2 text-ink-2">{p.distinction}</span>
-                    </div>
+                    <ConfusionPairCard key={i} p={p} />
                   ))}
                 </div>
               )}
@@ -1257,9 +1815,10 @@ function ChapterStudy({ userId, node, goal, onError, onDone, onAskAi }: {
 }
 
 /* 学习地图编排：目标后进入；默认停在总览，点章节进学习，学完回总览再决定进摸底 */
-function StudyMapOnboard({ userId, goal, onError, onBack, onProceed, onSkip, onAskAi }: {
+function StudyMapOnboard({ userId, goal, onError, onBack, onProceed, onSkip, onGoTodo, onGoQuiz, onAskAi }: {
   userId: string; goal: string; onError: (m: string) => void
   onBack: () => void; onProceed: () => void; onSkip: () => void
+  onGoTodo?: () => void; onGoQuiz?: () => void
   onAskAi?: (ctx: string, defaultQ?: string) => void
 }) {
   const [map, setMap] = useState<StudyMapData | null>(null)
@@ -1291,7 +1850,7 @@ function StudyMapOnboard({ userId, goal, onError, onBack, onProceed, onSkip, onA
             <ArrowRight size={12} className="rotate-180" />返回学习地图
           </button>
           <button onClick={onBack} className="inline-flex flex-none items-center gap-1 rounded-full px-2.5 py-1 text-xs text-ink-3 hover:bg-paper-2 hover:text-ink-2">
-            <ArrowRight size={12} className="rotate-180" />上一步（改目标）
+            <ArrowRight size={12} className="rotate-180" />调整学习目标
           </button>
         </div>
         <ChapterStudy userId={userId} node={open} goal={goal} onError={onError}
@@ -1306,14 +1865,18 @@ function StudyMapOnboard({ userId, goal, onError, onBack, onProceed, onSkip, onA
 
   return (
     <motion.div key="study-overview" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      <div className="mb-4 flex items-center gap-2">
-        <button onClick={onBack} className="inline-flex flex-none items-center gap-1 rounded-full border border-line bg-white px-3 py-1.5 text-xs text-ink-2 hover:border-primary hover:text-primary">
-          <ArrowRight size={12} className="rotate-180" />上一步（改目标）
-        </button>
-      </div>
-      <CourseGraph data={map} goal={goal}
+      <CourseGraph
+        data={map}
+        goal={goal}
+        userId={userId}
         onOpen={(n) => { setOpenId(n.domain_id); setStudy('chapter') }}
-        onSkip={onSkip} onProceed={onProceed} />
+        onSkip={onSkip}
+        onProceed={onProceed}
+        onGoTodo={onGoTodo}
+        onGoQuiz={onGoQuiz}
+        onAskAi={onAskAi}
+        onRefreshMap={load}
+      />
     </motion.div>
   )
 }
@@ -2197,6 +2760,10 @@ type QAMsg = {
     source?: string; label?: string; code?: string }[]
   refused: boolean; provider: string; note?: string
   follow_ups?: string[]
+  thinking?: string
+  timestamp?: string
+  streaming?: boolean
+  streamPhase?: 'thinking' | 'content' | 'done'
 }
 
 const QA_EXAMPLES = [
@@ -2212,6 +2779,77 @@ const QA_SMART_SUGGESTIONS = [
   '💡 请结合人卫第9版教材，总结本题考查的核心受体通路与助记口诀',
 ]
 
+/* ---------- DeepSeek 风格可折叠思考链组件 ---------- */
+function ThinkingBox({ thinking, isStreaming }: { thinking: string; isStreaming?: boolean }) {
+  const [userExpanded, setUserExpanded] = useState<boolean | null>(null)
+  if (!thinking || !thinking.trim()) return null
+
+  // 流式推导中默认展开，推导完毕后默认折叠；用户一旦手动点击则遵从用户操作
+  const expanded = userExpanded !== null ? userExpanded : !!isStreaming
+  const charCount = thinking.trim().length
+
+  return (
+    <div className={`my-3 overflow-hidden rounded-xl border transition-all ${
+      isStreaming
+        ? 'border-indigo-300 bg-gradient-to-r from-indigo-50/90 to-purple-50/70 shadow-xs ring-1 ring-indigo-200/50'
+        : 'border-indigo-200/70 bg-gradient-to-r from-indigo-50/70 to-purple-50/40 shadow-2xs'
+    }`}>
+      <button
+        type="button"
+        onClick={() => setUserExpanded(!expanded)}
+        className="flex w-full items-center justify-between px-3.5 py-2.5 text-left text-xs font-medium text-indigo-950 transition hover:bg-indigo-100/50"
+      >
+        <div className="flex items-center gap-2">
+          <div className={`flex h-5 w-5 items-center justify-center rounded-full text-indigo-600 shadow-2xs ${
+            isStreaming ? 'bg-indigo-200 animate-pulse' : 'bg-indigo-100'
+          }`}>
+            <Brain size={13} weight="duotone" />
+          </div>
+          <span className="font-semibold text-indigo-900">
+            {isStreaming ? '正在深度思考推导中…' : '已深度思考'}
+          </span>
+          <span className="rounded-full bg-white/90 px-2 py-0.5 text-[10.5px] text-indigo-700/90 border border-indigo-200/70">
+            {charCount} 字临床推演
+          </span>
+          {isStreaming && (
+            <span className="hidden sm:inline-flex items-center gap-1 text-[11px] text-indigo-600 font-normal">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-indigo-500 animate-ping" />
+              实时推导中
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1 text-[11px] text-indigo-600 font-medium">
+          <span>{expanded ? '收起思考' : '展开推导'}</span>
+          <motion.div animate={{ rotate: expanded ? 180 : 0 }} transition={{ duration: 0.2 }}>
+            <CaretDown size={12} weight="bold" />
+          </motion.div>
+        </div>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: 'easeInOut' }}
+            className="overflow-hidden"
+          >
+            <div className="border-t border-indigo-100/80 bg-white/85 px-4 py-3.5 text-xs leading-relaxed">
+              <div className="border-l-2 border-indigo-400 pl-3 font-mono whitespace-pre-wrap selection:bg-indigo-100 text-slate-700 leading-relaxed text-[12px]">
+                {thinking.trim()}
+                {isStreaming && (
+                  <span className="inline-block w-1.5 h-3.5 ml-1 bg-indigo-600 align-middle animate-pulse" />
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
 function QAView({
   userId,
   onError,
@@ -2223,11 +2861,45 @@ function QAView({
   prefill?: { context?: string; question?: string } | null
   onClearPrefill?: () => void
 }) {
-  const [msgs, setMsgs] = useState<QAMsg[]>([])
+  const storageKey = `yaozhi_qa_msgs_${userId}`
+  const [msgs, setMsgs] = useState<QAMsg[]>(() => {
+    try {
+      const saved = localStorage.getItem(storageKey)
+      return saved ? JSON.parse(saved) : []
+    } catch {
+      return []
+    }
+  })
   const [input, setInput] = useState(prefill?.question || '')
   const [busy, setBusy] = useState(false)
+  const [enableThinking, setEnableThinking] = useState(true)
+
+  // 切换页面或刷新自动保留对话记录
+  useEffect(() => {
+    try {
+      const cleaned = msgs.map((m) => ({ ...m, streaming: false }))
+      localStorage.setItem(storageKey, JSON.stringify(cleaned))
+    } catch (e) {
+      console.error('Failed to save QA messages', e)
+    }
+  }, [msgs, storageKey])
 
   useEffect(() => { window.scrollTo(0, 0) }, [])
+
+  // 错题联动 prefill 变更时自动填入输入框
+  useEffect(() => {
+    if (prefill?.question) {
+      setInput(prefill.question)
+    }
+  }, [prefill])
+
+  function handleClearHistory() {
+    setMsgs([])
+    try {
+      localStorage.removeItem(storageKey)
+    } catch {}
+    if (onClearPrefill) onClearPrefill()
+  }
 
   async function ask(text: string, contextOverride?: string) {
     const question = text.trim().slice(0, 500)
@@ -2239,34 +2911,130 @@ function QAView({
       { role: 'user', content: m.q },
       { role: 'assistant', content: m.a }
     ])
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+    // 立即推入新消息，初始进入流式状态
+    setMsgs((prev) => [
+      ...prev,
+      {
+        q: question,
+        a: '',
+        citations: [],
+        refused: false,
+        provider: 'external_api',
+        thinking: '',
+        timestamp: nowStr,
+        streaming: true,
+        streamPhase: enableThinking ? 'thinking' : 'content',
+      }
+    ])
+
     try {
-      const r = await api.qa(userId, question, ctx, undefined, history)
-      setMsgs((m) => [...m, {
-        q: question, a: r.answer, citations: r.citations ?? [],
-        refused: !!r.refused, provider: r.provider ?? '', note: r.note,
-        follow_ups: r.follow_ups ?? [],
-      }])
-    } catch (e) { onError(String(e)) } finally { setBusy(false) }
+      await api.qaStream(
+        userId,
+        question,
+        ctx,
+        undefined,
+        history,
+        enableThinking,
+        (thinkingDelta) => {
+          setMsgs((prev) => {
+            const next = [...prev]
+            const target = next[next.length - 1]
+            if (target && target.streaming) {
+              next[next.length - 1] = {
+                ...target,
+                thinking: (target.thinking || '') + thinkingDelta,
+                streamPhase: 'thinking',
+              }
+            }
+            return next
+          })
+        },
+        (contentDelta) => {
+          setMsgs((prev) => {
+            const next = [...prev]
+            const target = next[next.length - 1]
+            if (target && target.streaming) {
+              next[next.length - 1] = {
+                ...target,
+                a: (target.a || '') + contentDelta,
+                streamPhase: 'content',
+              }
+            }
+            return next
+          })
+        },
+        (r) => {
+          setMsgs((prev) => {
+            const next = [...prev]
+            const target = next[next.length - 1]
+            if (target) {
+              next[next.length - 1] = {
+                ...target,
+                a: r.answer || target.a,
+                thinking: r.thinking !== undefined ? r.thinking : target.thinking,
+                citations: r.citations ?? [],
+                follow_ups: r.follow_ups ?? [],
+                refused: !!r.refused,
+                provider: r.provider ?? target.provider,
+                note: (r as any).note || target.note,
+                streaming: false,
+                streamPhase: 'done',
+              }
+            }
+            return next
+          })
+        },
+        (err) => {
+          onError(String(err))
+          setMsgs((prev) => {
+            const next = [...prev]
+            const target = next[next.length - 1]
+            if (target && target.streaming) {
+              next[next.length - 1] = {
+                ...target,
+                a: target.a || '抱歉，生成回答时遇到网络问题，请稍后重试。',
+                streaming: false,
+                streamPhase: 'done',
+              }
+            }
+            return next
+          })
+        }
+      )
+    } catch (e) {
+      onError(String(e))
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
     <motion.div key="qa" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-xs font-semibold tracking-[0.18em] text-gold">课程问答 · 问AI</p>
+          <div className="flex items-center gap-2.5">
+            <p className="text-xs font-semibold tracking-[0.18em] text-gold">课程问答 · 问AI</p>
+            {msgs.length > 0 && (
+              <span className="rounded-full bg-paper-2 px-2.5 py-0.5 text-[10.5px] font-medium text-ink-3">
+                已保留 {msgs.length} 轮对话记录
+              </span>
+            )}
+          </div>
           <h2 className="display mt-2 text-[26px]">有不会的，直接问</h2>
         </div>
         {msgs.length > 0 && (
           <button
-            onClick={() => setMsgs([])}
+            onClick={handleClearHistory}
             className="flex items-center gap-1.5 rounded-full border border-line px-3.5 py-1.5 text-xs text-ink-3 hover:border-red-300 hover:text-red-700 transition"
           >
-            开启新会话 / 清除历史
+            开启新会话 / 清空历史
           </button>
         )}
       </div>
       <p className="mt-2 text-sm leading-relaxed text-ink-2">
-        只讲《药理学》课程内容：支持多轮深度追问，先检索教材切片，有依据才回答，并标出引用章节。
+        只讲《药理学》课程内容：支持多轮深度追问与 DeepSeek 风格思维链，先检索教材切片，有依据才回答，并标出引用章节。
         检索不到会直说不知道；用药决策类问题会拒绝（本系统不提供用药建议）。
       </p>
 
@@ -2320,17 +3088,55 @@ function QAView({
       <div className="mt-6 space-y-4">
         {msgs.map((m, i) => (
           <motion.div key={i} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={spring}>
-            <div className="ml-auto w-fit max-w-[90%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm text-white">
-              {m.q}
+            <div className="flex flex-col items-end">
+              <div className="ml-auto w-fit max-w-[90%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm text-white shadow-xs">
+                {m.q}
+              </div>
+              {m.timestamp && (
+                <span className="mt-1 mr-1 text-[10.5px] text-ink-3">
+                  {m.timestamp}
+                </span>
+              )}
             </div>
             <div className={`card mt-2 p-5 ${m.refused ? 'border-gold/40' : ''}`}>
               <div className="mb-2 flex flex-wrap items-center gap-2">
-                <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${m.provider === 'external_api' ? 'bg-primary-soft text-primary' : 'bg-paper-2 text-ink-3'}`}>
-                  {m.provider === 'external_api' ? '真模型回答' : m.provider === 'rule' || m.provider === 'retriever' ? '规则回复' : '演示模式'}
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${m.provider === 'external_api' ? 'bg-primary-soft text-primary' : m.provider === 'rule' || m.provider === 'retriever' ? 'bg-paper-2 text-ink-3' : 'bg-paper-2 text-ink-3'}`}>
+                  {m.provider === 'external_api' ? 'Qwen 3.7 Flash 真模型' : m.provider === 'rule' || m.provider === 'retriever' ? '规则回复' : '演示模式'}
                 </span>
+                {m.thinking && (
+                  <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700 border border-indigo-200/50 flex items-center gap-1">
+                    <Brain size={11} weight="fill" /> 已展开临床思维链
+                  </span>
+                )}
                 {m.refused && <span className="rounded-full bg-gold-soft px-2 py-0.5 text-[11px] font-medium text-gold">暂未回答</span>}
               </div>
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink">{m.a}</p>
+
+              {/* DeepSeek 风格可折叠思考过程 */}
+              {m.thinking && (
+                <ThinkingBox
+                  thinking={m.thinking}
+                  isStreaming={m.streaming && m.streamPhase === 'thinking'}
+                />
+              )}
+
+              {/* 思考中但正文尚未吐字时的提示 */}
+              {m.streaming && m.streamPhase === 'thinking' && !m.a && (
+                <div className="flex items-center gap-2 py-2 text-xs text-indigo-600/80 animate-pulse">
+                  <span className="flex h-2 w-2 rounded-full bg-indigo-500 animate-ping" />
+                  <span>正在深度推导演绎药理学逻辑，完成后将即刻输出正式解答…</span>
+                </div>
+              )}
+
+              {/* 回答正文（含流式打字光标） */}
+              {(m.a || (m.streaming && m.streamPhase === 'content')) && (
+                <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink">
+                  {m.a}
+                  {m.streaming && m.streamPhase === 'content' && (
+                    <span className="inline-block w-1.5 h-4 ml-1 bg-primary align-middle animate-pulse" />
+                  )}
+                </p>
+              )}
+
               {m.citations.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-1.5 border-t border-dashed border-line pt-3">
                   {m.citations.map((c) => (
@@ -2367,14 +3173,56 @@ function QAView({
             </div>
           </motion.div>
         ))}
-        {busy && <div className="space-y-3"><div className="skeleton h-14" /><div className="skeleton h-32" /></div>}
+        {busy && msgs.every((m) => !m.streaming) && (
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="card mt-2 p-5 border border-indigo-200 bg-indigo-50/30 rounded-2xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-bold text-indigo-900">
+                <Brain size={15} weight="fill" className="animate-pulse text-indigo-600" />
+                <span>{enableThinking ? 'AI 导师正在展开药理逻辑推演与人卫教材依据排查…' : 'AI 导师正在研读人卫第9版教材并提炼解析…'}</span>
+              </div>
+              <span className="text-[11px] text-indigo-600/80 font-mono">
+                {enableThinking ? '🧠 深度思考中…' : '⚡ 极速检索中…'}
+              </span>
+            </div>
+            <div className="mt-3 space-y-2">
+              <div className="skeleton h-3.5 w-4/5 rounded-md bg-indigo-100/60" />
+              <div className="skeleton h-3.5 w-3/5 rounded-md bg-indigo-100/60" />
+            </div>
+          </motion.div>
+        )}
       </div>
 
       <div className="sticky bottom-4 mt-6">
+        {/* DeepSeek 风格模式切换器 */}
+        <div className="mb-2 flex items-center justify-between px-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setEnableThinking(!enableThinking)}
+              className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition shadow-2xs ${
+                enableThinking
+                  ? 'bg-indigo-600 text-white shadow-indigo-200 hover:bg-indigo-700'
+                  : 'bg-white border border-line text-ink-3 hover:text-ink hover:border-ink-3'
+              }`}
+            >
+              <Brain size={13} weight={enableThinking ? 'fill' : 'regular'} />
+              <span>{enableThinking ? '深度思考模式 ON' : '深度思考模式 OFF'}</span>
+            </button>
+            <span className="text-[11px] text-ink-3 hidden sm:inline">
+              {enableThinking ? '💡 展开药理推导思维链（类似 DeepSeek-R1）' : '⚡ 极速直出模式，不展开思考链，1~2秒极速响应'}
+            </span>
+          </div>
+          {msgs.length > 0 && (
+            <span className="text-[10.5px] text-ink-3 hidden md:inline">
+              {msgs.length} 轮问答已保留
+            </span>
+          )}
+        </div>
+
         <div className="glass liquid flex items-center gap-2 rounded-full py-2 pl-5 pr-2">
           <input value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(input) } }}
-            placeholder="问一个药理学问题（500字内），回车发送"
+            placeholder={enableThinking ? "输入药理学考点或机制问题，AI将展开深度思维链推导…" : "问一个药理学问题（500字内），极速回复…"}
             maxLength={500} disabled={busy}
             className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-3" />
           <button onClick={() => ask(input)} disabled={busy || !input.trim()} className="btn btn-primary flex-none !px-5 !py-2">
@@ -2835,9 +3683,10 @@ type ArchiveData = {
   mastery: { domain_id: string; domain: string; category: string | null; state: string; reason: string; probability?: number; attempts_count?: number }[]
 }
 
-function Profile({ userId, onGoTodo }: { userId: string; onGoTodo: () => void }) {
+function Profile({ userId, onGoTodo, onAskAi }: { userId: string; onGoTodo: () => void; onAskAi?: (context: string, defaultQ?: string) => void }) {
   const [arch, setArch] = useState<ArchiveData | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [filterTab, setFilterTab] = useState<'all' | 'weak' | 'solid'>('all')
 
   useEffect(() => { window.scrollTo(0, 0) }, [])
   useEffect(() => {
@@ -2845,332 +3694,461 @@ function Profile({ userId, onGoTodo }: { userId: string; onGoTodo: () => void })
   }, [userId])
 
   if (error) return <ErrorPanel message={error} />
-  if (!arch) return <div className="space-y-3">{[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-24" />)}</div>
-
-  const s = arch.summary
-  const acc = Math.round(s.accuracy * 100)
-  const accColor = s.accuracy >= 0.7 ? 'var(--color-ok)' : s.accuracy >= 0.5 ? 'var(--color-gold)' : 'var(--color-cat-red)'
-  const accTone = s.accuracy >= 0.7 ? '达标' : s.accuracy >= 0.5 ? '待提升' : '偏低'
-  const masteryOrder = ['薄弱', '学习中', '初步掌握', '掌握', '稳定掌握']
-  const masteryByState = masteryOrder
-    .map((st) => ({ state: st, items: arch.mastery.filter((m) => m.state === st) }))
-    .filter((g) => g.items.length > 0)
-
-  // —— 薄弱点数据整理（用于「看得懂」的自适应视图）——
-  const heatDomains = arch.heatmap.domains
-  const heatCats = arch.heatmap.categories
-  const catColors: Record<string, string> = {
-    知识遗忘: 'var(--color-cat-blue)', 概念混淆: 'var(--color-cat-purple)',
-    机制理解不足: 'var(--color-cat-orange)', 审题与应用失误: 'var(--color-cat-red)', 待诊断: 'var(--color-ink-3)',
-  }
-  // 非零薄弱单元 [域, 错因, 错题数]
-  const cells: { domain: string; cat: string; n: number }[] = []
-  arch.heatmap.values.forEach((row, y) => row.forEach((v, x) => {
-    if (v > 0) cells.push({ domain: heatDomains[y] ?? '', cat: heatCats[x] ?? '', n: v })
-  }))
-  cells.sort((a, b) => b.n - a.n)
-  const judged = cells.filter((c) => c.cat !== '待诊断')            // 已归因的薄弱
-  const pendingCat = cells.filter((c) => c.cat === '待诊断')         // 待诊断
-  // 数据是否丰富到能撑起一张矩阵热力图（否则改用清单，避免全白大图）
-  const denseEnough = cells.length >= 6
-  const heatRowDomains = [...new Set(cells.map((c) => c.domain))]    // 仅含非零错的域
-  const heatColCats = [...new Set(cells.map((c) => c.cat))]          // 仅含非零错的错因
-  const cellVal = (d: string, c: string) => arch.heatmap.values
-    [heatDomains.indexOf(d)]?.[heatCats.indexOf(c)] ?? 0
-
-  // 错因占比：固定五类（含 0 值）完整展示，避免“看不见的类别”
-  const FIXED_CATS = ['知识遗忘', '概念混淆', '机制理解不足', '审题与应用失误']
-  const catTotal = Object.values(arch.category_dist).reduce((a, b) => a + b, 0)
-  // 诊断完整度：把「待诊断」错题也归因后，画像才准
-  const diagnosedComplete = s.wrong_book > 0 ? Math.round((s.diagnosed / s.wrong_book) * 100) : 0
-
-  const stat = (label: string, value: string | number, sub: string, accent = 'var(--color-primary)',
-    ratio?: number, ratioLabel?: string) => (
-    <div className="card p-4">
-      <p className="text-[11px] font-semibold text-ink-3">{label}</p>
-      <p className="display mt-1 text-[22px] leading-none" style={{ color: accent }}>{value}</p>
-      <p className="mt-1.5 text-[11px] text-ink-3">{sub}</p>
-      {typeof ratio === 'number' && (
-        <div className="mt-2.5">
-          <div className="h-1.5 overflow-hidden rounded-full bg-line-2">
-            <div className="h-full rounded-full" style={{ width: `${Math.round(ratio * 100)}%`, background: accent }} />
-          </div>
-          {ratioLabel && <p className="mt-1 text-[10px] text-ink-3">{ratioLabel}</p>}
-        </div>
-      )}
+  if (!arch) return (
+    <div className="space-y-4">
+      <div className="skeleton h-28 rounded-2xl" />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {[0, 1, 2].map((i) => <div key={i} className="skeleton h-24 rounded-2xl" />)}
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="skeleton h-64 rounded-2xl" />
+        <div className="skeleton h-64 rounded-2xl" />
+      </div>
     </div>
   )
 
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      <p className="text-xs font-semibold tracking-[0.18em] text-gold">学习档案</p>
-      <h2 className="display mt-2 text-[26px]">你的药理学能力画像</h2>
-      <p className="mt-2 text-sm text-ink-2">演示账号 {userId.slice(0, 8)} · 档案随每次练习自动更新 · 数据仅存于校内演示环境</p>
+  const s = arch.summary
+  const acc = Math.round(s.accuracy * 100)
+  const masteryRatio = s.mastery_rows > 0 ? Math.round((s.mastery_done / s.mastery_rows) * 100) : 0
+  const solveRatio = s.wrong_book > 0 ? Math.round((s.training_passed / s.wrong_book) * 100) : (s.attempts > 0 ? 100 : 0)
 
-      {/* 全新账号：给明确的第一步引导，而不是只摆四张 0 的卡片 */}
-      {arch.summary.attempts === 0 && (
-        <div className="mt-6 flex flex-col items-start justify-between gap-4 rounded-[20px] border border-primary/20 bg-primary-soft/60 px-6 py-5 sm:flex-row sm:items-center">
+  // 综合评级判定
+  let gradeBadge = { tag: 'A', title: '卓越级', tone: 'text-emerald-700 bg-emerald-50 border-emerald-200', desc: '药理核心机制与临床合理用药掌握全面，建议保持模考实战状态！' }
+  if (s.attempts === 0) {
+    gradeBadge = { tag: 'Init', title: '待生成', tone: 'text-ink-3 bg-paper-2 border-line', desc: '暂未作答，完成「今日待办」做题后将自动构建贝叶斯学情画像。' }
+  } else if (acc < 50) {
+    gradeBadge = { tag: 'C', title: '基础攻坚', tone: 'text-rose-700 bg-rose-50 border-rose-200', desc: '概念与机制失分较多，建议重点结合教材图谱，攻坚受体与药效学基础。' }
+  } else if (acc < 70) {
+    gradeBadge = { tag: 'B', title: '稳步进阶', tone: 'text-amber-700 bg-amber-50 border-amber-200', desc: '核心主干药理已初步建立，需针对高频混淆考点与错题进行靶向突破。' }
+  } else if (acc < 85) {
+    gradeBadge = { tag: 'B+', title: '良好实战', tone: 'text-primary bg-primary-soft border-primary/30', desc: '基础扎实，答题稳定；建议重点强化疑难病例沙盘与处方审核。' }
+  }
+
+  // 4类核心错因统计与主要瓶颈提炼
+  const CORE_CATS = [
+    { key: '机制理解不足', label: '机制理解不足', color: '#F59E0B', tip: '建议关注药物效应背后的受体亚型与生物信号通路，避免死记硬背' },
+    { key: '概念混淆', label: '概念混淆', color: '#8B5CF6', tip: '建议对比同类衍生药异同、作用靶点差异与代际演进规律' },
+    { key: '知识遗忘', label: '知识遗忘', color: '#3B82F6', tip: '利用错题本艾宾浩斯抗遗忘卡片进行周期温故与回温' },
+    { key: '审题与应用失误', label: '审题与应用失误', color: '#EF4444', tip: '审题特别留心题干中的患者禁忌证、特殊生理状态与合并用药陷阱' },
+  ]
+  const catTotal = Object.entries(arch.category_dist)
+    .filter(([k]) => k !== '待诊断')
+    .reduce((a, [, v]) => a + v, 0)
+
+  let topCatKey = ''
+  let topCatMax = 0
+  CORE_CATS.forEach((c) => {
+    const v = arch.category_dist[c.key] ?? 0
+    if (v > topCatMax) {
+      topCatMax = v
+      topCatKey = c.key
+    }
+  })
+  const topCatObj = CORE_CATS.find((c) => c.key === topCatKey)
+
+  // 重点攻坚 Top 3 薄弱考点（过滤薄弱或掌握度偏低的项）
+  const weakCandidates = [...arch.mastery]
+    .sort((a, b) => (a.probability ?? 0) - (b.probability ?? 0))
+    .slice(0, 3)
+    .filter((m) => (m.probability ?? 1) < 0.85 || arch.summary.attempts > 0)
+
+  // 过滤后的掌握度列表
+  const filteredMastery = arch.mastery.filter((m) => {
+    const p = m.probability ?? 0
+    if (filterTab === 'weak') return p < 0.70
+    if (filterTab === 'solid') return p >= 0.70
+    return true
+  })
+
+  // 核心章节掌握度排名 (取前 5 个重点章节)
+  const topDomainStats = [...arch.domain_stats]
+    .sort((a, b) => b.attempts - a.attempts)
+    .slice(0, 5)
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+      {/* 1. Hero 评级与学情标头 */}
+      <div className="rounded-[22px] border border-line/70 bg-gradient-to-br from-paper via-paper-1 to-paper-2 p-6 shadow-xs">
+        <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="display text-lg text-ink">档案还是空的</p>
-            <p className="mt-1 text-sm text-ink-2">先去「今日待办」做几道题或跑一次摸底，这里就会随着练习逐步生成你的画像。</p>
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-semibold text-primary">
+                学情全景
+              </span>
+              <span className="text-xs text-ink-3">贝叶斯知识追踪 (BKT) 引擎驱动</span>
+            </div>
+            <h2 className="display mt-2 text-2xl font-bold text-ink">药理学能力档案与成长轨迹</h2>
+            <p className="mt-1 text-xs text-ink-2 max-w-xl leading-relaxed">
+              每次作答与复测实时校准知识状态，自动生成精准错因归因与靶向强化建议。
+            </p>
           </div>
-          <button onClick={onGoTodo} className="btn btn-primary flex-none">去今日待办<ArrowRight size={15} weight="bold" /></button>
+
+          {/* 综合评级卡片 */}
+          <div className={`flex flex-col sm:flex-row items-start sm:items-center gap-4 rounded-2xl border px-4 py-3.5 ${gradeBadge.tone} shadow-xs flex-none`}>
+            <div className="grid size-12 place-items-center rounded-xl bg-white font-serif text-2xl font-black shadow-xs">
+              {gradeBadge.tag}
+            </div>
+            <div className="max-w-[220px]">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wide">综合评估</span>
+                <span className="text-xs font-semibold">{gradeBadge.title}</span>
+              </div>
+              <p className="mt-0.5 text-[11px] leading-snug opacity-90">{gradeBadge.desc}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 零作答引导 */}
+      {s.attempts === 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 rounded-2xl border border-primary/20 bg-primary-soft/50 p-5">
+          <div>
+            <h4 className="text-sm font-bold text-ink">档案构建准备就绪</h4>
+            <p className="text-xs text-ink-2 mt-0.5">完成「今日待办」做题或跑一次摸底，这里将实时呈现你的多维掌握度雷达与错因分布。</p>
+          </div>
+          <button onClick={onGoTodo} className="btn btn-primary flex-none !py-2 !px-4 text-xs">
+            去今日待办
+            <ArrowRight size={13} weight="bold" />
+          </button>
         </div>
       )}
 
-      {/* 顶部统计卡片：每个数字都给含义 + 相对判定，不再是孤立数字 */}
-      <div className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
-        {stat('累计作答', s.attempts, '道题已作答',
-          'var(--color-primary)', s.attempts ? 1 : 0, s.attempts ? '作答量越高画像越准' : '暂无作答')}
-        {stat('正确率', `${acc}%`, `${s.correct} 对 / ${s.wrong} 错 · ${accTone}`,
-          accColor, s.attempts ? s.accuracy : 0,
-          s.attempts ? (s.accuracy < 0.7 ? '未到 70% 达标线 → 需要加强' : '已达 70% 达标线') : '暂无作答')}
-        {stat('薄弱错题', s.wrong_book, `${s.diagnosed} 项已诊断归因`,
-          'var(--color-cat-red)', s.wrong_book ? diagnosedComplete / 100 : 0,
-          s.diagnosed < s.wrong_book ? '还有错题未诊断 → 画像会偏' : '错题均已归因，画像完整')}
-        {stat('靶向训练', `${s.trained}`, `${s.training_passed} 次通过`,
-          'var(--color-gold)', s.trained ? s.training_passed / Math.max(s.trained, 1) : 0,
-          s.trained ? '训练的通过率' : '暂无训练')}
-      </div>
-
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        {/* 薄弱点分布：自适应——错题少用「清单」，错题够多才出「矩阵」，永远可读 */}
-        <div className="card p-6">
-          <h3 className="mb-1 text-sm font-semibold">薄弱点分布</h3>
-          <p className="mb-3 text-xs text-ink-3">错题集中在哪里、是哪种错因 · 数字 = 累计答错题数</p>
-
-          {cells.length === 0 && (
-            <div className="flex flex-col items-center gap-3 py-8 text-center">
-              <p className="text-sm text-ink-2">还没有错题记录，这里会标出你最该补的薄弱点</p>
-              <button onClick={onGoTodo} className="btn btn-primary !px-5 !py-2 text-[13px]">
-                去今日待办练几道<ArrowRight size={13} weight="bold" />
-              </button>
+      {/* 2. 核心 3 大指标高对比度卡片 */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* 指标 1: 正确率 */}
+        <div className="card p-5 flex flex-col justify-between shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-bold text-ink">全科答题正确率</span>
+            <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-black ${
+              acc >= 70 ? 'bg-emerald-100/90 text-emerald-800 border border-emerald-300' : 'bg-amber-100/90 text-amber-800 border border-amber-300'
+            }`}>
+              {acc >= 70 ? '达到合格线' : '待攻坚'}
+            </span>
+          </div>
+          <div className="my-2.5 flex items-baseline gap-2">
+            <span className="display text-4xl font-black text-ink">{acc}%</span>
+            <span className="text-xs font-medium text-ink-3">(<strong className="text-ink font-bold">{s.correct}</strong> 正确 / {s.attempts} 题)</span>
+          </div>
+          <div>
+            <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-line-2">
+              <span className="absolute left-[70%] top-0 h-full w-0.5 bg-line z-10" title="70% 合格线" />
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{
+                  width: `${acc}%`,
+                  background: acc >= 70 ? 'var(--color-ok)' : 'var(--color-gold)'
+                }}
+              />
             </div>
-          )}
-
-          {/* A. 数据稀疏：优先给「该补哪里」的清单（demo 现态） */}
-          {cells.length > 0 && !denseEnough && (
-            <div className="space-y-3">
-              {judged.map((c) => (
-                <div key={`${c.domain}-${c.cat}`} className="flex items-center gap-3 rounded-xl border border-line px-3.5 py-2.5">
-                  <span className="grid size-7 flex-none place-items-center rounded-full text-xs font-bold text-ok" style={{ background: 'var(--color-ok-soft)' }}>{c.n}</span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{c.domain}</p>
-                    <p className="text-[11px] text-ink-3">主要问题：<CategoryTag category={c.cat} /></p>
-                  </div>
-                  <span className="ml-auto flex-none text-[11px] text-ink-3">去对应章节巩固</span>
-                </div>
-              ))}
-              {pendingCat.length > 0 && (
-                <div className="rounded-xl border border-dashed border-line px-3.5 py-2.5 text-xs text-ink-3">
-                  <p className="font-medium text-ink-2">另有 {pendingCat.reduce((a, b) => a + b.n, 0)} 道错题还没完成归因诊断</p>
-                  <p className="mt-0.5">重新作答并走完「诊断」后，才能标出它们是哪种错因。</p>
-                </div>
-              )}
+            <div className="mt-1.5 flex justify-between text-[11px] text-ink-3">
+              <span className="font-semibold">基准线 70%</span>
+              <span>累计错题 <strong className="text-rose-600 font-bold">{s.wrong}</strong> 道</span>
             </div>
-          )}
-
-          {/* B. 数据充足：域 × 错因 矩阵（含色阶图例，深浅=错题数） */}
-          {denseEnough && (
-            <>
-              <div className="overflow-x-auto">
-                <table className="w-full border-separate" style={{ borderSpacing: 4 }}>
-                  <thead>
-                    <tr>
-                      <th className="w-[30%] py-1 pr-2 text-left text-[11px] font-medium text-ink-3">诊断域＼错因</th>
-                      {heatColCats.map((c) => <th key={c} className="px-1 py-1 text-center text-[11px] font-medium text-ink-3">{c}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {heatRowDomains.map((d) => (
-                      <tr key={d}>
-                        <td className="py-1 pr-2 text-right text-[11px] font-medium text-ink-2">{d}</td>
-                        {heatColCats.map((c) => {
-                          const n = cellVal(d, c)
-                          return (
-                            <td key={c} className="p-0">
-                              <div className="grid h-9 place-items-center rounded-lg text-xs font-bold"
-                                style={{ background: n === 0 ? 'var(--color-paper-2)' : n === 1 ? '#CFE6DB' : n === 2 ? '#79B69E' : '#0E7A63',
-                                  color: n >= 2 ? '#fff' : '#0E7A63' }}>
-                                {n > 0 ? n : ''}
-                              </div>
-                            </td>
-                          )
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {/* 色阶图例 */}
-              <div className="mt-3 flex items-center gap-2 text-[10px] text-ink-3">
-                <span>错题数</span>
-                {[0, 1, 2, 3].map((n) => (
-                  <span key={n} className="inline-flex items-center gap-1">
-                    <i className="inline-block size-3 rounded" style={{ background: n === 0 ? 'var(--color-paper-2)' : n === 1 ? '#CFE6DB' : n === 2 ? '#79B69E' : '#0E7A63' }} />
-                    {n === 3 ? '3+' : n}
-                  </span>
-                ))}
-              </div>
-            </>
-          )}
+          </div>
         </div>
 
-        {/* 域级正确率：样本太少标灰不误判，样本够才按 70% 判色 */}
-        <div className="card p-6">
-          <h3 className="mb-1 text-sm font-semibold">各域作答正确率</h3>
-          <p className="mb-3 text-xs text-ink-3">
-            答过 ≥5 题才判定是否进入学习路径 · <span className="text-cat-red">低于 70% → 进今日待办重点补</span> · 答太少标灰（数字仅供参考）
-          </p>
-          {arch.domain_stats.length === 0 && <p className="py-10 text-center text-sm text-ink-3">还没有作答记录。</p>}
-          {arch.domain_stats.length > 0 && (
-            <div className="space-y-3">
-              {arch.domain_stats.map((d) => {
-                const reliable = d.attempts >= 5
-                const low = reliable && d.rate < 0.7
+        {/* 指标 2: 掌握度达标率 */}
+        <div className="card p-5 flex flex-col justify-between shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-bold text-ink">BKT 掌握达标率</span>
+            <span className="rounded-full bg-primary/15 border border-primary/25 px-2.5 py-0.5 text-[11px] font-black text-primary">
+              稳固率 {masteryRatio}%
+            </span>
+          </div>
+          <div className="my-2.5 flex items-baseline gap-2">
+            <span className="display text-4xl font-black text-primary">{s.mastery_done}</span>
+            <span className="text-xs font-medium text-ink-3">/ <strong className="text-ink font-bold">{s.mastery_rows}</strong> 项考点达标</span>
+          </div>
+          <div>
+            <div className="h-2.5 w-full overflow-hidden rounded-full bg-line-2">
+              <div
+                className="h-full rounded-full bg-primary transition-all duration-500"
+                style={{ width: `${masteryRatio}%` }}
+              />
+            </div>
+            <p className="mt-1.5 text-[11px] text-ink-3">贝叶斯后验概率 P(L) ≥ 0.70 认定为掌握</p>
+          </div>
+        </div>
+
+        {/* 指标 3: 诊断闭环率 */}
+        <div className="card p-5 flex flex-col justify-between shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-bold text-ink">错因归因与强化闭环</span>
+            <span className="rounded-full bg-indigo-100/90 border border-indigo-200 px-2.5 py-0.5 text-[11px] font-black text-indigo-800">
+              通关 {s.training_passed} 次
+            </span>
+          </div>
+          <div className="my-2.5 flex items-baseline gap-2">
+            <span className="display text-4xl font-black text-ink">{solveRatio}%</span>
+            <span className="text-xs font-bold text-indigo-700">闭环通关率</span>
+          </div>
+          <div>
+            <div className="h-2.5 w-full overflow-hidden rounded-full bg-line-2">
+              <div
+                className="h-full rounded-full bg-indigo-600 transition-all duration-500"
+                style={{ width: `${solveRatio}%` }}
+              />
+            </div>
+            <p className="mt-1.5 text-[11px] text-ink-3">已诊断 <strong className="text-ink font-semibold">{s.diagnosed}</strong> 项 · 靶向训练 <strong className="text-ink font-semibold">{s.trained}</strong> 次</p>
+          </div>
+        </div>
+      </div>
+
+      {/* 3. 两列对比：错因归因深度分析 VS 重点章节掌握度 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        {/* 左列：4类错因根因分布 */}
+        <div className="card p-5 space-y-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-[15px] font-extrabold text-ink">临床错因归因分布</h3>
+              <p className="text-xs text-ink-3">诊断引擎针对答错题目的深度归因统计</p>
+            </div>
+            <span className="text-xs font-bold text-ink-2 bg-paper-2 px-2 py-0.5 rounded-md">
+              已归因 {catTotal} 题
+            </span>
+          </div>
+
+          {/* 4条归因进度条 */}
+          <div className="space-y-3 pt-1">
+            {CORE_CATS.map((c) => {
+              const count = arch.category_dist[c.key] ?? 0
+              const pct = catTotal > 0 ? Math.round((count / catTotal) * 100) : 0
+              return (
+                <div key={c.key} className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5 font-bold text-ink">
+                      <span className="size-2 rounded-full" style={{ backgroundColor: c.color }} />
+                      {c.label}
+                    </span>
+                    <span className="text-ink font-extrabold">
+                      {count} 题 <span className="font-semibold text-ink-3">({pct}%)</span>
+                    </span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-line-2">
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{ width: `${pct}%`, backgroundColor: c.color }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* 核心诊断建议提炼 (高对比度重点突出) */}
+          <div className="rounded-xl border-2 border-amber-400/40 bg-gradient-to-r from-amber-50/80 via-white to-amber-50/50 p-3.5 text-xs text-ink-2 shadow-2xs">
+            <div className="flex items-center gap-1.5 font-bold text-amber-800 mb-1">
+              <Sparkle size={14} weight="fill" className="text-amber-600" />
+              <span>智能攻坚建议 · 错因阻断</span>
+            </div>
+            {topCatObj && topCatMax > 0 ? (
+              <p className="leading-relaxed">
+                当前主要失分瓶颈为 <span className="inline-block rounded-md border border-amber-300 bg-white px-2 py-0.5 font-black text-amber-900 shadow-2xs">【{topCatObj.label}】</span>（占失分 <strong className="text-ink font-bold">{Math.round((topCatMax / Math.max(catTotal, 1)) * 100)}%</strong>）。{topCatObj.tip}。
+              </p>
+            ) : (
+              <p className="leading-relaxed">暂无明显失分聚集，建议进入「今日待办」进行高频考点自适应自测。</p>
+            )}
+          </div>
+        </div>
+
+        {/* 右列：核心章节掌握度 Top 5 */}
+        <div className="card p-5 space-y-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-[15px] font-extrabold text-ink">重点章节掌握度对比</h3>
+              <p className="text-xs text-ink-3">高频考试章节做题正确率与基准线</p>
+            </div>
+            <span className="text-xs font-bold text-emerald-800 bg-emerald-100/90 px-2 py-0.5 rounded-full border border-emerald-300">
+              基准合格线 70%
+            </span>
+          </div>
+
+          <div className="space-y-3.5 pt-1">
+            {topDomainStats.length === 0 ? (
+              <div className="py-10 text-center text-xs text-ink-3">
+                暂无章节做题数据，完成题目后自动展示
+              </div>
+            ) : (
+              topDomainStats.map((d) => {
                 const pct = Math.round(d.rate * 100)
+                const isPass = pct >= 70
                 return (
-                  <div key={d.domain_id}>
-                    <div className="mb-1 flex items-center justify-between text-xs">
-                      <span className="flex items-center gap-1.5 font-medium">
-                        {d.domain}
-                        {!reliable && (
-                          <span className="rounded-full bg-line-2 px-2 py-0.5 text-[10px] text-ink-3">样本少</span>
-                        )}
-                      </span>
-                      <span className={reliable ? (low ? 'font-semibold text-cat-red' : 'text-ok') : 'text-ink-3'}>
-                        {pct}% · {d.attempts}题{!reliable && ' · 仅供参考'}
+                  <div key={d.domain_id} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-ink truncate max-w-[200px]">{d.domain}</span>
+                      <span className={isPass ? 'font-black text-emerald-800' : 'font-black text-amber-800'}>
+                        {pct}% <span className="font-medium text-ink-3">({d.attempts} 题)</span>
                       </span>
                     </div>
-                    <div className="relative h-2.5 overflow-hidden rounded-full bg-line-2">
-                      {/* 70% 达标刻度 */}
-                      <span className="absolute left-[70%] top-[-2px] z-10 h-[18px] w-px bg-line" />
-                      <div className="h-full rounded-full"
-                        style={{ width: `${pct}%`,
-                          background: !reliable ? 'var(--color-ink-3)' : low ? 'var(--color-cat-red)' : 'var(--color-ok)' }} />
+                    <div className="relative h-2 w-full overflow-hidden rounded-full bg-line-2">
+                      <span className="absolute left-[70%] top-0 h-full w-0.5 bg-line z-10" />
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: `${pct}%`,
+                          backgroundColor: isPass ? 'var(--color-ok)' : 'var(--color-gold)'
+                        }}
+                      />
                     </div>
                   </div>
                 )
-              })}
-              <p className="border-t border-dashed border-line pt-2 text-[11px] leading-relaxed text-ink-3">
-                标灰表示该域答题不足 5 题，正确率仅供参考——多练几题后画像才准；低于 70% 的域今日待办会自动带你补。
-              </p>
-            </div>
-          )}
+              })
+            )}
+          </div>
         </div>
       </div>
 
-      {/* 错因类别占比 + 掌握度总览 */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <div className="card p-6">
-          <h3 className="mb-1 text-sm font-semibold">错因类型分布</h3>
-          <p className="mb-3 text-xs text-ink-3">错题被归为哪类学习障碍 · 固定五类，0 也如实显示</p>
-          {catTotal === 0 && <p className="py-8 text-center text-sm text-ink-3">还没有错因记录：答错并完成诊断后这里会分类你的薄弱原因。</p>}
-          {catTotal > 0 && (
-            <>
-              {/* 诊断完整度 */}
-              <div className="mb-4 rounded-xl border border-line px-3.5 py-2.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-medium text-ink-2">诊断完整度</span>
-                  <span className={diagnosedComplete === 100 ? 'text-ok' : 'text-gold'}>
-                    {s.diagnosed}/{s.wrong_book} 道错题已归因
-                  </span>
-                </div>
-                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-line-2">
-                  <div className="h-full rounded-full" style={{ width: `${diagnosedComplete}%`,
-                    background: diagnosedComplete === 100 ? 'var(--color-ok)' : 'var(--color-gold)' }} />
-                </div>
-                {diagnosedComplete < 100 && (
-                  <p className="mt-1.5 text-[10px] text-ink-3">
-                    还有 {s.wrong_book - s.diagnosed} 道错题没归因——先去「错题本」把待诊断的题走完诊断，下方分布才准确。
-                  </p>
-                )}
-              </div>
+      {/* 4. 今日重点攻坚 · 优先强化清单 (Top 3 Weak Points - 直接带行动按钮！) */}
+      <div className="rounded-[22px] border border-line bg-paper p-5 space-y-4 shadow-xs">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="grid size-6 place-items-center rounded-lg bg-amber-500/10 text-amber-600 font-bold text-xs">🚨</span>
+            <h3 className="text-sm font-bold text-ink">重点攻坚 · 优先强化清单</h3>
+          </div>
+          <span className="text-xs text-ink-3">结合 BKT 概率与错因诊断智能推荐</span>
+        </div>
 
-              <div className="space-y-3.5">
-                {[...FIXED_CATS, '待诊断'].map((cat) => {
-                  const v = arch.category_dist[cat] ?? 0
-                  const share = v / Math.max(catTotal, 1)
-                  return (
-                    <div key={cat}>
-                      <div className="mb-1 flex items-center justify-between text-xs">
-                        <span className="inline-flex items-center gap-1.5">
-                          <CategoryTag category={cat} />
-                          {v === 0 && <span className="text-[10px] text-ink-3">暂未出现</span>}
-                        </span>
-                        <span className={v === 0 ? 'text-ink-3' : 'font-semibold text-ink-2'}>
-                          {v} 题{catTotal > 0 ? ` · ${Math.round(share * 100)}%` : ''}
-                        </span>
-                      </div>
-                      <div className="h-2 overflow-hidden rounded-full bg-line-2">
-                        <div className="h-full rounded-full"
-                          style={{ width: `${Math.round(share * 100)}%`, minWidth: v > 0 ? 6 : 0,
-                            background: v === 0 ? 'transparent' : catColors[cat] ?? 'var(--color-primary)' }} />
-                      </div>
-                      {cat === '待诊断' && v > 0 && <p className="mt-0.5 text-[10px] text-ink-3">占比高时画像还不准，先去诊断归因</p>}
+        {weakCandidates.length === 0 ? (
+          <div className="flex items-center justify-center gap-2 py-8 text-sm text-emerald-700 bg-emerald-50/50 rounded-xl border border-emerald-200">
+            <CheckCircle size={16} weight="fill" />
+            <span>当前所有已测考点掌握率良好，无突出薄弱项！</span>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {weakCandidates.map((w, idx) => {
+              const pPct = w.probability != null ? Math.round(w.probability * 100) : 45
+              return (
+                <div key={w.domain_id || idx} className="flex flex-col justify-between rounded-xl border border-line/80 bg-paper-1/60 p-4 transition hover:border-primary/40 hover:shadow-xs">
+                  <div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="rounded-md bg-rose-100/90 border border-rose-200 px-2 py-0.5 text-[10.5px] font-black text-rose-800">
+                        {w.state || '待巩固'}
+                      </span>
+                      <span className="text-[11.5px] font-black text-amber-800 bg-amber-100/80 border border-amber-300 px-2 py-0.5 rounded-md">掌握度 {pPct}%</span>
                     </div>
-                  )
-                })}
-              </div>
-            </>
-          )}
+                    <h4 className="mt-2.5 text-[15px] font-black text-ink line-clamp-1">{w.domain}</h4>
+                    <p className="mt-1 text-xs text-ink-3 line-clamp-2 leading-relaxed">
+                      {w.reason || 'BKT贝叶斯知识追踪模型评估需重点强化'}
+                    </p>
+                  </div>
+
+                  <div className="mt-4 pt-2 border-t border-line/50 flex items-center gap-2">
+                    <button
+                      onClick={onGoTodo}
+                      className="btn btn-primary flex-1 !py-2 !text-xs !font-bold !justify-center shadow-xs"
+                    >
+                      靶向强化
+                      <ArrowRight size={13} weight="bold" />
+                    </button>
+                    {onAskAi && (
+                      <button
+                        onClick={() => onAskAi(`请帮我系统梳理【${w.domain}】的核心药理机制、临床考点与易混淆易错陷阱。`)}
+                        className="btn rounded-xl border border-line px-2.5 py-1.5 text-xs text-ink-2 hover:text-primary hover:border-primary/40"
+                        title="向 AI 助教请教该考点"
+                      >
+                        <ChatCircle size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* 5. 全景章节掌握度细目 (交互式标签筛选) */}
+      <div className="card p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-bold text-ink">全景知识点掌握度细目</h3>
+            <p className="text-[11px] text-ink-3">全量考点 BKT 掌握度与作答动态追踪</p>
+          </div>
+
+          {/* 筛选选项卡 */}
+          <div className="flex items-center gap-1 rounded-xl bg-paper-2 p-1 text-xs">
+            <button
+              onClick={() => setFilterTab('all')}
+              className={`rounded-lg px-2.5 py-1 font-medium transition cursor-pointer ${
+                filterTab === 'all' ? 'bg-white text-primary shadow-xs font-semibold' : 'text-ink-3 hover:text-ink'
+              }`}
+            >
+              全部 ({arch.mastery.length})
+            </button>
+            <button
+              onClick={() => setFilterTab('weak')}
+              className={`rounded-lg px-2.5 py-1 font-medium transition cursor-pointer ${
+                filterTab === 'weak' ? 'bg-white text-amber-700 shadow-xs font-semibold' : 'text-ink-3 hover:text-ink'
+              }`}
+            >
+              待巩固 ({arch.mastery.filter(m => (m.probability ?? 0) < 0.70).length})
+            </button>
+            <button
+              onClick={() => setFilterTab('solid')}
+              className={`rounded-lg px-2.5 py-1 font-medium transition cursor-pointer ${
+                filterTab === 'solid' ? 'bg-white text-emerald-700 shadow-xs font-semibold' : 'text-ink-3 hover:text-ink'
+              }`}
+            >
+              已稳固 ({arch.mastery.filter(m => (m.probability ?? 0) >= 0.70).length})
+            </button>
+          </div>
         </div>
 
-        <div className="card p-6">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-sm font-semibold">掌握度总览</h3>
-            <span className="rounded-full px-2.5 py-0.5 text-[11px] font-medium text-ok" style={{ background: 'var(--color-ok-soft)' }}>
-              已达标 {s.mastery_done}/{s.mastery_rows} 项
-            </span>
-          </div>
-          {arch.mastery.length === 0 && <EmptyPanel text="还没有掌握度记录：完成一次「作答 → 诊断 → 训练 → 复测」后这里会出现。" />}
-          <div className="space-y-3">
-            {masteryByState.map((g) => (
-              <div key={g.state}>
-                <div className="mb-1.5 flex items-center justify-between">
-                  <span className="text-xs font-semibold">{g.state}</span>
-                  <span className="text-xs text-ink-3">{g.items.length} 项</span>
-                </div>
-                <div className="space-y-1.5">
-                  {g.items.map((m, i) => {
-                    const probPct = m.probability != null ? Math.round(m.probability * 100) : null
-                    return (
-                      <div key={i} className="rounded-xl border border-line bg-paper/60 px-3.5 py-2.5 text-[12px] transition hover:border-primary/40">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <span className="font-semibold text-ink">{m.domain}</span>
-                            {m.category && <span className="ml-2 text-ink-3">· {m.category}</span>}
-                          </div>
-                          {probPct != null && (
-                            <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold text-primary" style={{ background: 'var(--color-primary-soft)' }}>
-                              BKT掌握率 {probPct}%
-                            </span>
-                          )}
+        {/* 考点列表 */}
+        {filteredMastery.length === 0 ? (
+          <EmptyPanel text="该分类下暂无考点细目" />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-[380px] overflow-y-auto pr-1">
+            {filteredMastery.map((m, i) => {
+              const pPct = m.probability != null ? Math.round(m.probability * 100) : null
+              const isSolid = (m.probability ?? 0) >= 0.70
+              return (
+                <div key={i} className="flex items-center justify-between gap-3 rounded-xl border border-line/70 bg-paper-1/40 px-3.5 py-2.5 text-xs transition hover:border-primary/30">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`size-1.5 rounded-full ${isSolid ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                      <span className="font-semibold text-ink truncate">{m.domain}</span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 text-[10.5px] text-ink-3">
+                      <span>{m.state}</span>
+                      {m.attempts_count != null && m.attempts_count > 0 && (
+                        <span>· 练习 {m.attempts_count} 次</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 flex-none">
+                    {pPct != null && (
+                      <div className="w-20 text-right">
+                        <div className={`font-bold ${isSolid ? 'text-emerald-700' : 'text-amber-700'}`}>
+                          {pPct}%
                         </div>
-                        {probPct != null && (
-                          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-line-2">
-                            <div className="h-full rounded-full transition-all duration-500"
-                              style={{
-                                width: `${Math.min(100, Math.max(6, probPct))}%`,
-                                background: probPct >= 80 ? 'var(--color-ok)' : probPct >= 60 ? 'var(--color-primary)' : probPct >= 35 ? 'var(--color-gold)' : 'var(--color-cat-red)'
-                              }}
-                            />
-                          </div>
-                        )}
-                        <div className="mt-1.5 flex items-center justify-between text-[11px] text-ink-3">
-                          <span className="truncate">{m.reason || 'BKT贝叶斯追踪计算'}</span>
-                          {m.attempts_count != null && m.attempts_count > 0 && (
-                            <span className="flex-none ml-2">已作答 {m.attempts_count} 次</span>
-                          )}
+                        <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-line-2">
+                          <div
+                            className="h-full rounded-full"
+                            style={{
+                              width: `${pPct}%`,
+                              backgroundColor: isSolid ? 'var(--color-ok)' : 'var(--color-gold)'
+                            }}
+                          />
                         </div>
                       </div>
-                    )
-                  })}
+                    )}
+                    {onAskAi && (
+                      <button
+                        onClick={() => onAskAi(`请简明讲解【${m.domain}】的核心机制与常考要点。`)}
+                        className="rounded-lg p-1 text-ink-3 hover:bg-paper-2 hover:text-primary transition cursor-pointer"
+                        title="问 AI 助教"
+                      >
+                        <ChatCircle size={14} />
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
-        </div>
+        )}
       </div>
     </motion.div>
   )
@@ -3653,7 +4631,7 @@ const CAT_STYLE: Record<string, { bg: string; fg: string }> = {
 function CategoryTag({ category }: { category: string }) {
   const s = CAT_STYLE[category] ?? { bg: 'var(--color-primary-soft)', fg: 'var(--color-primary)' }
   return (
-    <span className="inline-flex items-center rounded-full px-3.5 py-1.5 text-xs font-semibold"
+    <span className="inline-flex items-center rounded-full border border-current/20 px-3 py-1 text-xs font-bold shadow-2xs"
       style={{ background: s.bg, color: s.fg }}>
       {category}
     </span>
@@ -3671,9 +4649,9 @@ function NodeChip({ type, name }: { type: string; name: string }) {
   }
   const bg = tint[type] ?? 'var(--color-paper-2)'
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink"
+    <span className="inline-flex items-center gap-1.5 rounded-lg border border-line/70 px-2.5 py-1 text-[12.5px] font-semibold text-ink shadow-2xs"
       style={{ background: bg }}>
-      <span className="text-[10px] text-ink-3">{type}</span>{name}
+      <span className="text-[10px] font-bold text-ink-3 uppercase">{type}</span>{name}
     </span>
   )
 }
@@ -3787,10 +4765,12 @@ function KnowledgeGraphView({ nodes, edges, title, tabDefs, labelTypes, centerMo
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const chartRef = useRef<echarts.ECharts | null>(null)
+  const renderRef = useRef<(() => void) | null>(null)
   const [tab, setTab] = useState<string>('all')
   const [query, setQuery] = useState('')
   const [selEdge, setSelEdge] = useState<number | null>(null)
   const [selNode, setSelNode] = useState<string | null>(null)
+  const [isFullscreen, setIsFullscreen] = useState(false)
   const reduceMotion = useReducedMotion()
   const dot = (t: string) => palette?.[t] ?? KG_DOT[t] ?? KG_DOT['其他']
   const showSet = labelTypes ?? KG_LABEL_TYPES
@@ -3923,6 +4903,7 @@ function KnowledgeGraphView({ nodes, edges, title, tabDefs, labelTypes, centerMo
         }],
       }, true)
     }
+    renderRef.current = render
     render()
     chart.off('click')
     chart.on('click', (p) => {
@@ -3971,42 +4952,132 @@ function KnowledgeGraphView({ nodes, edges, title, tabDefs, labelTypes, centerMo
     if (hit) focus(hit.name)
   }
 
+  const handleZoom = (factor: number) => {
+    const chart = chartRef.current
+    if (!chart || !ref.current) return
+    const W = chart.getWidth() || ref.current.clientWidth || 600
+    const H = chart.getHeight() || 400
+    chart.dispatchAction({
+      type: 'graphRoam',
+      seriesIndex: 0,
+      zoom: factor,
+      originX: W / 2,
+      originY: H / 2,
+    })
+  }
+
+  const handleReset = () => {
+    if (renderRef.current) {
+      renderRef.current()
+    }
+  }
+
+  const handleToggleFullscreen = () => {
+    const next = !isFullscreen
+    setIsFullscreen(next)
+    setTimeout(() => {
+      chartRef.current?.resize()
+      renderRef.current?.()
+    }, 320)
+  }
+
   return (
-    <div className="mb-3 overflow-hidden rounded-2xl border border-line bg-white shadow-[0_8px_28px_-18px_rgba(14,122,95,0.35)]">
-      <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
-        <p className="mr-auto text-xs font-semibold text-ink">{title ?? '知识图谱'}</p>
-        <div className="flex rounded-full bg-paper p-0.5">
-          {defs.map((t) => (
-            <button key={t.k} onClick={() => setTab(t.k)}
-              className={`rounded-full px-3 py-1 text-[11px] font-semibold transition-all active:scale-[0.97] ${tab === t.k ? 'bg-primary text-white shadow' : 'text-ink-3'}`}>
-              {t.label}
-            </button>
-          ))}
+    <div className={`overflow-hidden transition-all duration-300 ${
+      isFullscreen
+        ? 'fixed inset-0 z-50 bg-paper/95 p-6 backdrop-blur-2xl flex flex-col justify-between m-0 rounded-none shadow-2xl'
+        : 'mb-3 rounded-2xl border border-line bg-white shadow-[0_8px_28px_-18px_rgba(14,122,95,0.35)]'
+    }`}>
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-3.5 pb-2 border-b border-line/60">
+        <div className="flex items-center gap-2">
+          <span className="size-2 rounded-full bg-primary animate-pulse" />
+          <p className="text-xs font-bold text-ink tracking-tight">{title ?? '知识图谱'}</p>
+          {isFullscreen && (
+            <span className="rounded bg-primary/10 border border-primary/25 px-1.5 py-0.2 text-[10px] font-mono font-bold text-primary">
+              FULLSCREEN
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitSearch() }}
-            placeholder="搜实体，如硝苯地平" className="w-36 rounded-full border border-line bg-paper px-3 py-1 text-[11px] text-ink outline-none placeholder:text-ink-3 focus:border-primary" />
+            placeholder="搜实体，如硝苯地平" className="w-32 sm:w-40 rounded-lg border border-line bg-paper px-2.5 py-1 text-xs text-ink outline-none placeholder:text-ink-3 focus:border-primary" />
           <button onClick={submitSearch} aria-label="搜索实体"
-            className="grid size-7 place-items-center rounded-full bg-primary-soft text-primary transition-all active:scale-[0.95]">
-            <MagnifyingGlass size={14} />
+            className="grid size-7 place-items-center rounded-lg bg-primary/10 text-primary transition active:scale-[0.95] cursor-pointer hover:bg-primary/20">
+            <MagnifyingGlass size={13} weight="bold" />
           </button>
         </div>
+        {/* 系统分类选项卡：精密分段器 (Segmented Control) */}
+        <div className="w-full overflow-x-auto no-scrollbar scroll-smooth pt-1 touch-pan-x">
+          <div className="inline-flex rounded-xl bg-paper-2 p-1 gap-1 border border-line/50">
+            {defs.map((t) => (
+              <button key={t.k} onClick={() => setTab(t.k)}
+                className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1 text-xs font-semibold transition cursor-pointer active:scale-[0.97] ${tab === t.k ? 'bg-white text-ink font-bold shadow-2xs' : 'text-ink-3 hover:text-ink'}`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-[11px] font-mono text-ink-3">
         {types.map((t) => (
-          <span key={t} className="inline-flex items-center gap-1 text-[10px] text-ink-3">
-            <span className="inline-block size-2 rounded-full border border-white shadow" style={{ background: dot(t) }} />{t}
+          <span key={t} className="inline-flex items-center gap-1">
+            <span className="inline-block size-2 rounded-full shadow-2xs" style={{ background: dot(t) }} />{t}
           </span>
         ))}
-        <span className="ml-auto text-[10px] text-ink-3">{nodeList.length} 节点 · {shown.length} 边{edges.length > 120 ? '（仅展示前 120 条）' : ''}</span>
+        <span className="ml-auto text-[10px] font-mono font-medium text-ink-3 tracking-wider uppercase">{nodeList.length} NODES · {shown.length} EDGES</span>
       </div>
       {empty && (
         <div className="mx-4 mb-4 rounded-xl border border-dashed border-line bg-paper/60 px-4 py-6 text-center text-xs text-ink-3">
           该视角暂无关联——点上方视图切回，或多做几道同章/同类错题后再看。
         </div>
       )}
-      {/* 画布常驻挂载（空态仅隐藏）：卸载会导致 ref 丢失、回切复用僵尸实例 */}
-      <div ref={ref} style={{ height: empty ? 0 : (height ?? 380), width: '100%', display: empty ? 'none' : undefined }} className="cursor-grab active:cursor-grabbing" />
+      {/* 画布常驻挂载：带有医疗微网格背景与右下角悬浮 HUD 工具条 */}
+      <div className="relative overflow-hidden medical-grid">
+        {!empty && (
+          <div className="absolute right-3.5 bottom-3.5 z-20 flex flex-col gap-1.5 pointer-events-auto">
+            <button
+              onClick={() => handleZoom(1.25)}
+              className="hud-btn size-8 cursor-pointer"
+              title="放大星轨拓扑"
+              aria-label="放大"
+            >
+              <Plus size={15} weight="bold" />
+            </button>
+            <button
+              onClick={() => handleZoom(0.8)}
+              className="hud-btn size-8 cursor-pointer"
+              title="缩小星轨拓扑"
+              aria-label="缩小"
+            >
+              <Minus size={15} weight="bold" />
+            </button>
+            <button
+              onClick={handleReset}
+              className="hud-btn size-8 cursor-pointer"
+              title="复位视角中心"
+              aria-label="复位"
+            >
+              <ArrowsCounterClockwise size={15} weight="bold" />
+            </button>
+            <button
+              onClick={handleToggleFullscreen}
+              className="hud-btn size-8 cursor-pointer"
+              title={isFullscreen ? '退出全屏' : '全屏沉浸模式'}
+              aria-label={isFullscreen ? '退出全屏' : '全屏'}
+            >
+              {isFullscreen ? <CornersIn size={15} weight="bold" /> : <CornersOut size={15} weight="bold" />}
+            </button>
+          </div>
+        )}
+        <div
+          ref={ref}
+          style={{
+            height: empty ? 0 : isFullscreen ? 'calc(100vh - 160px)' : (height ?? (typeof window !== 'undefined' && window.innerWidth < 768 ? 380 : 580)),
+            width: '100%',
+            display: empty ? 'none' : undefined
+          }}
+          className="cursor-grab active:cursor-grabbing"
+        />
+      </div>
       {!empty && (edge || selNode) && (
         <div className="border-t border-line bg-paper/70 px-4 py-2.5">
           {edge && (
@@ -4050,7 +5121,7 @@ function EvidenceNote({ ev, reviewStatus }: { ev: KgEvidence; reviewStatus?: str
   const reviewed = reviewStatus === 'published'
   if (!ev || !ev.text) {
     return (
-      <p className="mt-1 text-[11px] leading-relaxed text-ink-3">
+      <p className="mt-1.5 text-[11px] leading-relaxed text-ink-3">
         <span className="mr-1 rounded bg-paper-2 px-1.5 py-0.5 text-[10px] font-semibold text-ink-3">无教材依据</span>
         该条关系暂未在教材原文中检索到直接表述，保留待药理顾问核实后补充。
       </p>
@@ -4059,27 +5130,35 @@ function EvidenceNote({ ev, reviewStatus }: { ev: KgEvidence; reviewStatus?: str
   // 派生关联（大纲结构/题库共现/做题关联）：如实署名，不冒充教材页码
   if (ev.book_page == null) {
     return (
-      <div className="mt-1 text-[11px] leading-relaxed">
-        <p className="flex flex-wrap items-center gap-1 text-ink-3">
-          <span className="rounded bg-paper-2 px-1.5 py-0.5 text-[10px] font-semibold text-ink-2">{ev.source ?? '程序派生'}</span>
-          {ev.chapter && <span>{ev.chapter}</span>}
+      <div className="mt-2 rounded-xl border border-line-2 bg-paper-1/40 p-2.5 text-[11.5px] leading-relaxed">
+        <p className="flex flex-wrap items-center gap-1.5 text-ink-3 mb-1.5">
+          <span className="rounded-md bg-paper-2 px-1.5 py-0.5 text-[10px] font-bold text-ink-2">{ev.source ?? '程序派生'}</span>
+          {ev.chapter && <span className="font-medium text-ink-2">{ev.chapter}</span>}
         </p>
-        <p className="mt-0.5 text-ink-2">「{ev.text}」</p>
+        <div className="text-ink-2 pl-2 border-l-2 border-primary/30 leading-relaxed font-medium">
+          {highlightPharmacyKeywords(ev.text)}
+        </div>
       </div>
     )
   }
   return (
-    <div className="mt-1 text-[11px] leading-relaxed">
-      <p className="flex flex-wrap items-center gap-1 text-ink-3">
-        <span className="rounded bg-[var(--color-gold-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-gold">
-          教材 P{ev.book_page ?? '—'}
-        </span>
-        {ev.chapter && <span>{ev.chapter}</span>}
-        {!reviewed && (
-          <span className="rounded bg-paper-2 px-1.5 py-0.5 text-[10px] font-semibold text-ink-3">待顾问审校</span>
+    <div className="mt-2 rounded-xl border border-line-2 bg-paper-1/40 p-2.5 text-[11.5px] leading-relaxed">
+      <div className="flex flex-wrap items-center justify-between gap-1 mb-1.5 text-ink-3">
+        <div className="flex items-center gap-1.5">
+          <span className="rounded-md bg-[var(--color-gold-soft)] border border-gold/30 px-1.5 py-0.5 text-[10px] font-extrabold text-gold">
+            📖 教材 P{ev.book_page ?? '—'}
+          </span>
+          {ev.chapter && <span className="font-semibold text-ink-2">{ev.chapter}</span>}
+        </div>
+        {!reviewed ? (
+          <span className="rounded bg-paper-2 px-1.5 py-0.2 text-[9.5px] font-semibold text-ink-3">待顾问审校</span>
+        ) : (
+          <span className="rounded bg-emerald-50 px-1.5 py-0.2 text-[9.5px] font-bold text-emerald-700">专家已审校</span>
         )}
-      </p>
-      <p className="mt-0.5 text-ink-2">「{ev.text}」</p>
+      </div>
+      <div className="text-ink-2 pl-2 border-l-2 border-primary/50 leading-relaxed font-medium">
+        {highlightPharmacyKeywords(ev.text)}
+      </div>
     </div>
   )
 }
@@ -4325,20 +5404,20 @@ function PracticeFlow({ userId, question, onDiagnosis, onError, onExit, onStep, 
               <ArrowRight size={11} className="rotate-180" />返回今日待办
             </button>
           </div>
-          <p className="display mt-4 text-[19px] leading-relaxed">{question.stem}</p>
+          <p className="display mt-4 text-[20px] md:text-[21px] font-bold text-ink leading-relaxed tracking-normal">{question.stem}</p>
         </div>
         <div className="p-8 pt-6">
           <div className="space-y-3">
             {question.options.map((o) => (
               <motion.button key={o.key} onClick={() => setSelected(o.key)} whileTap={{ scale: 0.99 }}
-                className={`relative w-full rounded-2xl border px-5 py-4 text-left text-sm transition-colors duration-150
-                  ${selected === o.key ? 'border-primary bg-primary-soft/75 shadow-xs' : 'border-line bg-white hover:border-ink-3/40 hover:bg-paper-2/40'}`}>
+                className={`relative w-full rounded-2xl border px-5 py-4 text-left text-sm transition-colors duration-150 cursor-pointer
+                  ${selected === o.key ? 'border-primary bg-primary-soft/85 shadow-xs font-semibold' : 'border-line bg-white hover:border-ink-3/40 hover:bg-paper-2/40'}`}>
                 <span className="relative z-10 flex items-center gap-3.5">
-                  <span className={`grid size-7 flex-none place-items-center rounded-full border text-xs font-bold transition-colors duration-150
-                    ${selected === o.key ? 'border-primary bg-primary text-white' : 'border-line text-ink-2 bg-white'}`}>
+                  <span className={`grid size-7.5 flex-none place-items-center rounded-full border text-xs font-black transition-colors duration-150
+                    ${selected === o.key ? 'border-primary bg-primary text-white shadow-xs' : 'border-line text-ink-2 bg-white'}`}>
                     {o.key}
                   </span>
-                  <span className={selected === o.key ? 'font-semibold text-ink' : 'text-ink-2'}>{o.text}</span>
+                  <span className={selected === o.key ? 'font-bold text-ink text-[15px]' : 'text-ink-2 text-[14.5px]'}>{o.text}</span>
                 </span>
               </motion.button>
             ))}
@@ -4877,7 +5956,7 @@ function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onE
             )}
             <div className="flex flex-wrap items-center gap-3">
               <CategoryTag category={diagnosis.card.misconception.category} />
-              <p className="text-[15.5px] font-medium">{diagnosis.card.misconception.name}</p>
+              <p className="text-[17px] font-bold text-ink">{diagnosis.card.misconception.name}</p>
             </div>
 
             {diagnosis.card.ai_rationale && (
@@ -4890,7 +5969,7 @@ function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraining, onE
                   {diagnosis.card.ai_rationale}
                 </p>
                 <p className="mt-2 text-[11px] text-ink-3">
-                  由 GLM-5.2 基于题干考点、选项药理机制与作答思维链深度比对生成
+                  由 Qwen 3.7 Flash 基于题干考点、选项药理机制与作答思维链深度比对生成
                 </p>
               </motion.div>
             )}
