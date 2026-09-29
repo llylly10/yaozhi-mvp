@@ -17,7 +17,7 @@ COPY corpus/course-materials/ /corpus/course-materials/
 # 解析 OCR_DIR=/corpus/ocr_textbook9e —— 目标必须是绝对 /corpus/（2026-09-29 部署实测确认，
 # 曾误改为 ./corpus 导致容器内语料缺失，语义路预热与教材路检索双双 no-op）。
 COPY corpus/ocr_textbook9e/ /corpus/ocr_textbook9e/
-# 语义向量检索（2026-09-29）：预热 bge-small-zh 模型进镜像层（构建期经 hf-mirror 下载 ~100MB，
+# 语义模型运行时惰性加载（fastembed；启用时首次查询经 hf-mirror 下载 ~100MB 缓存于容器层）
 # 运行时查询编码零下载）。失败不阻塞构建：运行时自动退回 BM25 双路检索。
 ENV HF_ENDPOINT=https://hf-mirror.com
 # 说明：云端 2C4G 默认关闭语义路（deploy compose 置 YAOZHI_RAG_SEMANTIC_ENABLED=false），
