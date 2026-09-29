@@ -19,11 +19,10 @@ COPY corpus/course-materials/ /corpus/course-materials/
 COPY corpus/ocr_textbook9e/ /corpus/ocr_textbook9e/
 # 语义向量检索（2026-09-29）：预热 bge-small-zh 模型进镜像层（构建期经 hf-mirror 下载 ~100MB，
 # 运行时查询编码零下载）。失败不阻塞构建：运行时自动退回 BM25 双路检索。
-# HF_HUB_DISABLE_XET：huggingface_hub 1.3x 默认走 Xet 协议直连 cas-server.xethub.hf.co
-#（镜像无法代理该端点，401）；禁用后回退经典 HTTP 下载，走 hf-mirror。
 ENV HF_ENDPOINT=https://hf-mirror.com
+# 说明：云端 2C4G 默认关闭语义路（deploy compose 置 YAOZHI_RAG_SEMANTIC_ENABLED=false），
+#       此 ENV 仅为将来启用时经 hf-mirror 正常下载预留（Xet 端点镜像无法代理）。
 ENV HF_HUB_DISABLE_XET=1
-RUN python build_semantic_cache.py --warmup || echo "[build] semantic warmup skipped (offline?)"
 EXPOSE 8000
 # Render 通过 $PORT 注入端口；本地回退 8000
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
