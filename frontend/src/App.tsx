@@ -633,7 +633,7 @@ function Welcome({ onRegistered, onError, onOpenEval }: {
       })
       .catch((e) => {
         const m = String(e)
-        onError(m.includes('403') ? '邀请码不正确 — 请向项目组索取' : m)
+        onError(m.includes('403') ? '邀请码不正确（演示邀请码：DEMO2026）' : m)
       })
       .finally(() => setBusy(false))
   }
@@ -685,7 +685,7 @@ function Welcome({ onRegistered, onError, onOpenEval }: {
         <input value={account} onChange={(e) => setAccount(e.target.value)} className="input" maxLength={32} />
 
         <label className="mb-1.5 mt-5 block text-[13px] font-semibold text-ink-2">邀请码</label>
-        <input value={invite} onChange={(e) => setInvite(e.target.value)} placeholder="向项目组索取"
+        <input value={invite} onChange={(e) => setInvite(e.target.value)} placeholder="演示邀请码：DEMO2026"
           className="input" maxLength={32} />
 
         <label className="mb-1.5 mt-5 block text-[13px] font-semibold text-ink-2">
