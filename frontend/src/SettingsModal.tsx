@@ -16,7 +16,7 @@ import {
   Database,
   CloudCheck,
 } from '@phosphor-icons/react'
-import { api } from './api'
+import { api, getAdminKey, setAdminKey as persistAdminKey } from './api'
 
 interface Props {
   open: boolean
@@ -48,6 +48,7 @@ export const SettingsModal: React.FC<Props> = ({
   onResetCache,
 }) => {
   const [tab, setTab] = useState<'profile' | 'privacy' | 'specs'>('profile')
+  const [adminKey, setAdminKey] = useState(getAdminKey())
   const [consentInfo, setConsentInfo] = useState<ConsentStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [withdrawing, setWithdrawing] = useState(false)
@@ -339,6 +340,23 @@ export const SettingsModal: React.FC<Props> = ({
 
           {tab === 'specs' && (
             <div className="space-y-4">
+              <div className="rounded-2xl border border-line/60 p-4">
+                <div className="flex items-center gap-2 font-bold text-xs text-ink">
+                  <LockKey size={16} className="text-primary" />
+                  管理员密钥（评委 / 运维）
+                </div>
+                <p className="mt-2 text-xs text-ink-3">
+                  运行算法评测（/eval/run）需携带管理员密钥，仅保存在本机浏览器。
+                </p>
+                <input
+                  type="password"
+                  value={adminKey}
+                  onChange={(e) => { setAdminKey(e.target.value); persistAdminKey(e.target.value) }}
+                  placeholder="X-Admin-Key（向项目组索取，即改即存）"
+                  className="input mt-2.5 !py-2 text-xs"
+                />
+              </div>
+
               <div className="rounded-2xl border border-line/60 bg-paper-2/40 p-4">
                 <div className="flex items-center gap-2 font-bold text-xs text-ink">
                   <CloudCheck size={16} className="text-primary" />

@@ -4,13 +4,14 @@ import time
 import uuid
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Literal
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from .config import settings
 from .db import get_db
 from .models import (
     Attempt, ChainNode, ConfusionPair, DiagnosticDomain, DiagnosisCandidate, DiagnosisEvidence,
@@ -21,13 +22,17 @@ from .models import (
 from .diagnosis import engine as dx
 from .mastery import engine as mastery
 from .knowledge.point_repo import get_knowledge_detail
+from .users.deps import current_user, guard_request, issue_token, require_admin
+from .users.security import hash_password, verify_password
 from .cases.case_repo import (
     get_clinical_cases_summary,
     get_clinical_case_detail,
     evaluate_clinical_case,
 )
 
-router = APIRouter()
+# 路由级鉴权守卫：YAOZHI_AUTH_REQUIRED=true 时，能定位到用户的接口要求 Bearer token
+# 且 token 归属必须与路径 user_id（或 session/training/attempt 作用域）一致，见 users/deps.py
+router = APIRouter(dependencies=[Depends(guard_request)])
 
 # US-0 AC4：撤回同意后 24h 内逻辑删除、30 天内物理删除
 PURGE_AFTER_DAYS = 30
@@ -142,24 +147,25 @@ def user_exists(user_id: str, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-# ---------- 演示账号（US-0 同意门） ----------
-
-DEMO_INVITE_CODE = "DEMO2026"
+# ---------- 演示账号（US-0 同意门）+ 登录令牌（W2 鉴权，2026-09-28） ----------
 
 
 class DemoSessionIn(BaseModel):
     account: str = Field(default="yaozhi_student01", max_length=32)
-    invite_code: str = Field(..., max_length=32)
+    invite_code: str = Field(default="", max_length=32)
+    # 可选密码：设置后该账号须凭密码登录（邀请码登录对其停用）；存量无密码账号不受影响
+    password: str | None = Field(default=None, max_length=64)
 
 
 @router.post("/sessions/demo")
 def create_demo_session(body: DemoSessionIn, db: Session = Depends(get_db)):
-    """登录 / 注册（第 1 步）：演示账号 + 邀请码。
-    若该账号名已有历史数据且未撤回，则直接登录已有账号并保留全部学习与错题记录；
-    若账号不存在，则自动创建新账号。
+    """登录 / 注册（第 1 步）：演示账号 + 邀请码（新账号可一并设置密码）。
+
+    - 新账号：邀请码必需；密码可选（设置后下次须凭密码登录）。
+    - 已设密码的账号：必须密码正确，邀请码不再必需。
+    - 存量无密码账号：凭邀请码进入（兼容 W1 行为），本次若携带密码则顺手补设。
+    成功一律签发 Bearer token（YAOZHI_AUTH_REQUIRED=true 时后续接口必需）。
     """
-    if body.invite_code.strip().upper() != DEMO_INVITE_CODE:
-        raise HTTPException(403, "邀请码不正确，请向项目组索取演示邀请码")
     account_name = body.account.strip() or "演示学生"
     user = db.execute(
         select(DemoUser).where(
@@ -168,15 +174,71 @@ def create_demo_session(body: DemoSessionIn, db: Session = Depends(get_db)):
         ).order_by(DemoUser.created_at.desc())
     ).scalars().first()
 
+    if user is not None and user.password_hash:
+        if not body.password:
+            raise HTTPException(401, "该账号已设置密码，请输入密码后登录")
+        if not verify_password(body.password, user.password_hash):
+            raise HTTPException(401, "账号或密码不正确")
+    else:
+        if body.invite_code.strip().upper() != settings.invite_code.upper():
+            raise HTTPException(403, "邀请码不正确，请向项目组索取演示邀请码")
+
     if user is None:
-        user = DemoUser(consented=False, display_name=account_name)
+        user = DemoUser(consented=False, display_name=account_name,
+                        password_hash=hash_password(body.password) if body.password else None)
         db.add(user)
         db.commit()
         audit(db, str(user.id), "account.registered", f"user:{user.id}", account=body.account)
     else:
+        if body.password and not user.password_hash:
+            user.password_hash = hash_password(body.password)  # 存量账号首次设置密码
         audit(db, str(user.id), "account.logged_in", f"user:{user.id}", account=body.account)
 
-    return {"user_id": user.id, "display_name": user.display_name, "consented": bool(user.consented)}
+    token = issue_token(db, user.id)
+    db.commit()
+    return {"user_id": user.id, "display_name": user.display_name,
+            "consented": bool(user.consented), "has_password": bool(user.password_hash),
+            "token": token}
+
+
+class PasswordLoginIn(BaseModel):
+    account: str = Field(..., max_length=32)
+    password: str = Field(..., max_length=64)
+
+
+@router.post("/auth/login")
+def password_login(body: PasswordLoginIn, db: Session = Depends(get_db)):
+    """密码登录（W2 鉴权）：账号 + 密码换 Bearer token；邀请码登录走 /sessions/demo。"""
+    user = db.execute(
+        select(DemoUser).where(
+            DemoUser.display_name == body.account.strip(),
+            DemoUser.withdrawn_at.is_(None)
+        ).order_by(DemoUser.created_at.desc())
+    ).scalars().first()
+    if user is None or not user.password_hash or not verify_password(body.password, user.password_hash):
+        raise HTTPException(401, "账号或密码不正确")
+    audit(db, str(user.id), "account.logged_in", f"user:{user.id}",
+          account=body.account, via="password")
+    token = issue_token(db, user.id)
+    db.commit()
+    return {"user_id": user.id, "display_name": user.display_name,
+            "consented": bool(user.consented), "token": token}
+
+
+@router.post("/auth/logout")
+def logout(request: Request, db: Session = Depends(get_db)):
+    """登出：撤销当前 Bearer token（前端同时清本地凭据）。幂等。"""
+    from .users.deps import bearer_token
+    raw = bearer_token(request)
+    if raw:
+        from .models import AuthToken
+        from .users.security import token_hash
+        tok = db.execute(select(AuthToken).where(
+            AuthToken.token_hash == token_hash(raw))).scalar_one_or_none()
+        if tok and tok.revoked_at is None:
+            tok.revoked_at = now()
+            db.commit()
+    return {"ok": True}
 
 
 class ConsentIn(BaseModel):
@@ -247,9 +309,9 @@ def get_deletion_receipt(user_id: str, db: Session = Depends(get_db)):
             "physical_delete_after_days": PURGE_AFTER_DAYS}
 
 
-@router.post("/admin/purge-withdrawn")
+@router.post("/admin/purge-withdrawn", dependencies=[Depends(require_admin)])
 def purge_withdrawn(days: int = Query(PURGE_AFTER_DAYS), db: Session = Depends(get_db)):
-    """US-0 AC4 的 30 天物理删除清理。生产环境由定时任务调用，Demo 开放便于演示数据生命周期闭环。
+    """US-0 AC4 的 30 天物理删除清理。生产环境由定时任务调用（需 YAOZHI_ADMIN_KEY）。
 
     审计日志保留 —— 它是删除完成的凭证，记录的也是操作本身而非学习内容。
     """
@@ -268,9 +330,9 @@ def purge_withdrawn(days: int = Query(PURGE_AFTER_DAYS), db: Session = Depends(g
     return {"purged": purged, "count": len(purged), "threshold_days": days}
 
 
-@router.post("/admin/reset-demo")
+@router.post("/admin/reset-demo", dependencies=[Depends(require_admin)])
 def reset_demo(db: Session = Depends(get_db)):
-    """演示数据复位：清空全部业务数据并重新种子化，保证演示可重现。
+    """演示数据复位：清空全部业务数据并重新种子化，保证演示可重现（需 YAOZHI_ADMIN_KEY）。
 
     审计日志一并清空（演示数据无留存价值）。 SQLite 下 drop_all→create_all 重建表。
     """
@@ -968,7 +1030,14 @@ def wrong_recall(attempt_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/attempts", status_code=202)
-def submit_attempt(body: AttemptIn, db: Session = Depends(get_db)):
+def submit_attempt(body: AttemptIn, request: Request, db: Session = Depends(get_db)):
+    # user_id 在请求体而非路径，路由级守卫覆盖不到：鉴权开启时在此内联校验归属
+    if settings.auth_required:
+        u = current_user(request, db)
+        if u is None:
+            raise HTTPException(401, "未登录或登录已过期，请重新登录")
+        if u.id != body.user_id:
+            raise HTTPException(403, "无权以其他账号提交作答")
     _active_user(body.user_id, db)
     dup = db.execute(select(Attempt).where(Attempt.idempotency_key == body.idempotency_key)).scalar_one_or_none()
     if dup:
@@ -2718,9 +2787,9 @@ class EvalRunRequest(BaseModel):
     provider: str = "mock"
 
 
-@router.post("/eval/run")
+@router.post("/eval/run", dependencies=[Depends(require_admin)])
 def run_eval_benchmark(body: EvalRunRequest | None = None):
-    """触发标准保护测试集自动化评测。输出 Recall / Precision / Macro-F1 / 混淆矩阵与红线门禁。"""
+    """触发标准保护测试集自动化评测（需 YAOZHI_ADMIN_KEY：可能调用真模型产生费用）。"""
     from eval.evaluator import evaluate_benchmark
     mode = (body.provider if body else "mock") or "mock"
     return evaluate_benchmark(provider_mode=mode)

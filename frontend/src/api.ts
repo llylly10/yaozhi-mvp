@@ -2,12 +2,49 @@
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
 
+/* ---- 账号鉴权（W2，2026-09-28）：Bearer token + 管理密钥 ---- */
+const TOKEN_KEY = 'yaozhi_auth_token'
+const ADMIN_KEY_STORE = 'yaozhi_admin_key'
+
+export function getToken(): string | null { return localStorage.getItem(TOKEN_KEY) }
+export function setToken(t: string) { localStorage.setItem(TOKEN_KEY, t) }
+export function clearAuth() {
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem('yaozhi_user_id_v3')
+  localStorage.removeItem('yaozhi_account_name')
+}
+export function getAdminKey(): string { return localStorage.getItem(ADMIN_KEY_STORE) || '' }
+export function setAdminKey(k: string) {
+  if (k.trim()) localStorage.setItem(ADMIN_KEY_STORE, k.trim())
+  else localStorage.removeItem(ADMIN_KEY_STORE)
+}
+
+/* 统一注入 Authorization：所有 /api 请求自动携带登录 token（登录/注册端点亦无害）。
+   401（注册/登录端点除外）= 凭据失效：清本地凭据回欢迎页重新进入，避免卡在主壳报错。 */
+const _fetch = window.fetch.bind(window)
+;(window as unknown as { fetch: typeof _fetch }).fetch = async (
+  input: RequestInfo | URL, init?: RequestInit) => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  const headers = new Headers(init?.headers)
+  const token = getToken()
+  if (token && url.includes('/api/')) headers.set('Authorization', `Bearer ${token}`)
+  const res = await _fetch(input, { ...init, headers })
+  if (res.status === 401 && !url.includes('/sessions/demo') && !url.includes('/auth/')) {
+    clearAuth()
+    setTimeout(() => window.location.reload(), 50)
+  }
+  return res
+}
+
 async function handle(res: Response) {
   if (!res.ok) {
     if (res.status === 404) throw new Error('数据不存在或已被重置，请刷新页面后重试')
+    if (res.status === 401) throw new Error('登录已过期，请重新进入')
     if (res.status >= 500) throw new Error('服务器开小差了，请稍后重试（已记录日志）')
     const detail = await res.text().catch(() => '')
-    throw new Error(`请求失败 ${res.status}: ${detail.slice(0, 150)}`)
+    let msg = detail.slice(0, 150)
+    try { msg = JSON.parse(detail).detail || msg } catch { /* 非 JSON 原样输出 */ }
+    throw new Error(`请求失败 ${res.status}: ${msg}`)
   }
   return res.json()
 }
@@ -83,8 +120,21 @@ export const api = {
     return res.ok
   },
 
-  demoSession: (account: string, inviteCode: string): Promise<{ user_id: string; display_name: string; consented: boolean }> =>
-    fetch('/api/sessions/demo', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ account, invite_code: inviteCode }) }).then(handle),
+  demoSession: (account: string, inviteCode: string, password?: string): Promise<{ user_id: string; display_name: string; consented: boolean; has_password?: boolean; token?: string }> =>
+    fetch('/api/sessions/demo', { method: 'POST', headers: jsonHeaders,
+      body: JSON.stringify({ account, invite_code: inviteCode, ...(password ? { password } : {}) }) })
+      .then(handle)
+      .then((r) => { if (r?.token) setToken(r.token); return r }),
+
+  // 密码登录（W2 鉴权）：账号+密码换 Bearer token；邀请码登录走 demoSession
+  passwordLogin: (account: string, password: string): Promise<{ user_id: string; display_name: string; consented: boolean; token: string }> =>
+    fetch('/api/auth/login', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ account, password }) })
+      .then(handle)
+      .then((r) => { setToken(r.token); return r }),
+
+  // 登出：撤销服务端 token（须在清本地凭据前调用，Authorization 由 fetch 包装自动注入；幂等）
+  logoutServer: (): Promise<unknown> =>
+    fetch('/api/auth/logout', { method: 'POST', headers: jsonHeaders }).then(handle).catch(() => null),
 
   consent: (userId: string, docs: { user_agreement: boolean; privacy_policy: boolean; data_collection: boolean }) =>
     fetch(`/api/users/${userId}/consent`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(docs) }).then(handle),
@@ -255,7 +305,9 @@ export const api = {
     fetch(`/api/users/${userId}/study/knowledge-detail?chapter_no=${chapterNo}&point_name=${encodeURIComponent(pointName)}${domainId ? `&domain_id=${domainId}` : ''}`).then(handle),
 
   getEvalLatest: () => fetch('/api/eval/latest').then(handle).then(transformBackendEvalReport),
-  runEval: (provider = 'mock') => fetch('/api/eval/run', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ provider }) }).then(handle).then(transformBackendEvalReport),
+  runEval: (provider = 'mock') => fetch('/api/eval/run', { method: 'POST',
+    headers: { ...jsonHeaders, 'X-Admin-Key': getAdminKey() },
+    body: JSON.stringify({ provider }) }).then(handle).then(transformBackendEvalReport),
 
   studyQuiz: (userId: string, domainId: string) =>
     fetch(`/api/users/${userId}/study-map/${domainId}/quiz`).then(handle),

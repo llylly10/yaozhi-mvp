@@ -20,6 +20,10 @@ services:
       # db 放独立数据目录 /srv/data（named volume 挂载点），避免 volume 遮蔽镜像代码
       # env 前缀必须是 YAOZHI_（Settings.env_prefix），否则 config 回退默认库
       - YAOZHI_DATABASE_URL=sqlite:////srv/data/yaozhi_w1.db
+      # 鉴权（2026-09-28）：公网部署必须开启 token 校验；管理密钥（YAOZHI_ADMIN_KEY）
+      # 与演示邀请码（YAOZHI_INVITE_CODE）请加入 /home/admin/yaozhi_env（不入库），
+      # 未配置管理密钥时 /admin/* 与 /eval/run 开放且启动日志会告警。
+      - YAOZHI_AUTH_REQUIRED=1
     # 宿主机 DNS 走 systemd-resolved stub(127.0.0.53)，容器继承后无法解析外网域名
     # （表现为调外部模型报 Connection error / name resolution failure）。
     # 且公共 DNS(223.5.5.5/8.8.8.8) 从容器 bridge 网络 UDP:53 不可达，

@@ -7,7 +7,7 @@ import {
   Lightning, Hourglass, Sparkle, ShareNetwork, FirstAid, Printer, BookmarkSimple, Brain,
   Plus, Minus, ArrowsCounterClockwise, CornersOut, CornersIn, X, ArrowsLeftRight,
 } from '@phosphor-icons/react'
-import { api, type Diagnosis, type Question, type TikuFeedback, type RetestCapsuleData } from './api'
+import { api, clearAuth, type Diagnosis, type Question, type TikuFeedback, type RetestCapsuleData } from './api'
 import { EvalBenchmarkModal } from './EvalBenchmarkModal'
 import { CustomQuizView } from './CustomQuizView'
 import { KnowledgeDetailModal } from './KnowledgeDetailModal'
@@ -25,7 +25,38 @@ import { PharmacologyRadar } from './PharmacologyRadar'
  * 布局：通栏玻璃步骤轨 + 左侧学习栏 + 内容区
  */
 
-const USER_KEY = 'yaozhi_user_id_v2'
+// v3（2026-09-28）：鉴权上线后凭据体系升级（uid+token），旧缓存无 token，强制一次重新进入
+const USER_KEY = 'yaozhi_user_id_v3'
+
+// ---- 考期倒计时（2026-09-29 做真：此前头部胶囊是硬编码「D-38」纯装饰）----
+const GOAL_KEY = 'yaozhi_goal'           // 备考目标持久化（此前刷新即丢，考期预设会跟着丢）
+const EXAM_DATE_KEY = 'yaozhi_exam_date' // 用户自定义考期（ISO yyyy-mm-dd），优先于目标预设
+
+/* 考期预设：仅配全国统一考期的目标；日期以当年官方公告为准（执业药师约每年 10 月中旬） */
+const EXAM_PRESETS: { match: RegExp; label: string; short: string; iso: string }[] = [
+  { match: /执业/, label: '执业药师考试', short: '执考', iso: '2026-10-17' },
+]
+
+/* 生效考期：自定义 > 目标预设 > 无（无则头部胶囊隐藏，不显示无意义倒计时） */
+function resolveExamDate(goal: string, custom: string): { label: string; short: string; iso: string } | null {
+  if (custom) return { label: '自定义考期', short: '考期', iso: custom }
+  const p = EXAM_PRESETS.find((x) => x.match.test(goal))
+  return p ? { label: p.label, short: p.short, iso: p.iso } : null
+}
+
+/* 距考期天数（按本地日历日；目标日当天=0，已过为负） */
+function daysToExam(iso: string): number {
+  const d = new Date(`${iso}T00:00:00`)
+  if (isNaN(d.getTime())) return NaN
+  const now = new Date()
+  return Math.round((d.getTime() - new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) / 86400000)
+}
+
+/* 本地日期 ISO 串（不用 toISOString：UTC 偏移会让晚间差一天） */
+function todayIso(): string {
+  const n = new Date()
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`
+}
 
 // 幂等键 UUID 生成：优先 crypto.randomUUID（仅 HTTPS/localhost 可用）；
 // 降级 crypto.getRandomValues（非安全上下文也有），再降级纯 JS（极老浏览器/非安全上下文兜底）。
@@ -67,7 +98,16 @@ function AppInner() {
   const [activeQuestion, setActiveQuestion] = useState<Question | null>(null)
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [goal, setGoal] = useState<string>('期末冲绩')
+  const [goal, setGoal] = useState<string>(() => localStorage.getItem(GOAL_KEY) || '期末冲绩')
+  const [examDate, setExamDate] = useState<string>(() => localStorage.getItem(EXAM_DATE_KEY) || '')
+  const examInfo = resolveExamDate(goal, examDate)
+  const examDays = examInfo ? daysToExam(examInfo.iso) : NaN
+
+  const handleExamDate = (iso: string) => {
+    setExamDate(iso)
+    if (iso) localStorage.setItem(EXAM_DATE_KEY, iso)
+    else localStorage.removeItem(EXAM_DATE_KEY)
+  }
   const [portrait, setPortrait] = useState<PortraitResult | null>(null)
   const [materialDomain, setMaterialDomain] = useState<string | null>(null)
   const [showEvalModal, setShowEvalModal] = useState(false)
@@ -143,6 +183,8 @@ function AppInner() {
     setScreen('goal')
   }
   function logout() {
+    api.logoutServer()  // 撤销服务端 token（须在清本地凭据前发出；失败静默）
+    clearAuth()
     localStorage.removeItem(USER_KEY)
     setUserId(null); setScreen('register'); setActiveQuestion(null); setDiagnosis(null); setView('study')
   }
@@ -205,19 +247,17 @@ function AppInner() {
                 <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 <span>备考目标：<strong className="font-medium text-ink">{goal || '执业西药师'}</strong></span>
               </div>
-              {/* 实时遥测引擎指示灯 */}
-              <div
-                className="hidden md:flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-50/70 px-2.5 py-1 text-[11px] text-emerald-800"
-                title="BKT 认知状态追踪引擎持续在线"
-              >
-                <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="font-semibold">BKT 在线 · 18ms</span>
-              </div>
-              {/* 考期倒计时 */}
-              <div className="hidden xl:flex items-center gap-1 rounded-full border border-amber-500/25 bg-amber-50/70 px-2.5 py-1 text-[11px] font-semibold text-amber-900">
-                <ClockCounterClockwise size={12} className="text-amber-600" />
-                <span>执考倒计：<strong>D-38</strong></span>
-              </div>
+              {/* 考期倒计时（真实日期：自定义 > 目标预设；在备考目标页设置） */}
+              {examInfo && Number.isFinite(examDays) && (
+                <div
+                  onClick={() => setScreen('goal')}
+                  title={`目标考期：${examInfo.label} ${examInfo.iso} · 点击修改`}
+                  className="hidden xl:flex items-center gap-1 rounded-full border border-amber-500/25 bg-amber-50/70 px-2.5 py-1 text-[11px] font-semibold text-amber-900 cursor-pointer transition hover:border-amber-500/50"
+                >
+                  <ClockCounterClockwise size={12} className="text-amber-600" />
+                  <span>{examInfo.short}倒计：<strong>{examDays > 0 ? `D-${examDays}` : examDays === 0 ? '今日' : '已结束'}</strong></span>
+                </div>
+              )}
             </div>
 
             {/* 中间：智能流转轨（做题时显示 4 步轨迹；子模块显示当前模块与返回知识地图按钮；全景知识地图主页保持呼吸感） */}
@@ -320,7 +360,8 @@ function AppInner() {
             {screen === 'consent' && userId && <Consent key="consent" userId={userId} onConsented={onConsented} onBack={() => setScreen('register')} onError={setError} />}
             {screen === 'goal' && (
               <GoalPicker key="goal" goal={goal} isSubPage={Boolean(userId)}
-                onNext={(g) => { setGoal(g); setScreen('study'); setView('study') }}
+                examDate={examDate} onExamDate={handleExamDate}
+                onNext={(g) => { setGoal(g); localStorage.setItem(GOAL_KEY, g); setScreen('study'); setView('study') }}
                 onBack={() => setScreen(userId ? 'study' : 'consent')} />
             )}
             {screen === 'study' && userId && (
@@ -580,13 +621,20 @@ function Welcome({ onRegistered, onError, onOpenEval }: {
 }) {
   const [account, setAccount] = useState('yaozhi_student01')
   const [invite, setInvite] = useState('')
+  const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
 
   function enter() {
     setBusy(true)
-    api.demoSession(account, invite)
-      .then((r) => onRegistered(r.user_id, r.consented))
-      .catch((e) => onError(String(e).replace('API 403: ', '邀请码不正确 — ')))
+    api.demoSession(account, invite, password.trim() || undefined)
+      .then((r) => {
+        localStorage.setItem('yaozhi_account_name', account)
+        onRegistered(r.user_id, r.consented)
+      })
+      .catch((e) => {
+        const m = String(e)
+        onError(m.includes('403') ? '邀请码不正确 — 请向项目组索取' : m)
+      })
       .finally(() => setBusy(false))
   }
 
@@ -631,16 +679,22 @@ function Welcome({ onRegistered, onError, onOpenEval }: {
         transition={{ ...spring, delay: 0.1 }} className="glass flex flex-col justify-center rounded-[28px] p-9">
       
         <h2 className="display text-[22px]">演示账号登录</h2>
-        <p className="mt-1.5 text-[13px] text-ink-2">MVP 阶段仅支持演示账号 / 邀请码，不对接学工系统</p>
+        <p className="mt-1.5 text-[13px] text-ink-2">演示账号 + 邀请码进入；设置密码后，下次可凭密码登录</p>
 
         <label className="mb-1.5 mt-7 block text-[13px] font-semibold text-ink-2">演示账号</label>
         <input value={account} onChange={(e) => setAccount(e.target.value)} className="input" maxLength={32} />
 
         <label className="mb-1.5 mt-5 block text-[13px] font-semibold text-ink-2">邀请码</label>
-        <input value={invite} onChange={(e) => setInvite(e.target.value)} placeholder="向项目组索取（演示：DEMO2026）"
+        <input value={invite} onChange={(e) => setInvite(e.target.value)} placeholder="向项目组索取"
           className="input" maxLength={32} />
 
-        <button onClick={enter} disabled={busy || !account.trim() || !invite.trim()} className="btn btn-primary mt-7 w-full !py-3.5">
+        <label className="mb-1.5 mt-5 block text-[13px] font-semibold text-ink-2">
+          密码 <span className="font-normal text-ink-3">（可选）</span>
+        </label>
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+          placeholder="设置后可用账号 + 密码登录" className="input" maxLength={64} />
+
+        <button onClick={enter} disabled={busy || !account.trim() || (!invite.trim() && !password.trim())} className="btn btn-primary mt-7 w-full !py-3.5">
           {busy ? '进入中…' : '进入药知'}<ArrowRight size={15} weight="bold" />
         </button>
         <p className="mt-4 text-center text-xs text-ink-3">
@@ -756,10 +810,14 @@ const GOALS = [
   ['备考执业药师', '对照执业药师考点组织练习，兼顾课程与考证。'],
 ] as const
 
-function GoalPicker({ onNext, goal, onBack, isSubPage }: {
+function GoalPicker({ onNext, goal, onBack, isSubPage, examDate, onExamDate }: {
   onNext: (g: string) => void; goal: string; onBack: () => void; isSubPage?: boolean
+  examDate: string; onExamDate: (iso: string) => void
 }) {
   const [picked, setPicked] = useState<string>(goal)
+  const preset = resolveExamDate(goal, '')
+  const effectiveIso = examDate || (preset ? preset.iso : '')
+  const days = effectiveIso ? daysToExam(effectiveIso) : NaN
   useEffect(() => { window.scrollTo(0, 0) }, [])
   return (
     <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={spring}
@@ -792,6 +850,37 @@ function GoalPicker({ onNext, goal, onBack, isSubPage }: {
         <button onClick={onBack} className="btn rounded-full border border-line bg-white px-5 py-3 text-sm font-medium text-ink-2 hover:bg-paper">
           {isSubPage ? '返回全景地图' : '上一步'}
         </button>
+      </div>
+
+      {/* 考期倒计时设置（2026-09-29 做真：自定义日期 > 目标预设，存 localStorage） */}
+      <div className="mt-6 rounded-2xl border border-line-2 bg-white p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[13px] font-semibold text-ink">考期倒计时</p>
+            <p className="mt-1 text-[12px] leading-relaxed text-ink-2">
+              顶部胶囊按此日期计算；预设日期以官方公告为准，可自定义覆盖。
+            </p>
+          </div>
+          <span className="whitespace-nowrap rounded-full bg-amber-50 px-2.5 py-1 text-[12px] font-bold text-amber-700">
+            {effectiveIso ? (days >= 0 ? `D-${days}` : '已结束') : '未设置'}
+          </span>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2.5">
+          <input type="date" value={effectiveIso} min={todayIso()}
+            onChange={(e) => onExamDate(e.target.value)}
+            className="rounded-xl border border-line-2 bg-paper-1/60 px-3 py-2 text-[13px] text-ink outline-none focus:border-primary/50" />
+          {preset && examDate && (
+            <button onClick={() => onExamDate('')}
+              className="rounded-full border border-line bg-white px-3.5 py-2 text-[12px] font-medium text-ink-2 hover:bg-paper">
+              恢复默认（{preset.label} {preset.iso}）
+            </button>
+          )}
+        </div>
+        {!effectiveIso && (
+          <p className="mt-2 text-[11px] text-ink-3">
+            当前目标（{goal}）没有全国统一考期预设，可自行设置日期（如期末考试日）。
+          </p>
+        )}
       </div>
     </motion.div>
   )

@@ -20,6 +20,23 @@ npm run dev      # http://localhost:5173，/api 代理到 8000
 cd backend && python -m pytest tests/ -q
 ```
 
+## 账号与鉴权（2026-09-28 补齐）
+
+- **登录/注册**：`POST /sessions/demo`（演示账号 + 邀请码）。注册时可一并设置**可选密码**；
+  已设密码的账号须凭密码登录（`POST /auth/login`，或 /sessions/demo 带密码），邀请码登录对其停用；
+  存量无密码账号凭邀请码进入（W1 兼容）。
+- **令牌**：登录成功签发 Bearer token（库存 sha256 摘要，默认 7 天有效，`/auth/logout` 撤销）。
+  前端自动注入 `Authorization` 头；收到 401 自动清凭据回欢迎页。
+- **归属校验**：`YAOZHI_AUTH_REQUIRED=1` 时，所有能定位到用户的接口（路径 user_id、
+  session/training/attempt 作用域、/attempts 请求体 user_id）要求 token 且归属一致；
+  公共内容接口（/domains、/questions、图谱、教材）不要求登录。默认 false（本地开发/既有脚本零改动）；
+  docker-compose 与 deploy/cloud 已置 1。
+- **管理密钥**：`YAOZHI_ADMIN_KEY` 保护 `/admin/reset-demo`、`/admin/purge-withdrawn`、`/eval/run`
+  （请求头 `X-Admin-Key`）。未配置时开放且启动日志告警——**公网部署必配**（cloud 部署写入
+  `/home/admin/yaozhi_env`，不入库）。前端在「设置 → 技术基线与规范」填写。
+- **邀请码**：`YAOZHI_INVITE_CODE`（默认 DEMO2026，生产建议改掉），已从登录页明文移除。
+- **旧库升级**：`migrate()` 自动为 users 表补 `password_hash` 列并新建 auth_tokens 表，无需手工迁移。
+
 ## 运行（Docker Compose，PostgreSQL + pgvector）
 
 ```bash
@@ -34,3 +51,4 @@ docker compose up --build
   **发布前必须由药理顾问逐字审校**（seed/seed.py，证据切片为占位，W3 接入真实切片流水线）。
 - 诊断引擎在请求内同步执行（Mock 零延迟）；会话状态机与库表结构已按 v1.1 就位。
 - 摸底测试、迁移复测、延迟复测调度、评测 Runner 为 W3–W4 范围。
+- 账号鉴权已于 2026-09-28 补齐（可选密码 + Bearer token + 归属校验 + 管理密钥），见上节。

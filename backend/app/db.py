@@ -35,6 +35,7 @@ def migrate():
         "withdrawn_at": "DATETIME",
         "purged_at": "DATETIME",
         "deletion_receipt": "VARCHAR(32)",
+        "password_hash": "VARCHAR(256)",  # W2 账号鉴权（2026-09-28）
     }
     existing = {c["name"] for c in inspect(engine).get_columns("users")}
     for col, dtype in needed.items():

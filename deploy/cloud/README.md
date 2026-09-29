@@ -61,3 +61,21 @@ docker compose exec backend python -c "from app.db import SessionLocal; from see
 
 > 注：本仓库之前还备过 Cloudflare 方案配置（`frontend/wrangler.toml`、`frontend/functions/`、`render.yaml`），
 > 走云服务器路线可忽略它们，不影响本方案。
+
+## 六、模型 Key 与环境变量（/home/admin/yaozhi_env）
+
+敏感配置放仓库外固定路径 `~/yaozhi_env`（compose `env_file:` 注入，不入库、代码覆盖部署不丢）：
+
+```bash
+# ~/yaozhi_env（建议 chmod 600）
+YAOZHI_EXTERNAL_API_KEY=sk-xxxxxxxx   # 阿里云百炼 DashScope Key；不配置则自动降级 Mock 规则引擎
+YAOZHI_ADMIN_KEY=xxxxxxxx             # 护 /admin/* 与 /eval/run（X-Admin-Key 头），生产必配
+# YAOZHI_INVITE_CODE=xxxxxxxx         # 演示邀请码（可选，默认 DEMO2026，生产建议改掉）
+```
+
+- 外部模型链路（2026-09-29 修复并实测）：归因（四分类+证据等级）与 grounded 问答真模型可用；
+  未配 key / 调用失败 / 熔断期自动降级 Mock，功能不中断。
+- **未配置 `YAOZHI_ADMIN_KEY` 时 `/admin/*` 与 `/eval/run` 在公网开放**（启动日志会告警）——生产必须配置。
+- 本地开发用 `backend/.env`（模板见 `backend/.env.example`，.gitignore 已排除；环境变量优先于 .env）。
+- 语义向量检索：页向量缓存已入库（`backend/app/rag/cache/`），镜像构建期自动预热模型
+  （经 hf-mirror 下载 ~100MB）；预热失败不阻塞部署，运行时自动退回 BM25 双路检索。

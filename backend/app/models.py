@@ -198,6 +198,19 @@ class DemoUser(Base):
     withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deletion_receipt: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # W2 账号鉴权（2026-09-28）：PBKDF2 哈希；NULL=存量无密码演示账号（凭邀请码进入）
+    password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+
+class AuthToken(Base):
+    """登录令牌（W2 鉴权）：库存 sha256 摘要而非原文；过期/撤销即失效。"""
+    __tablename__ = "auth_tokens"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Attempt(Base):

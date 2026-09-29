@@ -8,7 +8,9 @@
   到 (0,1]，再融合排序；融合后仍强制**每路至少 1 条**（只要该路有命中），保证跨源互补。
 - 教材路命中页再过一层「页内滑窗」：整页千字里挑与问题最贴近的 ~320 字窗口，缓解
   双栏串行造成的语义噪声，且无需重跑 OCR。
-- 语义 embedding 仍是可插拔升级项（见文末 SemanticMiniLMRetriever 占位）。
+- 语义向量路（2026-09-29 落地，见 semantic.py）：教材页 bge-small-zh 本地向量检索，
+  与教材 BM25 在路内融合（同页取较大值、语义独有页并入候选）；缓存/依赖缺失自动
+  关闭退回纯词法，行为与升级前一致。本期语料只用教材（不接外部语料）。
 """
 from __future__ import annotations
 
@@ -53,6 +55,7 @@ class Hit:
     code: str = ""       # itembank: 题号，如 "01-003"
     label: str = ""      # 展示用出处，如 "教材 第7章 p90" / "题库 01-139 第8章 局部麻醉药"
     item: object = field(default=None, repr=False)  # itembank: 原始 Item（可选）
+    semantic: bool = False  # 教材路：该页由语义向量召回/融合胜出（溯源展示用）
 
 
 def _build_index(ocr_dir: str | None = None) -> BM25Index:
@@ -96,12 +99,14 @@ def _build_item_index(db) -> BM25 | None:
 
 
 def reset_for_tests():
-    """测试隔离：清空两路缓存索引，允许换语料/换库重建。"""
+    """测试隔离：清空各路缓存索引（含语义路进程内状态），允许换语料/换库重建。"""
     global _cached_index, _init_attempted, _cached_item_index, _item_init_attempted
     _cached_index = None
     _init_attempted = False
     _cached_item_index = None
     _item_init_attempted = False
+    from . import semantic as _sem
+    _sem.reset_for_tests()
 
 
 def _rag_enabled() -> bool:
@@ -218,6 +223,73 @@ def _itembank_hits(query: str, k: int, db) -> list[Hit]:
     return out
 
 
+def _semantic_min_cos() -> float:
+    try:
+        from ..config import settings
+        return float(getattr(settings, "rag_semantic_min_cos", 0.35))
+    except Exception:
+        return 0.35
+
+
+def _semantic_hits(query: str, k: int, ocr_dir: str | None) -> list[Hit]:
+    """语义向量路（2026-09-29 落地，教材语料专用）：本地 bge-small-zh 页向量余弦检索。
+
+    - 仅教材语料（产品决策 2026-09-29：本期不接 NMPA 说明书等外部语料）；页向量离线
+      预构建入 app/rag/cache/，运行时零下载；依赖/缓存缺失/语料指纹不匹配 → []
+      （自动退回纯 BM25，行为与升级前一致）；
+    - 命中不过「稀有词覆盖」门槛——语义相关性由向量直接度量，词法门槛会把换了说法的
+      语义命中（如"突然停药"↔"反跳现象"）挡在门外，与引入语义路的目标相悖；
+    - 分数 = 绝对余弦（0~1），不做路内 top1 归一化：BM25 路靠归一化对齐跨路量纲，
+      语义路的精度兜底就是绝对门槛 min_cos，top1 放大会把弱相关页抬成满分。
+    """
+    from . import semantic
+    pairs = semantic.search(query, k=k, ocr_dir=ocr_dir, min_cos=_semantic_min_cos())
+    if not pairs:
+        return []
+    idx = _build_index(ocr_dir)
+    if idx is None or idx.empty:
+        return []
+    by_page: dict = {}
+    for doc in idx.docs:
+        p = doc.obj
+        by_page[getattr(p, "pdf_page", None)] = p
+    out = []
+    for pg, cos in pairs:
+        p = by_page.get(pg)
+        if p is None:
+            continue
+        out.append(Hit(source="textbook", text=best_window(p.text, query),
+                       chapter=p.chapter, score=round(float(cos), 4), raw_score=float(cos),
+                       page=p.pdf_page, book_page=p.book_page,
+                       label=f"教材 {p.chapter} p{p.book_page}".replace("  ", " ").strip(),
+                       semantic=True))
+    return out
+
+
+def _blend_semantic(tb: list[Hit], sem: list[Hit]) -> list[Hit]:
+    """教材路内融合（BM25 词法 + 语义余弦）：同页取两路分数较大值，语义独有页并入候选。
+
+    不做加权求和：两路分数基准不同（BM25 为 top1 归一化分、语义为绝对余弦），max 保证
+    任一路的强信号都不被另一路稀释；语义分带 min_cos 绝对门槛自证精度。语义胜出的页
+    标记 semantic=True 并在 label 追加「·语义」，供证据卡溯源展示。
+    """
+    if not sem:
+        return tb
+    by_page = {h.page: h for h in tb}
+    merged = list(tb)
+    for h in sem:
+        t = by_page.get(h.page)
+        if t is None:
+            merged.append(h)
+        elif h.score > t.score:
+            t.score, t.raw_score = h.score, h.raw_score
+            t.semantic = True
+            if "·语义" not in t.label:
+                t.label += "·语义"
+    merged.sort(key=lambda h: (-h.score, h.page))
+    return merged
+
+
 def _normalize(hits: list[Hit]) -> list[Hit]:
     """路内归一化：按该路 top1 分数缩放至 (0,1]，便于跨路比较。"""
     if not hits:
@@ -233,7 +305,7 @@ def _normalize(hits: list[Hit]) -> list[Hit]:
 
 
 def retrieve_mixed(query: str, k: int = 4, db=None, ocr_dir: str | None = None) -> list[Hit]:
-    """双路混合召回：教材页 + 题库解析，各路 top-k 后归一化融合，返回融合 top-k。
+    """混合召回：教材页（BM25+语义融合）+ 题库解析，各路 top-k 后归一化融合，返回融合 top-k。
 
     融合规则（配额制 + 按分补齐）：
     1. 两路各自归一化 → 各取配额 min(k//2, 该路命中数) 条，保证教材无关时题库路
@@ -244,6 +316,7 @@ def retrieve_mixed(query: str, k: int = 4, db=None, ocr_dir: str | None = None) 
     if not query or not _rag_enabled():
         return []
     tb = _normalize(_textbook_hits(query, k, ocr_dir))
+    tb = _blend_semantic(tb, _semantic_hits(query, k, ocr_dir))  # 教材路内词法+语义融合
     it = _normalize(_itembank_hits(query, k, db))
     pool = tb + it
     if not pool:
@@ -273,25 +346,22 @@ def retrieve_top_k(query: str, k: int = 3, min_score: float = 0.0,
                        score=round(float(score), 4), raw_score=float(score),
                        page=page.pdf_page, book_page=page.book_page,
                        label=f"教材 {page.chapter} p{page.book_page}".replace("  ", " ").strip()))
+    # 语义补充（2026-09-29）：BM25（含稀有词门槛过滤）命中不足 k 条时用语义路补缺。
+    # 语义分是绝对余弦、与 BM25 量纲不同，故只补缺不重排既有命中，也不套 min_score。
+    if len(out) < k:
+        got = {h.page for h in out}
+        for h in _semantic_hits(query, k, ocr_dir):
+            if h.page in got:
+                continue
+            out.append(h)
+            if len(out) >= k:
+                break
     return out
 
 
 def get_retriever(db=None, ocr_dir: str | None = None):
-    """返回混合检索函数（q, k）→ list[Hit]；语义 embedding 升级时在此替换实现。"""
+    """返回混合检索函数（q, k）→ list[Hit]；语义向量路已在 retrieve_mixed 内融合。"""
     return lambda q, k=4: retrieve_mixed(q, k=k, db=db, ocr_dir=ocr_dir)
-
-
-class SemanticMiniLMRetriever:
-    """（计划态占位）本地语义 embedding 检索。
-
-    前提：装 sentence_transformers 并指向已缓存的 all-MiniLM-L6-v2。
-    接入点与 BM25 相同（retrieve(query,k)）；中文贴合中等偏低，故当前默认走双路词法混合。
-    """
-
-    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
-        raise NotImplementedError(
-            "语义 embedding 为计划态：先装 sentence_transformers 并离线加载模型后再启用。"
-            "当前默认走 BM25 双路混合检索（retrieve_mixed）。")
 
 
 __all__ = ["Hit", "Item", "retrieve_mixed", "retrieve_top_k", "get_retriever",

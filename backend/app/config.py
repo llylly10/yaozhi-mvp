@@ -22,10 +22,28 @@ class Settings(BaseSettings):
     # ---- ③ RAG 检索（W3 落地，2026-09-08）----
     rag_enabled: bool = True   # 诊断时按题干检索教材切片作"知识库切片"证据；语料缺失自动 no-op
     rag_top_k: int = 2         # 每道错题并入的证据卡切片数
+    # ---- 语义向量检索（2026-09-29 落地，教材语料专用）----
+    # bge-small-zh 本地 ONNX（fastembed，无 torch / 无 API key）；页向量离线预构建
+    # （backend/build_semantic_cache.py → app/rag/cache/）。依赖/缓存缺失自动退回
+    # BM25 双路检索，绝不阻塞诊断与问答。
+    rag_semantic_enabled: bool = True   # env: YAOZHI_RAG_SEMANTIC_ENABLED
+    rag_semantic_min_cos: float = 0.45  # env: YAOZHI_RAG_SEMANTIC_MIN_COS，语义命中余弦门槛
+                                        # （2026-09-29 实测：相关命中 0.58~0.69，噪声 0.38~0.40，取间隔带中值）
     seed_on_startup: bool = True
+    # ---- W2 账号鉴权（2026-09-28 补齐）----
+    # 默认关闭=本地开发/既有测试零改动；部署（docker-compose / deploy/cloud）置 true。
+    auth_required: bool = False  # env: YAOZHI_AUTH_REQUIRED，开启后用户级接口要求 Bearer token 且校验归属
+    admin_key: str = ""          # env: YAOZHI_ADMIN_KEY，保护 /admin/* 与 /eval/run（X-Admin-Key 头）；空=开发放行
+    invite_code: str = "DEMO2026"  # env: YAOZHI_INVITE_CODE，演示邀请码（生产建议改掉）
+    token_ttl_days: int = 7      # env: YAOZHI_TOKEN_TTL_DAYS，登录令牌有效期
+    cors_origins: str = "*"      # env: YAOZHI_CORS_ORIGINS，逗号分隔来源白名单
 
     class Config:
         env_prefix = "YAOZHI_"
+        # 本地开发配置（backend/.env，.gitignore 已排除不入库）；优先级：环境变量 > .env > 默认值。
+        # 注意：跑测试前请清掉外部模型 key（或暂移 .env），否则带真 key 的 .env 会污染评测确定性。
+        env_file = ".env"
+        env_file_encoding = "utf-8"
 
 
 settings = Settings()

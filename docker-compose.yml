@@ -20,6 +20,9 @@ services:
     environment:
       YAOZHI_DATABASE_URL: postgresql+psycopg://yaozhi:yaozhi_dev@db:5432/yaozhi
       YAOZHI_MODEL_PROVIDER: mock
+      # 鉴权（2026-09-28）：容器演示也开 token 校验；本地 uvicorn 开发默认关
+      YAOZHI_AUTH_REQUIRED: "1"
+      YAOZHI_ADMIN_KEY: "yaozhi-admin-dev"  # 演示用管理密钥（生产放 env_file，勿入库）
     ports:
       - "8000:8000"
     depends_on:

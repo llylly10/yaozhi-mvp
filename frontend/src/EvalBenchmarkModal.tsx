@@ -45,7 +45,10 @@ export function EvalBenchmarkModal({ onClose }: Props) {
       const data = await api.runEval(selectedProvider)
       setReport(data)
     } catch (err) {
-      setError(String(err))
+      const m = String(err)
+      setError(m.includes('403')
+        ? '运行评测需要管理员密钥：请在「设置 → 技术基线与规范」中填写后重试'
+        : m)
     } finally {
       setRunning(false)
     }
