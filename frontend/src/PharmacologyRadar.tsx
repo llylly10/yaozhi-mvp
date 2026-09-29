@@ -211,8 +211,13 @@ export function PharmacologyRadar({
 
     const handleResize = () => chart.resize()
     window.addEventListener('resize', handleResize)
+    // SPA 切页不触发 window resize：容器尺寸变化靠 ResizeObserver 自愈
+    // （雷达坐标系 resize 即按新尺寸重排；observe 的首次回调顺带修正初始化时机的尺寸偏差）
+    const ro = new ResizeObserver(() => chart.resize())
+    ro.observe(chartRef.current)
     return () => {
       window.removeEventListener('resize', handleResize)
+      ro.disconnect()
     }
   }, [scores, showBenchmark])
 

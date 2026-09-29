@@ -5021,7 +5021,22 @@ function KnowledgeGraphView({ nodes, edges, title, tabDefs, labelTypes, centerMo
       timer = setTimeout(render, 180)
     }
     window.addEventListener('resize', onResize)
-    return () => { window.removeEventListener('resize', onResize); if (timer) clearTimeout(timer) }
+    // 容器尺寸自愈：SPA 切页/全屏切换不触发 window resize，而本图是像素级布局
+    // （layout:'none' + 显式坐标），容器以旧尺寸初始化后只 resize 不重算坐标照样偏心，
+    // 必须防抖重跑 render 按新宽高重建轨道位置。
+    let roTimer: ReturnType<typeof setTimeout> | null = null
+    const ro = new ResizeObserver(() => {
+      chart?.resize()
+      if (roTimer) clearTimeout(roTimer)
+      roTimer = setTimeout(render, 120)
+    })
+    ro.observe(ref.current)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      if (timer) clearTimeout(timer)
+      if (roTimer) clearTimeout(roTimer)
+      ro.disconnect()
+    }
   }, [nodeList, shown, center, degree, reduceMotion, onNodeClick])
 
   useEffect(() => () => { chartRef.current?.dispose(); chartRef.current = null }, [])
