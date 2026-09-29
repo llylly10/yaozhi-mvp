@@ -247,8 +247,8 @@ function AppInner() {
                 <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 <span>备考目标：<strong className="font-medium text-ink">{goal || '执业西药师'}</strong></span>
               </div>
-              {/* 考期倒计时（真实日期：自定义 > 目标预设；在备考目标页设置） */}
-              {examInfo && Number.isFinite(examDays) && (
+              {/* 考期倒计时（真实日期：自定义 > 目标预设；备考目标页设置。无考期时常驻「未设」占位，不隐藏） */}
+              {examInfo && Number.isFinite(examDays) ? (
                 <div
                   onClick={() => setScreen('goal')}
                   title={`目标考期：${examInfo.label} ${examInfo.iso} · 点击修改`}
@@ -256,6 +256,15 @@ function AppInner() {
                 >
                   <ClockCounterClockwise size={12} className="text-amber-600" />
                   <span>{examInfo.short}倒计：<strong>{examDays > 0 ? `D-${examDays}` : examDays === 0 ? '今日' : '已结束'}</strong></span>
+                </div>
+              ) : (
+                <div
+                  onClick={() => setScreen('goal')}
+                  title="在「备考目标」页设置考期后，此处显示真实倒计时"
+                  className="hidden xl:flex items-center gap-1 rounded-full border border-line bg-paper-1/70 px-2.5 py-1 text-[11px] font-medium text-ink-3 cursor-pointer transition hover:border-primary/40"
+                >
+                  <ClockCounterClockwise size={12} />
+                  <span>考期未设</span>
                 </div>
               )}
             </div>
