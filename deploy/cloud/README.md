@@ -77,5 +77,6 @@ YAOZHI_ADMIN_KEY=xxxxxxxx             # 护 /admin/* 与 /eval/run（X-Admin-Key
   未配 key / 调用失败 / 熔断期自动降级 Mock，功能不中断。
 - **未配置 `YAOZHI_ADMIN_KEY` 时 `/admin/*` 与 `/eval/run` 在公网开放**（启动日志会告警）——生产必须配置。
 - 本地开发用 `backend/.env`（模板见 `backend/.env.example`，.gitignore 已排除；环境变量优先于 .env）。
-- 语义向量检索：页向量缓存已入库（`backend/app/rag/cache/`），镜像构建期自动预热模型
-  （经 hf-mirror 下载 ~100MB）；预热失败不阻塞部署，运行时自动退回 BM25 双路检索。
+- 语义向量检索：云端默认**关闭**（compose 置 `YAOZHI_RAG_SEMANTIC_ENABLED=false`）——2C4G 内存下
+  构建期预热/运行时惰性加载均有拖垮机器的风险，BM25 双路（教材+题库）为实测问答质量基线；
+  页向量缓存已入库（`backend/app/rag/cache/`），换大机型或加 swap 后改为 `true` 即可启用。
