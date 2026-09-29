@@ -18,7 +18,6 @@ COPY corpus/course-materials/ /corpus/course-materials/
 # 曾误改为 ./corpus 导致容器内语料缺失，语义路预热与教材路检索双双 no-op）。
 COPY corpus/ocr_textbook9e/ /corpus/ocr_textbook9e/
 # 语义模型运行时惰性加载（fastembed；启用时首次查询经 hf-mirror 下载 ~100MB 缓存于容器层）
-# 运行时查询编码零下载）。失败不阻塞构建：运行时自动退回 BM25 双路检索。
 ENV HF_ENDPOINT=https://hf-mirror.com
 # 说明：云端 2C4G 默认关闭语义路（deploy compose 置 YAOZHI_RAG_SEMANTIC_ENABLED=false），
 #       此 ENV 仅为将来启用时经 hf-mirror 正常下载预留（Xet 端点镜像无法代理）。
