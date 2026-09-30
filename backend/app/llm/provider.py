@@ -522,6 +522,7 @@ class ExternalApiProvider(_BaseProvider):
         如实口径（2026-09-29 逻辑复查修正）：两种模式下本方法均为「按 rule_score 确定性排序」的
         透传实现，不调用 LLM（此前的「真模型仅做微扰」声称与实现不符，已删除）。排序语义与
         评测可回放性由此保证；LLM 语义重排为计划态，启用前不得声称模型参与排序。
+        """
         out = sorted(candidates, key=lambda c: (-float(c["rule_score"]), c.get("misconception_id", "")))
         for i, c in enumerate(out):
             c["rerank_score"] = round(float(c["rule_score"]), 3)
