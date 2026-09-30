@@ -824,7 +824,8 @@ function GoalPicker({ onNext, goal, onBack, isSubPage, examDate, onExamDate }: {
   examDate: string; onExamDate: (iso: string) => void
 }) {
   const [picked, setPicked] = useState<string>(goal)
-  const preset = resolveExamDate(goal, '')
+  // 考期预设跟随当前选中目标（picked），而非已保存的 goal——否则页面上选了新目标，卡片提示仍停在旧目标
+  const preset = resolveExamDate(picked, '')
   const effectiveIso = examDate || (preset ? preset.iso : '')
   const days = effectiveIso ? daysToExam(effectiveIso) : NaN
   useEffect(() => { window.scrollTo(0, 0) }, [])
@@ -887,7 +888,7 @@ function GoalPicker({ onNext, goal, onBack, isSubPage, examDate, onExamDate }: {
         </div>
         {!effectiveIso && (
           <p className="mt-2 text-[11px] text-ink-3">
-            当前目标（{goal}）没有全国统一考期预设，可自行设置日期（如期末考试日）。
+            当前目标（{picked}）没有全国统一考期预设，可自行设置日期（如期末考试日）。
           </p>
         )}
       </div>
