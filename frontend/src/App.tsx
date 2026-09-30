@@ -760,7 +760,7 @@ function Consent({ userId, onConsented, onBack, onError }: {
       <div className="mt-7 space-y-4">
         {[
           ['《用户协议》', '约定服务范围、账号使用规范与用户责任。MVP 阶段为演示账号，不涉及付费与虚拟财产。', 0, true],
-          ['《隐私政策》', '说明我们收集哪些信息、如何保护、如何共享（不共享给任何第三方）以及你的权利。', 1, true],
+          ['《隐私政策》', '说明我们收集哪些信息、如何保护与使用。作答与学情数据仅存校内系统；使用问 AI 时，你的提问文本与相关课程资料会发送至外部大模型服务（阿里云）用于生成回答，不含账号等身份信息，不用于营销或对外提供。', 1, true],
         ].map(([title, desc, idx]) => (
           <button key={title as string} onClick={() => setReads(reads.map((v, j) => (j === idx ? !v : v)))}
             className={`w-full rounded-2xl border p-5 text-left transition-colors
