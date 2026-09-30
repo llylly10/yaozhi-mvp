@@ -2,7 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import * as echarts from 'echarts'
 import { Brain } from '@phosphor-icons/react'
 
+export interface GroupStat {
+  name: string
+  passed: number
+  total: number
+  pct: number
+}
+
 interface Props {
+  groupStats: GroupStat[]
   overallPct: number
   doneCount: number
   totalCount: number
@@ -19,7 +27,21 @@ interface DimensionMetric {
   statusText: string
 }
 
+// 雷达轴短标签（group 全名在 h-52 小图上过挤）
+const AXIS_SHORT: Record<string, string> = {
+  '总论·自主神经': '总论·自主',
+  '中枢神经系统药': '中枢神经',
+  '心血管·血液系统药': '心血管血液',
+  '呼吸消化·内分泌代谢': '呼吸消化代谢',
+  '抗感染药': '抗感染',
+  '肿瘤与其他': '肿瘤其他',
+}
+const axisName = (n: string) => AXIS_SHORT[n] ?? n
+
+const TARGET = 60 // 目标参考线：自设口径（随堂摸底通过章节占比），非官方常模
+
 export function PharmacologyRadar({
+  groupStats,
   overallPct,
   doneCount,
   totalCount,
@@ -28,70 +50,19 @@ export function PharmacologyRadar({
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null)
   const chartInstance = useRef<echarts.ECharts | null>(null)
-  const [showBenchmark, setShowBenchmark] = useState(true)
+  const [showTarget, setShowTarget] = useState(true)
 
-  // 严谨计算六维动态认知评分
-  const base = Math.max(25, overallPct)
-  const s0 = Math.min(96, Math.round(base * 1.05 + 8)) // 作用机制
-  const s1 = Math.min(94, Math.round(base * 0.98 + 5)) // 受体靶点
-  const s2 = Math.min(98, Math.round(base * 1.08 + 10)) // 临床指征
-  const s3 = Math.min(92, Math.round(base * 0.92 + 4)) // 不良反应
-  const s4 = Math.min(95, Math.round(base * 1.02 + 6)) // 禁忌辨析
-  const s5 = Math.min(90, Math.round(base * 0.88 + 3)) // 药物相互作用
+  // 六大系统真实达标率：随堂摸底通过章节占比（学习地图真实数据，非推导值）
+  const scores = groupStats.map((g) => g.pct)
 
-  const scores = [s0, s1, s2, s3, s4, s5]
-  const benchmarkScores = [70, 65, 75, 60, 68, 62]
-
-  const dimensions: DimensionMetric[] = [
-    {
-      name: '作用机制与信号转导',
-      code: 'MEC-01',
-      score: s0,
-      ref: 75,
-      status: s0 >= 75 ? 'PASS' : s0 >= 50 ? 'WARN' : 'CRIT',
-      statusText: s0 >= 75 ? '达标' : s0 >= 50 ? '临界' : '待强化',
-    },
-    {
-      name: '受体亚型与靶点亲和力',
-      code: 'REC-02',
-      score: s1,
-      ref: 70,
-      status: s1 >= 70 ? 'PASS' : s1 >= 50 ? 'WARN' : 'CRIT',
-      statusText: s1 >= 70 ? '达标' : s1 >= 50 ? '临界' : '待强化',
-    },
-    {
-      name: '临床适应症与首选阶梯',
-      code: 'IND-03',
-      score: s2,
-      ref: 80,
-      status: s2 >= 80 ? 'PASS' : s2 >= 55 ? 'WARN' : 'CRIT',
-      statusText: s2 >= 80 ? '达标' : s2 >= 55 ? '临界' : '待强化',
-    },
-    {
-      name: '典型与严重不良反应',
-      code: 'ADV-04',
-      score: s3,
-      ref: 70,
-      status: s3 >= 70 ? 'PASS' : s3 >= 45 ? 'WARN' : 'CRIT',
-      statusText: s3 >= 70 ? '达标' : s3 >= 45 ? '临界' : '待强化',
-    },
-    {
-      name: '配伍禁忌与特殊人群用药',
-      code: 'CTR-05',
-      score: s4,
-      ref: 75,
-      status: s4 >= 75 ? 'PASS' : s4 >= 50 ? 'WARN' : 'CRIT',
-      statusText: s4 >= 75 ? '达标' : s4 >= 50 ? '临界' : '待强化',
-    },
-    {
-      name: '药物代谢与相互作用 (DDI)',
-      code: 'DDI-06',
-      score: s5,
-      ref: 65,
-      status: s5 >= 65 ? 'PASS' : s5 >= 45 ? 'WARN' : 'CRIT',
-      statusText: s5 >= 65 ? '达标' : s5 >= 45 ? '临界' : '待强化',
-    },
-  ]
+  const dimensions: DimensionMetric[] = groupStats.map((g) => ({
+    name: g.name,
+    code: `${g.passed}/${g.total} 章`,
+    score: g.pct,
+    ref: TARGET,
+    status: g.pct >= TARGET ? 'PASS' : g.pct >= 30 ? 'WARN' : 'CRIT',
+    statusText: g.pct >= TARGET ? '达标' : g.pct >= 30 ? '推进中' : '待启动',
+  }))
 
   useEffect(() => {
     if (!chartRef.current) return
@@ -105,7 +76,7 @@ export function PharmacologyRadar({
     const seriesData: echarts.RadarSeriesOption['data'] = [
       {
         value: scores,
-        name: '当前掌握度',
+        name: '系统达标率（真实）',
         symbol: 'circle',
         symbolSize: 5,
         lineStyle: {
@@ -128,10 +99,10 @@ export function PharmacologyRadar({
       },
     ]
 
-    if (showBenchmark) {
+    if (showTarget) {
       seriesData.push({
-        value: benchmarkScores,
-        name: '全国考研/执考常模标杆',
+        value: groupStats.map(() => TARGET),
+        name: `目标线（自设 ${TARGET}%）`,
         symbol: 'none',
         lineStyle: {
           color: '#64748B',
@@ -151,27 +122,21 @@ export function PharmacologyRadar({
         borderColor: 'rgba(255, 255, 255, 0.12)',
         textStyle: { color: '#F8FAFC', fontSize: 11, fontFamily: 'monospace' },
         formatter: (params: any) => {
-          const val = params.value as number[]
+          const val = (params.value as number[]) || []
+          const rows = groupStats
+            .map(
+              (g, i) =>
+                `<div>${g.name}: <b>${val[i] ?? 0}%</b>（${g.passed}/${g.total} 章）</div>`,
+            )
+            .join('')
           return `
             <div style="font-weight:700;margin-bottom:4px;color:#34D399;font-size:12px;">${params.name}</div>
-            <div>机制转导: <b>${val[0]}%</b></div>
-            <div>受体靶点: <b>${val[1]}%</b></div>
-            <div>临床指征: <b>${val[2]}%</b></div>
-            <div>不良反应: <b>${val[3]}%</b></div>
-            <div>禁忌辨析: <b>${val[4]}%</b></div>
-            <div>药物互作: <b>${val[5]}%</b></div>
+            ${rows}
           `
         },
       },
       radar: {
-        indicator: [
-          { name: '机制转导', max: 100 },
-          { name: '受体靶点', max: 100 },
-          { name: '临床指征', max: 100 },
-          { name: '不良反应', max: 100 },
-          { name: '禁忌辨析', max: 100 },
-          { name: '药物互作', max: 100 },
-        ],
+        indicator: groupStats.map((g) => ({ name: axisName(g.name), max: 100 })),
         shape: 'polygon',
         splitNumber: 4,
         axisName: {
@@ -219,7 +184,7 @@ export function PharmacologyRadar({
       window.removeEventListener('resize', handleResize)
       ro.disconnect()
     }
-  }, [scores, showBenchmark])
+  }, [groupStats, showTarget])
 
   return (
     <div className={`rounded-2xl border border-line bg-white p-4.5 shadow-xs space-y-3.5 ${className}`}>
@@ -231,25 +196,24 @@ export function PharmacologyRadar({
           </span>
           <div>
             <div className="flex items-center gap-1.5">
-              <h4 className="text-xs font-bold text-ink tracking-tight">六维药理认知能力谱</h4>
+              <h4 className="text-xs font-bold text-ink tracking-tight">六大系统掌握度谱</h4>
               <span className="rounded bg-paper px-1.5 py-0.2 text-[9.5px] font-mono text-ink-3 border border-line">
-                BKT-6D
+                SYS·6
               </span>
             </div>
-            <p className="text-[10px] font-mono text-ink-3 mt-0.5">BAYESIAN MULTI-DIMENSIONAL COGNITION</p>
+            <p className="text-[10px] font-mono text-ink-3 mt-0.5">MASTERY BY SIX SYSTEM GROUPS · REAL DATA</p>
           </div>
         </div>
-
         <button
-          onClick={() => setShowBenchmark(!showBenchmark)}
+          onClick={() => setShowTarget(!showTarget)}
           className={`rounded-lg px-2 py-1 text-[10.5px] font-mono font-semibold transition border cursor-pointer ${
-            showBenchmark
+            showTarget
               ? 'bg-slate-100 border-slate-300 text-slate-800'
               : 'bg-paper border-line text-ink-3 hover:text-ink'
           }`}
-          title="切换常模标杆对照"
+          title="切换 60% 目标参考线（自设口径，非官方常模）"
         >
-          {showBenchmark ? '常模标杆: 开' : '常模标杆: 关'}
+          {showTarget ? '目标线: 开' : '目标线: 关'}
         </button>
       </div>
 
@@ -258,17 +222,16 @@ export function PharmacologyRadar({
         <div ref={chartRef} className="h-52 w-full" />
       </div>
 
-      {/* 临床化验单式指标矩阵 (Clinical Telemetry Matrix) */}
       <div className="space-y-1.5 border-t border-line/60 pt-3">
         <div className="flex items-center justify-between text-[10px] font-mono text-ink-3 px-1 uppercase tracking-wider">
-          <span>能力维度 (DIMENSION)</span>
-          <span>指标 · 判定</span>
+          <span>系统维度 (SYSTEM GROUP)</span>
+          <span>达标 · 判定</span>
         </div>
 
         <div className="space-y-1">
           {dimensions.map((d) => (
             <div
-              key={d.code}
+              key={d.name}
               className="flex items-center justify-between rounded-lg p-1.5 hover:bg-paper-1/60 transition"
             >
               <div className="flex items-center gap-2 min-w-0 pr-2">
@@ -282,7 +245,7 @@ export function PharmacologyRadar({
                 <div className="min-w-0">
                   <p className="text-[12px] font-medium text-ink truncate leading-tight">{d.name}</p>
                   <p className="text-[9.5px] font-mono text-ink-3 leading-none mt-0.5">
-                    {d.code} · 基准 {d.ref}%
+                    {d.code} · 目标 {d.ref}%（自设）
                   </p>
                 </div>
               </div>

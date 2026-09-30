@@ -1146,6 +1146,12 @@ function CourseGraph({ data, goal, userId, onOpen, onSkip, onProceed, onGoTodo, 
   const totalDomains = data.total_domains || 48
   const overallPct = Math.round((doneCount / (totalDomains || 1)) * 100)
   const seedCount = data.groups.reduce((acc, g) => acc + g.nodes.filter((n) => n.is_seed).length, 0)
+  // 六大系统真实达标率（随堂摸底通过章节占比）——供掌握度雷达使用（替代此前由总评推导的假六维）
+  const groupStats = data.groups.map((g) => {
+    const total = g.nodes.length
+    const passed = g.nodes.filter((n) => n.studied?.passed).length
+    return { name: g.name, passed, total, pct: total ? Math.round((passed / total) * 100) : 0 }
+  })
 
   // 构建课程全景图谱的宏观节点与拓扑关系
   const { macroNodes, macroEdges, allChaptersMap } = useMemo(() => {
@@ -1411,8 +1417,9 @@ function CourseGraph({ data, goal, userId, onOpen, onSkip, onProceed, onGoTodo, 
             ) : (
               /* 状态 A：默认全域掌握度雷达与六大系统概览 */
               <div className="space-y-4">
-                {/* 六维药理认知能力雷达图 */}
+                {/* 六大系统掌握度雷达（真实达标率） */}
                 <PharmacologyRadar
+                  groupStats={groupStats}
                   overallPct={overallPct}
                   doneCount={doneCount}
                   totalCount={totalDomains}

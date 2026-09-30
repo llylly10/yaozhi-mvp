@@ -2426,7 +2426,7 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
         return {"answer": f"{hint}（演示模式：真模型未接入）课程库中找到 {len(refs)} 处相关知识依据（{cites}）。针对你的追问，请重点抓住该药所作用的受体亚型、产生的特异性效应及与其易混淆药物的核心辨析点。",
                 "citations": refs, "refused": False, "refuse_reason": None,
                 "follow_ups": ["该药作用的受体亚型与特异性效应是什么？", "在易混淆同类药物中，临床选择的关键指征有何不同？"],
-                "provider": "mock", "thinking": "", "note": "计划态：真模型（GLM）接入后此条由模型结合错题背景 grounded 生成。"}
+                "provider": "mock", "thinking": "", "note": "外部模型未接入或本次调用失败：已降级为规则摘录，引用为本次检索切片。"}
 
     from .llm.provider import ProviderError
     try:
