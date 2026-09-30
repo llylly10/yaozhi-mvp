@@ -516,11 +516,12 @@ class ExternalApiProvider(_BaseProvider):
                                                  "result": out}, latency)
         return out
 
-    # ---- 候选重排（真模型：按语义贴合度在候选内排序）----
+    # ---- 候选重排（规则分确定性排序；LLM 语义重排为计划态，见附录 D）----
     def rerank(self, candidates: list[dict]) -> list[dict]:
         """candidates: [{misconception_id, rule_score, retrieval_score, category?, desc?}]。
-        Mock 语义=完全跟随 rule_score；真模型=以 rule_score 为基准仅做微扰，保证不因模型而大改次序，
-        从而既有语义性又满足确定性评测回放的可比性。"""
+        如实口径（2026-09-29 逻辑复查修正）：两种模式下本方法均为「按 rule_score 确定性排序」的
+        透传实现，不调用 LLM（此前的「真模型仅做微扰」声称与实现不符，已删除）。排序语义与
+        评测可回放性由此保证；LLM 语义重排为计划态，启用前不得声称模型参与排序。
         out = sorted(candidates, key=lambda c: (-float(c["rule_score"]), c.get("misconception_id", "")))
         for i, c in enumerate(out):
             c["rerank_score"] = round(float(c["rule_score"]), 3)
