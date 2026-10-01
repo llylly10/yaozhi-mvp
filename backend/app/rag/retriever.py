@@ -261,7 +261,7 @@ def _semantic_hits(query: str, k: int, ocr_dir: str | None) -> list[Hit]:
         out.append(Hit(source="textbook", text=best_window(p.text, query),
                        chapter=p.chapter, score=round(float(cos), 4), raw_score=float(cos),
                        page=p.pdf_page, book_page=p.book_page,
-                       label=f"教材 {p.chapter} p{p.book_page}".replace("  ", " ").strip(),
+                       label=f"教材 {p.chapter} p{p.book_page}·语义".replace("  ", " ").strip(),
                        semantic=True))
     return out
 
