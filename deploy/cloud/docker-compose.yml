@@ -40,6 +40,8 @@ services:
       - 100.100.2.138
     volumes:
       - backend_data:/srv/data   # 仅持久化 SQLite，不遮蔽镜像 /srv 代码
+      # 语义页向量缓存挂宿主机目录：容器重建/镜像更新不丢（免重跑页向量构建）
+      - ../../backend/app/rag/cache:/srv/app/rag/cache
     expose:
       - "8000"
     restart: unless-stopped
