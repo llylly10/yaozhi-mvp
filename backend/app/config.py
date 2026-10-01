@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     rag_semantic_enabled: bool = True   # env: YAOZHI_RAG_SEMANTIC_ENABLED
     rag_semantic_min_cos: float = 0.45  # env: YAOZHI_RAG_SEMANTIC_MIN_COS，语义命中余弦门槛
                                         # （2026-09-29 实测：相关命中 0.58~0.69，噪声 0.38~0.40，取间隔带中值）
+    rag_semantic_backend: str = "local"  # env: YAOZHI_RAG_SEMANTIC_BACKEND，local（fastembed 本地推理）| api（DashScope embedding，服务器零模型内存）
+    rag_semantic_api_model: str = "text-embedding-v3"  # env: YAOZHI_RAG_SEMANTIC_API_MODEL，api 后端的 embedding 模型
     seed_on_startup: bool = True
     # ---- W2 账号鉴权（2026-09-28 补齐）----
     # 默认关闭=本地开发/既有测试零改动；部署（docker-compose / deploy/cloud）置 true。

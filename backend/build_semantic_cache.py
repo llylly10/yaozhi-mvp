@@ -28,8 +28,13 @@ def main() -> int:
     ap.add_argument("--force", action="store_true", help="忽略既有缓存强制重建")
     ap.add_argument("--warmup", action="store_true", help="缓存已新鲜时仍加载模型并试编码（镜像构建预热）")
     ap.add_argument("--status", action="store_true", help="仅查看语义路状态")
+    ap.add_argument("--backend", default="local", choices=["local", "api"],
+                    help="编码后端：local=fastembed 本地 | api=DashScope embedding（需 key）")
     ap.add_argument("--ocr-dir", default=None, help="教材 OCR 目录（默认 corpus/ocr_textbook9e）")
     args = ap.parse_args()
+
+    from app.config import settings
+    settings.rag_semantic_backend = args.backend
 
     if args.status:
         st = semantic.status(args.ocr_dir)

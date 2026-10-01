@@ -150,6 +150,9 @@ def main() -> dict:
 
 
 if __name__ == "__main__":
+    if "--backend" in sys.argv:
+        settings.rag_semantic_backend = sys.argv[sys.argv.index("--backend") + 1]
+        print(f"编码后端：{settings.rag_semantic_backend}")
     out = main()
     out_file = Path(__file__).resolve().parent / "retrieval_eval_results.json"
     out_file.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
