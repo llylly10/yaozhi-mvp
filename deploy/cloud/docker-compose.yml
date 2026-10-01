@@ -24,9 +24,10 @@ services:
       # 与演示邀请码（YAOZHI_INVITE_CODE）请加入 /home/admin/yaozhi_env（不入库），
       # 未配置管理密钥时 /admin/* 与 /eval/run 开放且启动日志会告警。
       - YAOZHI_AUTH_REQUIRED=1
-      # 语义向量路云端显式关闭（2026-09-29）：2C4G 构建期预热会耗尽内存、运行时惰性加载有首查风险；
-      # BM25 双路（教材+题库）为实测问答质量基线。语义增强保留为本地/开发机能力，换大机型或加 swap 后可开。
-      - YAOZHI_RAG_SEMANTIC_ENABLED=false
+      # 语义向量路（2026-09-29 启用）：检索评测 hit@5 32.8%→87.6%（250 题弱标注，见 eval/retrieval_eval.py）；
+      # 机器已配 2G swap 兜底，模型经 build_semantic_cache.py --warmup 预热，缓存持久化到数据卷。
+      - YAOZHI_RAG_SEMANTIC_ENABLED=true
+      - YAOZHI_FASTEMBED_CACHE=/srv/data/fastembed
     # 宿主机 DNS 走 systemd-resolved stub(127.0.0.53)，容器继承后无法解析外网域名
     # （表现为调外部模型报 Connection error / name resolution failure）。
     # 且公共 DNS(223.5.5.5/8.8.8.8) 从容器 bridge 网络 UDP:53 不可达，

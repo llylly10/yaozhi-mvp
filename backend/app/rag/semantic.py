@@ -109,7 +109,10 @@ def _get_model():
     global _model
     if _model is None:
         from fastembed import TextEmbedding
-        _model = TextEmbedding(MODEL_NAME)
+        # 缓存目录可经 YAOZHI_FASTEMBED_CACHE 指到数据卷（容器内 /srv/data/...），
+        # 避免容器重建后重复下载 100MB 模型；未设置时用 fastembed 默认位置。
+        cache_dir = os.environ.get("YAOZHI_FASTEMBED_CACHE") or None
+        _model = TextEmbedding(MODEL_NAME, cache_dir=cache_dir)
         log.info("语义模型已加载：%s", MODEL_NAME)
     return _model
 
