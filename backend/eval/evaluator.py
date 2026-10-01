@@ -252,20 +252,71 @@ def evaluate_benchmark(provider_mode: str = "mock", api_key: str | None = None) 
 
     # 缓存为全局最新
     global _LATEST_REPORT
-    _LATEST_REPORT = report_data
-
-    # 写入 Markdown 报告
-    _write_markdown_report(report_data)
+    _save_report(report_data)
 
     return report_data
+
+
+def _persist_dir() -> Path:
+    """评测报告持久化目录：与 SQLite 库文件同目录（容器内 = /srv/data 数据卷，重建不丢）；
+    非 sqlite 或解析失败时回退 backend 根目录。"""
+    try:
+        from app.config import settings
+        url = settings.database_url
+        if url.startswith("sqlite"):
+            raw = url.split("sqlite:///")[-1]
+            d = Path(raw).parent
+            d.mkdir(parents=True, exist_ok=True)
+            return d
+    except Exception:  # noqa: BLE001 持久化失败不阻塞评测主流程
+        pass
+    return Path(__file__).resolve().parents[1]
+
+
+def _report_json_file() -> Path:
+    return _persist_dir() / "eval_report.json"
+
+
+def _save_report(data: dict[str, Any]) -> None:
+    """三路保存：进程内存缓存（/eval/latest 直读）+ JSON 文件（跨重启）+ Markdown 台账。"""
+    global _LATEST_REPORT
+    _LATEST_REPORT = data
+    try:
+        _report_json_file().write_text(
+            json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Failed to persist eval report json: %s", e)
+    try:
+        _write_markdown_report(data)
+    except Exception as e:  # noqa: BLE001 Markdown 台账失败不阻塞评测结果保存
+        logger.warning("Failed to write evaluation markdown: %s", e)
 
 
 def get_latest_eval_report() -> dict[str, Any]:
     """获取最新评测数据，若无则执行一次 mock 评测返回。"""
     global _LATEST_REPORT
     if _LATEST_REPORT is None:
+        saved = _load_saved_report()
+        if saved is not None:
+            _LATEST_REPORT = saved
+            logger.info("Loaded persisted eval report (%s, %s)",
+                        saved.get("provider_mode"), saved.get("run_at"))
+            return saved
         return evaluate_benchmark("mock")
     return _LATEST_REPORT
+
+
+def _load_saved_report() -> dict[str, Any] | None:
+    """从持久化 JSON 读取上次评测（含 external 模式报告，跨重启恢复）。"""
+    f = _report_json_file()
+    if not f.exists():
+        return None
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) and data.get("total_cases") else None
+    except Exception as e:  # noqa: BLE001 损坏文件视为无报告
+        logger.warning("Failed to load persisted eval report: %s", e)
+        return None
 
 
 def _write_markdown_report(data: dict[str, Any]):

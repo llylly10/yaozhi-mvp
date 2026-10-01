@@ -67,3 +67,22 @@ def test_api_eval_endpoints():
     d2 = r2.json()
     assert d2["overall_passed"] is True
     assert d2["accuracy"] > 0.70
+
+
+def test_external_report_persists_across_restart(tmp_path, monkeypatch):
+    """external 模式报告持久化：保存 → 清空进程内存（模拟重启）→ /eval/latest 应回读文件报告。"""
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from eval import evaluator
+
+    monkeypatch.setattr(evaluator, "_persist_dir", lambda: tmp_path)
+    saved = {"run_at": "2026-09-29 12:00:00", "provider_mode": "external_api",
+             "total_cases": 80, "hits": 70, "accuracy": 0.875,
+             "macro_recall": 0.88, "macro_f1": 0.89, "status_label": "PASSED"}
+    evaluator._save_report(saved)
+    assert (tmp_path / "eval_report.json").exists()
+
+    evaluator._LATEST_REPORT = None  # 模拟容器重启丢失进程内存
+    out = evaluator.get_latest_eval_report()
+    assert out["provider_mode"] == "external_api"
+    assert out["run_at"] == "2026-09-29 12:00:00"
