@@ -4,7 +4,7 @@ import { motion, AnimatePresence, MotionConfig, useReducedMotion, useScroll, use
 import {
   CheckCircle, XCircle, Warning, MagnifyingGlass, SkipForward, ArrowRight, ArrowUp, CaretDown, Pill,
   CalendarBlank, ClockCounterClockwise, SquaresFour, Gear, BookOpenText, ChatCircle, ChatCircleText,
-  Lightning, Hourglass, Sparkle, ShareNetwork, FirstAid, Printer, BookmarkSimple, Brain,
+  Lightning, Hourglass, Sparkle, ShareNetwork, FirstAid, Printer, BookmarkSimple, Brain, PaperPlaneRight,
   Plus, Minus, ArrowsCounterClockwise, CornersOut, CornersIn, X, ArrowsLeftRight,
 } from '@phosphor-icons/react'
 import { api, clearAuth, type Diagnosis, type Question, type TikuFeedback, type RetestCapsuleData } from './api'
@@ -3320,41 +3320,47 @@ function QAView({
       </div>
 
       <div className="sticky bottom-4 mt-6">
-        {/* DeepSeek 风格模式切换器 */}
-        <div className="mb-2 flex items-center justify-between px-2">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setEnableThinking(!enableThinking)}
-              className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition shadow-2xs ${
-                enableThinking
-                  ? 'bg-indigo-600 text-white shadow-indigo-200 hover:bg-indigo-700'
-                  : 'bg-white border border-line text-ink-3 hover:text-ink hover:border-ink-3'
-              }`}
-            >
-              <Brain size={13} weight={enableThinking ? 'fill' : 'regular'} />
-              <span>{enableThinking ? '深度思考模式 ON' : '深度思考模式 OFF'}</span>
-            </button>
-            <span className="text-[11px] text-ink-3 hidden sm:inline">
-              {enableThinking ? '💡 展开药理推导思维链（类似 DeepSeek-R1）' : '⚡ 极速直出模式，不展开思考链，1~2秒极速响应'}
-            </span>
+        <div className="rounded-2xl border border-line bg-white p-3 shadow-[0_10px_30px_rgba(31,42,38,0.10)]">
+          {/* 模式行：思考开关 + 会话计数 */}
+          <div className="mb-2 flex items-center justify-between gap-2 px-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setEnableThinking(!enableThinking)}
+                title={enableThinking ? '展开药理推导思维链后再回答' : '极速直出模式：不展开思考链'}
+                className={`flex flex-none items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
+                  enableThinking
+                    ? 'border border-indigo-200 bg-indigo-50 text-indigo-700'
+                    : 'border border-line bg-paper text-ink-3 hover:text-ink'
+                }`}
+              >
+                <Brain size={12} weight={enableThinking ? 'fill' : 'regular'} />
+                <span>{enableThinking ? '深度思考' : '极速直出'}</span>
+              </button>
+              <span className="hidden min-w-0 truncate text-[11px] text-ink-3 sm:inline">
+                {enableThinking ? '先展开药理推导思维链，再输出正式解答' : '不展开思考链，1~2 秒极速响应'}
+              </span>
+            </div>
+            {msgs.length > 0 && (
+              <span className="flex-none text-[10.5px] text-ink-3 hidden md:inline">
+                {msgs.length} 轮问答已保留
+              </span>
+            )}
           </div>
-          {msgs.length > 0 && (
-            <span className="text-[10.5px] text-ink-3 hidden md:inline">
-              {msgs.length} 轮问答已保留
-            </span>
-          )}
-        </div>
 
-        <div className="glass liquid flex items-center gap-2 rounded-full py-2 pl-5 pr-2">
-          <input value={input} onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(input) } }}
-            placeholder={enableThinking ? "输入药理学考点或机制问题，AI将展开深度思维链推导…" : "问一个药理学问题（500字内），极速回复…"}
-            maxLength={500} disabled={busy}
-            className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-3" />
-          <button onClick={() => ask(input)} disabled={busy || !input.trim()} className="btn btn-primary flex-none !px-5 !py-2">
-            {busy ? '思考中…' : '发送'}
-          </button>
+          {/* 输入行：聚焦时边框亮起 */}
+          <div className="flex items-center gap-2 rounded-xl border border-line bg-paper-1/60 py-1.5 pl-4 pr-1.5 transition focus-within:border-primary/50 focus-within:bg-white">
+            <input value={input} onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(input) } }}
+              placeholder={enableThinking ? "输入药理学考点或机制问题，AI将展开深度思维链推导…" : "问一个药理学问题（500字内），极速回复…"}
+              maxLength={500} disabled={busy}
+              className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-3 disabled:opacity-60" />
+            <button onClick={() => ask(input)} disabled={busy || !input.trim()}
+              title="发送"
+              className="grid size-9 flex-none place-items-center rounded-lg bg-primary text-white transition hover:bg-primary-focus disabled:bg-paper-2 disabled:text-ink-3">
+              {busy ? <Hourglass size={15} className="animate-pulse" /> : <PaperPlaneRight size={15} weight="fill" />}
+            </button>
+          </div>
         </div>
       </div>
       <p className="mt-4 text-xs leading-relaxed text-ink-3">
