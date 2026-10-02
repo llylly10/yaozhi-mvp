@@ -191,10 +191,12 @@ def _get_state(ocr_dir: str | None) -> dict | None:
         fp = corpus_fingerprint(d)
         if fp is None:
             _unavailable[d] = f"语料缺失（{d} 下无 body_*.txt）"
+
             return None
         cache_file = _cache_file()
         if not os.path.exists(cache_file):
             _unavailable[d] = f"语义缓存缺失（{cache_file}），先在 backend 下跑 build_semantic_cache.py"
+
             return None
         try:
             import numpy as np
@@ -202,21 +204,25 @@ def _get_state(ocr_dir: str | None) -> dict | None:
             meta = json.loads(str(z["meta"]))
         except Exception as e:
             _unavailable[d] = f"语义缓存读取失败：{e}"
+
             return None
         if meta.get("fingerprint") != fp:
             _unavailable[d] = (f"语料指纹不匹配（缓存 {meta.get('fingerprint')} ≠ 语料 {fp}），"
                                "语料已变更，需重跑 build_semantic_cache.py")
+
             return None
         if _backend() == "api":
             from ..config import settings as _s
             if not (_s.external_api_key or _s.qwen_api_key):
                 _unavailable[d] = "api 后端未配置 DashScope key"
+
                 return None
         else:
             try:
                 import fastembed  # noqa: F401 运行时查询编码依赖；未装 → 语义路关闭
             except Exception as e:
                 _unavailable[d] = f"fastembed 未安装：{e}"
+
                 return None
         _state = {"vectors": z["vectors"], "pages": z["pages"], "meta": meta}
         _state_dir = d
@@ -247,6 +253,7 @@ def search(query: str, k: int = 4, ocr_dir: str | None = None,
             best[pg] = sc
     hits = [(pg, sc) for pg, sc in best.items() if sc >= min_cos]
     hits.sort(key=lambda t: (-t[1], t[0]))
+
     return hits[:max(0, k)]
 
 
