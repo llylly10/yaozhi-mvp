@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
@@ -12,6 +13,17 @@ from eval.benchmark_data import get_benchmark_cases, verify_dataset_integrity  #
 from eval.evaluator import evaluate_benchmark, get_latest_eval_report  # noqa: E402
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_eval_persist_dir(tmp_path, monkeypatch):
+    """评测类测试一律隔离持久化副作用：mock 评测若写真实目录，会把
+    backend/eval_report.json 与当日 markdown 报告覆盖掉（2026-10-02 实付教训）。
+    _write_markdown_report 硬编码仓库根路径，_persist_dir 隔离挡不住，须一并打掉。"""
+    from eval import evaluator
+
+    monkeypatch.setattr(evaluator, "_persist_dir", lambda: tmp_path)
+    monkeypatch.setattr(evaluator, "_write_markdown_report", lambda data: None)
 
 
 def test_benchmark_dataset_quota():
