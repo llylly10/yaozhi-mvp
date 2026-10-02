@@ -8,6 +8,8 @@ import {
   Plus, Minus, ArrowsCounterClockwise, CornersOut, CornersIn, X, ArrowsLeftRight,
 } from '@phosphor-icons/react'
 import { api, clearAuth, type Diagnosis, type Question, type TikuFeedback, type RetestCapsuleData } from './api'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { EvalBenchmarkModal } from './EvalBenchmarkModal'
 import { CustomQuizView } from './CustomQuizView'
 import { KnowledgeDetailModal } from './KnowledgeDetailModal'
@@ -2870,7 +2872,9 @@ type QAMsg = {
   timestamp?: string
   streaming?: boolean
   streamPhase?: 'thinking' | 'content' | 'done'
+  statusLine?: string
 }
+
 
 const QA_EXAMPLES = [
   '阿托品为什么会散瞳？',
@@ -3043,6 +3047,16 @@ function QAView({
         undefined,
         history,
         enableThinking,
+        (stEv) => {
+          setMsgs((prev) => {
+            const next = [...prev]
+            const target = next[next.length - 1]
+            if (target && target.streaming) {
+              next[next.length - 1] = { ...target, statusLine: stEv.message }
+            }
+            return next
+          })
+        },
         (thinkingDelta) => {
           setMsgs((prev) => {
             const next = [...prev]
@@ -3217,6 +3231,13 @@ function QAView({
                 {m.refused && <span className="rounded-full bg-gold-soft px-2 py-0.5 text-[11px] font-medium text-gold">暂未回答</span>}
               </div>
 
+              {m.statusLine && (
+                <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-paper-1/70 px-2.5 py-1.5 text-[11px] font-mono text-ink-3">
+                  <MagnifyingGlass size={11} weight="bold" className="text-primary/50" />
+                  {m.statusLine}
+                </div>
+              )}
+
               {/* DeepSeek 风格可折叠思考过程 */}
               {m.thinking && (
                 <ThinkingBox
@@ -3235,12 +3256,12 @@ function QAView({
 
               {/* 回答正文（含流式打字光标） */}
               {(m.a || (m.streaming && m.streamPhase === 'content')) && (
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink">
-                  {m.a}
+                <div className="md-answer text-sm leading-relaxed text-ink">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.a || ''}</ReactMarkdown>
                   {m.streaming && m.streamPhase === 'content' && (
                     <span className="inline-block w-1.5 h-4 ml-1 bg-primary align-middle animate-pulse" />
                   )}
-                </p>
+                </div>
               )}
 
               {m.citations.length > 0 && (

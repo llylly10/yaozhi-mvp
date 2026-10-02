@@ -214,6 +214,7 @@ export const api = {
     questionId?: string,
     history?: { role: string; content: string }[],
     thinking?: boolean,
+    onStatus?: (ev: { stage: string; message: string }) => void,
     onThinkingDelta?: (delta: string) => void,
     onContentDelta?: (delta: string) => void,
     onDone?: (meta: { answer: string; thinking: string; citations: any[]; follow_ups: string[]; refused: boolean; provider: string }) => void,
@@ -250,6 +251,8 @@ export const api = {
               onThinkingDelta(ev.delta)
             } else if (ev.type === 'content' && onContentDelta) {
               onContentDelta(ev.delta)
+            } else if (ev.type === 'status' && onStatus) {
+              onStatus(ev)
             } else if (ev.type === 'done' && onDone) {
               onDone(ev)
             }

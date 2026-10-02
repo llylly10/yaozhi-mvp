@@ -2345,6 +2345,8 @@ def get_question(question_id: str, db: Session = Depends(get_db)):
 
 QA_QUESTION_MAXLEN = 500
 QA_SLICE_CHARS = 700   # 每条切片喂模型的上限（教材为页内窗口，题库为题干+答案+解析）
+_SSE_NL = chr(10) * 2  # SSE 事件分隔符
+
 QA_TOP_K = 6           # 双路混合召回条数（对比/求同类问题需要多条切片才能归纳）
 QA_REFUSE_MEDICATION = ("该吃", "剂量", "怎么吃", "能吃吗", "能不能吃", "处方", "开药",
                         "替我开", "我孩子", "孕妇", "哺乳", "用药建议", "吃多少",
@@ -2392,6 +2394,10 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
     hits = retrieve_mixed(search_q, k=QA_TOP_K, db=db)
     if not hits and context_str:
         hits = retrieve_mixed(q, k=QA_TOP_K, db=db)
+    tb_count = sum(1 for h in hits if h.source == "textbook")
+    sem_count = sum(1 for h in hits if getattr(h, "semantic", False))
+    retrieval_summary = {"total": len(hits), "textbook": tb_count,
+                         "itembank": len(hits) - tb_count, "semantic": sem_count}
 
     if not hits and not context_str:
         audit(db, user_id, "qa.refused_no_evidence", f"user:{user_id}", q_len=len(q))
@@ -2448,6 +2454,7 @@ def qa_ask(user_id: str, body: QAIn, db: Session = Depends(get_db)):
             "follow_ups": r.get("follow_ups") or ["该药作用的受体亚型与特异性效应是什么？", "在易混淆同类药物中，临床选择的关键指征有何不同？"],
             "provider": "external_api",
             "thinking": r.get("thinking") or "",
+            "retrieval": retrieval_summary,
             "note": "回答由课程资料切片（教材原文 + 题库题目解析）结合错题情境 grounded 生成，仅供学习参考，不保证完全正确；不提供用药建议。"}
 
 
@@ -2489,6 +2496,13 @@ def qa_stream(user_id: str, body: QAIn, db: Session = Depends(get_db)):
     hits = retrieve_mixed(search_q, k=QA_TOP_K, db=db)
     if not hits and context_str:
         hits = retrieve_mixed(q, k=QA_TOP_K, db=db)
+    tb_count = sum(1 for h in hits if h.source == "textbook")
+    sem_count = sum(1 for h in hits if getattr(h, "semantic", False))
+    retrieval_summary = {"total": len(hits), "textbook": tb_count,
+                         "itembank": len(hits) - tb_count, "semantic": sem_count}
+    retrieval_msg = ("已检索到 " + str(len(hits)) + " 条课程证据：教材 " + str(tb_count)
+                     + " · 题库 " + str(len(hits) - tb_count)
+                     + (" · 语义召回 " + str(sem_count) if sem_count else ""))
 
     if not hits and not context_str:
         audit(db, user_id, "qa.refused_no_evidence", f"user:{user_id}", q_len=len(q))
@@ -2518,9 +2532,14 @@ def qa_stream(user_id: str, body: QAIn, db: Session = Depends(get_db)):
     enable_thinking = True if body.thinking is None else bool(body.thinking)
 
     def event_stream():
+        yield "data: " + json.dumps({"type": "status", "stage": "retrieval",
+                                     "message": retrieval_msg,
+                                     "retrieval": retrieval_summary}, ensure_ascii=False) + _SSE_NL
         try:
             from .llm.provider import ExternalApiProvider
             provider = ExternalApiProvider()
+            yield "data: " + json.dumps({"type": "status", "stage": "model",
+                                         "message": "课程资料已就绪，正在生成回答"}, ensure_ascii=False) + _SSE_NL
             for ev in provider.answer_with_refs_stream(
                 question=full_question, slices=slices, n_refs=len(refs),
                 history=body.history, enable_thinking=enable_thinking

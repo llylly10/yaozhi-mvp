@@ -407,3 +407,18 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
+/* 问 AI 回答的 Markdown 渲染样式（react-markdown 输出） */
+.md-answer p { margin: 0.35em 0; }
+.md-answer ul, .md-answer ol { margin: 0.35em 0; padding-left: 1.4em; }
+.md-answer li { margin: 0.18em 0; }
+.md-answer li::marker { color: #0e7a5f; }
+.md-answer strong { font-weight: 700; }
+.md-answer h1, .md-answer h2, .md-answer h3 { font-weight: 700; margin: 0.65em 0 0.3em; font-size: 1.04em; color: #1f2a26; }
+.md-answer code { background: #f0efe9; padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.9em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.md-answer pre { background: #f0efe9; padding: 0.6em 0.8em; border-radius: 8px; overflow-x: auto; margin: 0.4em 0; }
+.md-answer pre code { background: transparent; padding: 0; }
+.md-answer blockquote { border-left: 3px solid #e3e8e5; padding-left: 0.8em; margin: 0.4em 0; color: #5a6560; }
+.md-answer table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.92em; }
+.md-answer th, .md-answer td { border: 1px solid #e3e8e5; padding: 0.3em 0.6em; }
+.md-answer hr { border: none; border-top: 1px dashed #e3e8e5; margin: 0.6em 0; }
