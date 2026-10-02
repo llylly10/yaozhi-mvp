@@ -6,7 +6,7 @@
 
 前置: YAOZHI_EXTERNAL_API_KEY 已在环境变量中（阿里云百炼 DashScope Key）。
 行为: 直接调 eval.evaluator.evaluate_benchmark("external_api")，80 案例逐条真模型归因
-      （qwen3.7-flash，非流式 + thinking，单条硬超时 90s，连续 3 次失败熔断降级）。
+      （模型取 settings.external_model，非流式 + thinking，单条硬超时 90s，连续 3 次失败熔断降级）。
 防呆: ① provider 必须实例化为 ExternalApiProvider（get_provider 静默降级 Mock 则中止）;
       ② 数据库必须是 backend/yaozhi_w1.db 主库（database_url 相对路径按 cwd 解析，
          仓库根 yaozhi_w1.db 是 0 字节空壳，cwd 不对会写错库/报告落错目录）;
