@@ -18,3 +18,4 @@ corpus/tools/shots/
 # 临时测试脚本
 scratch/
 backend/eval_report.json
+frontend/scratch_shots/
