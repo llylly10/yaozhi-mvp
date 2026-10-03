@@ -238,6 +238,7 @@ def regen_app_header():
 
 def gen_header_excluding(body, from_module, exclude):
     """gen_header 变体：跳过 exclude 集合里的注册符号（仍留在本文件的）。"""
+    body = _strip_comments(body)
     by_target = {}
     for sym, mod in REGISTRY.items():
         if mod == from_module or sym in exclude:
@@ -254,7 +255,12 @@ def gen_header_excluding(body, from_module, exclude):
     return '\n'.join(out)
 
 
+def _strip_comments(body):
+    return re.sub(r'/\*.*?\*/', '', body, flags=re.S)
+
+
 def _base_imports(body, from_module):
+    body = _strip_comments(body)
     out = []
     hooks = [h for h in REACT_HOOKS if re.search(r'\b' + h + r'\b', body)]
     if hooks:
@@ -285,6 +291,7 @@ def _base_imports(body, from_module):
 
 
 def gen_header(body, from_module):
+    body = _strip_comments(body)
     by_target = {}
     for sym, mod in REGISTRY.items():
         if mod == from_module:
