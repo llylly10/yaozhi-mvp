@@ -7,7 +7,8 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        // 本机 8000 被其他项目占用时：VITE_API_TARGET=http://localhost:8001 npm run dev
+        target: process.env.VITE_API_TARGET || 'http://localhost:8000',
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
     },
