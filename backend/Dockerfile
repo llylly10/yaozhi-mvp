@@ -1,10 +1,10 @@
 FROM python:3.12-slim
 WORKDIR /srv
-# 构建期 DNS：compose 的 dns: 只对运行容器生效，build 的 RUN 步骤不继承——
-# 构建容器默认拿宿主 systemd-resolved stub(127.0.0.53)，在 bridge 网络不可达，
-# pip 镜像域名解析失败（2026-10-03 部署实付：Temporary failure in name resolution）。
-# 公共 DNS(223.5.5.5/8.8.8.8) 从容器 bridge UDP:53 也不可达，必须用阿里云内网 DNS。
-RUN printf 'nameserver 100.100.2.136\nnameserver 100.100.2.138\n' > /etc/resolv.conf
+# 构建期 DNS（2026-10-03 修复『服务器 pip install 失败』）：compose 的 dns: 仅对运行容器生效，
+# build 的 RUN 不继承——构建容器拿宿主 systemd-resolved stub(127.0.0.53) 在 bridge 网络不可达，
+# pip 镜像域名解析失败（Temporary failure in name resolution → exit 1）。BuildKit 的 RUN 中
+# /etc/resolv.conf 为 worker 只读挂载不可写，故在 compose 侧以 build.network: host 让构建
+# 步骤直接用宿主网络栈（宿主 netns 内 127.0.0.53 天然可达）。
 # pip 用阿里云镜像 (避免 Docker Hub IPv6 直连被掐)
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ \
     && pip config set global.trusted-host mirrors.aliyun.com
