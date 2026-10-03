@@ -42,11 +42,70 @@ def start_session(db: Session, attempt: Attempt) -> DiagnosisSession:
         for r in ranked:
             if r["misconception_id"] == c.misconception_id:
                 c.rerank_score, c.final_rank = r["rerank_score"], r["final_rank"]
+    from ..config import settings as _settings
+    if getattr(_settings, "rerank_shadow", False):
+        _rerank_shadow(db, session, attempt, question)
     session.state = "candidates_retrieved"
     audit(db, "system", "diagnosis.state", session.id, to="candidates_retrieved")
     _sufficiency(db, session)
     db.commit()
     return session
+
+
+def _rerank_shadow(db: Session, session: DiagnosisSession, attempt: Attempt, question: Question):
+    """影子语义重排（2026-10-04 实验，YAOZHI_RERANK_SHADOW=1 启用）。
+
+    漏斗③的确定性排序不变；本旁路让 LLM 依学生作答理由独立给 top-1 观点，
+    结果只追加到 JSONL（与 SQLite 同目录 rerank_shadow.jsonl）供分歧分析。
+    任何异常静默——影子绝不影响诊断主链路。
+    """
+    import json as _json
+    import logging as _log
+    import time as _time
+    from datetime import datetime as _dt
+    from pathlib import Path as _Path
+    t0 = _time.perf_counter()
+    try:
+        from ..config import settings
+        provider = get_provider()
+        if not session.candidates:
+            return
+        rows = []
+        for c in sorted(session.candidates, key=lambda x: -(float(x.rerank_score or 0))):
+            m = db.get(Misconception, c.misconception_id)
+            if not m:
+                continue
+            rows.append({"code": m.code, "name": m.name, "category": m.category,
+                         "indicators": list(m.indicators or [])[:2],
+                         "rule_score": round(float(c.rerank_score or 0), 3)})
+        if not rows:
+            return
+        options_text = "\n".join(f"{o.get('key')}. {o.get('text')}" for o in (question.options or []))
+        res = provider.rerank_shadow(
+            question_stem=question.stem or "", options_text=options_text,
+            selected_option=attempt.selected_option or "", correct_answer=question.answer or "",
+            student_rationale=attempt.rationale or "", candidates=rows)
+        entry = {
+            "ts": _dt.now().isoformat(timespec="seconds"),
+            "session_id": session.id, "question_id": question.id, "question_code": question.code,
+            "selected_option": attempt.selected_option,
+            "rationale": (attempt.rationale or "")[:120],
+            "rule_order": [r["code"] for r in rows],
+            "llm_pick": (res or {}).get("picked_code"),
+            "llm_confidence": (res or {}).get("confidence"),
+            "llm_rationale": (res or {}).get("rationale"),
+            "llm_responded": bool(res),
+            "agree": bool(res) and res.get("picked_code") == rows[0]["code"],
+            "latency_ms": int((_time.perf_counter() - t0) * 1000),
+            "model": getattr(provider, "model", "?"),
+        }
+        raw = settings.database_url.split("sqlite:///")[-1]
+        log_path = _Path(raw).parent / "rerank_shadow.jsonl"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:  # noqa: BLE001 影子失败不影响诊断
+        _log.getLogger("yaozhi.rerank_shadow").warning("影子重排失败（不影响诊断）：%s", e)
 
 
 # 章级通用错因四分类（与 seed.add_chapter_misconceptions.TEMPLATES 对应）。

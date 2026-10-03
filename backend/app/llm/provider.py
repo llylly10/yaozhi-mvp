@@ -103,6 +103,11 @@ class _BaseProvider:
     def log_run(self, task_type: str, payload: dict, latency_ms: int, db=None):
         self._persist_run(task_type, payload, latency_ms, db)
 
+    def rerank_shadow(self, *, question_stem: str, options_text: str, selected_option: str,
+                      correct_answer: str, student_rationale: str, candidates: list[dict]) -> dict | None:
+        """影子语义重排：LLM 独立给出 top-1 观点但不改变排序（实验用）。Mock 无实现返回 None。"""
+        return None
+
 
 class MockProvider(_BaseProvider):
     """确定性 Provider（评测基线 / external_api 故障时的降级兜底）。"""
@@ -542,6 +547,47 @@ class ExternalApiProvider(_BaseProvider):
                                                  "result": out}, latency)
         return out
 
+    def rerank_shadow(self, *, question_stem: str, options_text: str, selected_option: str,
+                      correct_answer: str, student_rationale: str, candidates: list[dict]) -> dict | None:
+        """影子语义重排（2026-10-04 实验）：漏斗③现状=rule_score 确定性透传（评测可回放）。
+
+        本方法不参与排序，仅依学生作答理由独立给出 top-1 错因观点，由调用方落
+        JSONL 做分歧分析。任何失败返回 None，绝不影响诊断主链路。
+        candidates: [{"code","name","category","indicators":[...],"rule_score"}, ...]
+        """
+        if not candidates:
+            return None
+        cand_lines = "\n".join(
+            f"{i + 1}. [{c['code']}] {c['name']}（{c['category']}）"
+            f"{'；信号：' + '、'.join(c['indicators'][:2]) if c.get('indicators') else ''}"
+            for i, c in enumerate(candidates))
+        system = (
+            "你是药学(药理学)教学诊断专家。学生做错了一道题，下面是候选错因清单"
+            "（含静态规则的初步排序分，仅供参考）。请重点依据【学生作答理由】与所选选项，"
+            "独立判断哪个错因最符合该学生的真实错误，不要照抄静态排序：作管理由与静态排序"
+            "指向不一致时，以作管理由为准。只能从候选中选，不得自创。\n"
+            '只输出 JSON（仅此一个对象）：'
+            '{"picked_code": "候选中的code", "confidence": "高|中|低", "rationale": "≤40字说明依据"}'
+        )
+        user = (
+            f"【题干】{question_stem}\n【选项】\n{options_text}\n"
+            f"【学生所选】{selected_option}（正确答案：{correct_answer}）\n"
+            f"【学生作答理由】{student_rationale or '（未填写）'}\n"
+            f"【候选错因】\n{cand_lines}\n请按系统要求只输出 JSON 结论。"
+        )
+        try:
+            # max_tokens 须覆盖 deepseek 思考预算（reasoning 计入 max_tokens，120 会被
+            # 思考吃光导致正文为空 finish=length，2026-10-04 实测）
+            result = self._chat_json(system, user, temperature=0.0, max_tokens=2048)
+        except Exception:  # noqa: BLE001 影子调用失败静默，绝不影响诊断
+            return None
+        code = result.get("picked_code") or ""
+        if code not in {c["code"] for c in candidates}:
+            return None
+        return {"picked_code": code,
+                "confidence": result.get("confidence", "低") if result.get("confidence") in {"高", "中", "低"} else "中",
+                "rationale": (result.get("rationale") or "")[:100]}
+
     # ---- 候选重排（规则分确定性排序；LLM 语义重排为计划态，见附录 D）----
     def rerank(self, candidates: list[dict]) -> list[dict]:
         """candidates: [{misconception_id, rule_score, retrieval_score, category?, desc?}]。
@@ -576,7 +622,9 @@ class ExternalApiProvider(_BaseProvider):
         )
         t0 = time.time()
         try:
-            result = self._chat_json(system, user, temperature=0.0, max_tokens=80)
+            # deepseek 思考计入 max_tokens：80 会被思考吃光致正文为空、永远降级
+            # 关键词匹配（2026-10-04 影子实验发现），与其他 JSON 调用统一 2048。
+            result = self._chat_json(system, user, temperature=0.0, max_tokens=2048)
             latency = int((time.time() - t0) * 1000)
             accepted = bool(result.get("accepted"))
         except ProviderError:

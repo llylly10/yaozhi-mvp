@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     model_max_retries: int = 1           # 失败重试次数（openai client max_retries）
     circuit_breaker_threshold: int = 3   # 连续失败 N 次 → 熔断开闸（进入 cooldown 走 Mock）
     circuit_breaker_cooldown: float = 60.0  # 熔断冷却秒，期间 external_api 直接降级 Mock
+    # ---- 影子语义重排（2026-10-04 实验）：漏斗③旁路调用 LLM 独立给 top-1 观点，
+    # 只落 JSONL 日志不采纳（排序仍为 rule_score 确定性透传，评测可回放性不变）。
+    # 启用时每次种子域诊断多 1 次模型调用（~2-4s），仅实验环境开启。
+    rerank_shadow: bool = False  # env: YAOZHI_RERANK_SHADOW
     # ---- ③ RAG 检索（W3 落地，2026-09-08）----
     rag_enabled: bool = True   # 诊断时按题干检索教材切片作"知识库切片"证据；语料缺失自动 no-op
     rag_top_k: int = 2         # 每道错题并入的证据卡切片数
