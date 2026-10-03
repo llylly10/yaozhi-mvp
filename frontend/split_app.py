@@ -30,7 +30,7 @@ def reg(module, syms):
 reg('lib/shared', ['Screen', 'View', 'spring', 'Rconst', 'Cconst', 'EXAM_PRESETS',
                    'resolveExamDate', 'daysToExam', 'todayIso', 'genUUID',
                    'CAT_KEYS', 'CAT_STYLE',
-                   'StudyNode', 'StudyMapData', 'KgNodeT', 'KgEdgeT', 'KgEvidence', 'KgTabDef'])
+                   'StudyNode', 'StudyMapData', 'KgNodeT', 'KgEdgeT', 'KgEvidence', 'KgTabDef', 'PortraitResult'])
 reg('components/ui', ['Hex', 'CategoryTag', 'NodeChip', 'EvidenceNote', 'EmptyPanel', 'ErrorPanel'])
 reg('views/QAView', ['QAMsg', 'QA_EXAMPLES', 'QA_SMART_SUGGESTIONS', 'ThinkingBox', 'QAView'])
 reg('views/Profile', ['ArchiveData', 'Profile'])
@@ -58,7 +58,7 @@ API_VALUES = ['api', 'clearAuth', 'getToken', 'setToken', 'setAdminKey', 'getAdm
 API_TYPES = ['Diagnosis', 'Question', 'TikuFeedback', 'RetestCapsuleData', 'WrongBookItem',
              'EvalCategoryMetric', 'EvalReportData', 'KnowledgePointDetail']
 TYPE_SYMBOLS = {'Screen', 'View', 'StudyNode', 'StudyMapData', 'KgNodeT', 'KgEdgeT', 'KgEvidence',
-                'KgTabDef', 'QAMsg', 'MaterialData', 'Analysis', 'ArchiveData', 'WrongRow',
+                'KgTabDef', 'PortraitResult', 'QAMsg', 'MaterialData', 'Analysis', 'ArchiveData', 'WrongRow',
                 'RecallData', 'PlanTask', 'DoneTask', 'DailyRec', 'MemoryDecayAlert'} | set(API_TYPES)
 
 # App.tsx 原生 src 根上的既有组件模块（api/Toast/pharmacyHighlight 显式处理，不在此列）

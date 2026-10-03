@@ -90,3 +90,9 @@ export type KgEdgeT = {
 
 export type KgEvidence = { source?: string; book_page?: number; chapter?: string; text?: string } | null
 export type KgTabDef = { k: string; label: string; match: (e: KgEdgeT) => boolean }
+
+export type PortraitResult = {
+  total: number
+  weak: { question_code: string; stem: string; domain_id?: string; domain?: string; category: string }[]
+  domains: { domain: string; correct: number; total: number; rate: number }[]
+}
