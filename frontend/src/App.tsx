@@ -1,27 +1,30 @@
-import { useState, useEffect, useRef } from 'react'
+import { lazy, Suspense, useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence, MotionConfig, useReducedMotion, useScroll, useMotionValueEvent } from 'framer-motion'
 import { MagnifyingGlass, ArrowRight, ArrowUp, Pill, CalendarBlank, ClockCounterClockwise, SquaresFour, Gear, BookOpenText, ChatCircle, Sparkle, ShareNetwork, FirstAid } from '@phosphor-icons/react'
 import { api, clearAuth, type Diagnosis, type Question } from './api'
 import { ToastProvider, useToast } from './Toast'
-import { ClinicalCaseView } from './ClinicalCaseView'
 import { CommandSearchModal } from './CommandSearchModal'
-import { CustomQuizView } from './CustomQuizView'
 import { EvalBenchmarkModal } from './EvalBenchmarkModal'
 import { SettingsModal } from './SettingsModal'
 import { Hex } from './components/ui'
 import { daysToExam, resolveExamDate, spring, type PortraitResult, type Screen, type View } from './lib/shared'
-import { Assessment } from './views/Assessment'
-import { Consent } from './views/Consent'
-import { GoalPicker } from './views/GoalPicker'
-import { LearningPathHome } from './views/LearningPathHome'
-import { MaterialRoute } from './views/Material'
-import { Portrait } from './views/Portrait'
-import { PracticeFlow } from './views/PracticeFlow'
-import { Profile } from './views/Profile'
-import { QAView } from './views/QAView'
-import { StudyMapOnboard } from './views/StudyMapOnboard'
 import { Welcome } from './views/Welcome'
-import { WrongBook } from './views/WrongBook'
+
+// ---- 路由级视图按需加载（2026-10-02 拆分后引入；首屏只下壳+欢迎页，其余视图首跳时加载）----
+// Welcome 是首屏保持 eager；弹窗类（评测/速查/设置）低频但体量小，维持 eager 省一层 Suspense。
+const Consent = lazy(() => import('./views/Consent').then((m) => ({ default: m.Consent })))
+const GoalPicker = lazy(() => import('./views/GoalPicker').then((m) => ({ default: m.GoalPicker })))
+const StudyMapOnboard = lazy(() => import('./views/StudyMapOnboard').then((m) => ({ default: m.StudyMapOnboard })))
+const Assessment = lazy(() => import('./views/Assessment').then((m) => ({ default: m.Assessment })))
+const Portrait = lazy(() => import('./views/Portrait').then((m) => ({ default: m.Portrait })))
+const LearningPathHome = lazy(() => import('./views/LearningPathHome').then((m) => ({ default: m.LearningPathHome })))
+const MaterialRoute = lazy(() => import('./views/Material').then((m) => ({ default: m.MaterialRoute })))
+const PracticeFlow = lazy(() => import('./views/PracticeFlow').then((m) => ({ default: m.PracticeFlow })))
+const Profile = lazy(() => import('./views/Profile').then((m) => ({ default: m.Profile })))
+const WrongBook = lazy(() => import('./views/WrongBook').then((m) => ({ default: m.WrongBook })))
+const CustomQuizView = lazy(() => import('./CustomQuizView').then((m) => ({ default: m.CustomQuizView })))
+const ClinicalCaseView = lazy(() => import('./ClinicalCaseView').then((m) => ({ default: m.ClinicalCaseView })))
+const QAView = lazy(() => import('./views/QAView').then((m) => ({ default: m.QAView })))
 /*
  * 药知 · 「现代药房 × 分子美学」
  * 流程（对齐产品原型）：注册 → 同意 → 题库(今日待办) → 作答 → 诊断 → 追问 → 训练 → 档案
@@ -41,6 +44,18 @@ export default function App() {
     <ToastProvider>
       <AppInner />
     </ToastProvider>
+  )
+}
+
+/* 懒加载视图的分包加载占位（首跳瞬间一闪，与纸感底色一致） */
+function ViewFallback() {
+  return (
+    <div className="grid min-h-[40vh] place-items-center" aria-busy="true">
+      <div className="flex items-center gap-2 rounded-full border border-line bg-paper px-4 py-2 text-sm text-ink-3 shadow-2xs">
+        <span className="size-2 animate-pulse rounded-full bg-primary" />
+        正在加载模块…
+      </div>
+    </div>
   )
 }
 
@@ -321,64 +336,92 @@ function AppInner() {
 
           <AnimatePresence mode="wait">
             {screen === 'register' && <Welcome key="register" onRegistered={onRegistered} onError={setError} onOpenEval={() => setShowEvalModal(true)} />}
-            {screen === 'consent' && userId && <Consent key="consent" userId={userId} onConsented={onConsented} onBack={() => setScreen('register')} onError={setError} />}
+            {screen === 'consent' && userId && (
+              <Suspense key="consent" fallback={<ViewFallback />}>
+                <Consent userId={userId} onConsented={onConsented} onBack={() => setScreen('register')} onError={setError} />
+              </Suspense>
+            )}
             {screen === 'goal' && (
-              <GoalPicker key="goal" goal={goal} isSubPage={Boolean(userId)}
-                examDate={examDate} onExamDate={handleExamDate}
-                onNext={(g) => { setGoal(g); localStorage.setItem(GOAL_KEY, g); setScreen('study'); setView('study') }}
-                onBack={() => setScreen(userId ? 'study' : 'consent')} />
+              <Suspense key="goal" fallback={<ViewFallback />}>
+                <GoalPicker goal={goal} isSubPage={Boolean(userId)}
+                  examDate={examDate} onExamDate={handleExamDate}
+                  onNext={(g) => { setGoal(g); localStorage.setItem(GOAL_KEY, g); setScreen('study'); setView('study') }}
+                  onBack={() => setScreen(userId ? 'study' : 'consent')} />
+              </Suspense>
             )}
             {screen === 'study' && userId && (
-              <StudyMapOnboard key="study" userId={userId} goal={goal} onError={setError}
-                onProceed={() => setScreen('assessment')}
-                onSkip={() => setScreen('assessment')}
-                onBack={() => setScreen('goal')}
-                onGoTodo={() => goNav('todo')}
-                onGoQuiz={() => goNav('custom_quiz')}
-                onAskAi={handleAskAi} />
+              <Suspense key="study" fallback={<ViewFallback />}>
+                <StudyMapOnboard userId={userId} goal={goal} onError={setError}
+                  onProceed={() => setScreen('assessment')}
+                  onSkip={() => setScreen('assessment')}
+                  onBack={() => setScreen('goal')}
+                  onGoTodo={() => goNav('todo')}
+                  onGoQuiz={() => goNav('custom_quiz')}
+                  onAskAi={handleAskAi} />
+              </Suspense>
             )}
             {screen === 'assessment' && userId && (
-              <Assessment key="assess" userId={userId}
-                onDone={(r) => { setPortrait(r); setScreen('portrait') }} onError={setError}
-                onBack={() => setScreen('study')} />
+              <Suspense key="assess" fallback={<ViewFallback />}>
+                <Assessment userId={userId}
+                  onDone={(r) => { setPortrait(r); setScreen('portrait') }} onError={setError}
+                  onBack={() => setScreen('study')} />
+              </Suspense>
             )}
             {screen === 'portrait' && portrait && (
-              <Portrait key="portrait" result={portrait}
-                onEnter={() => { setError(null); setScreen('study'); setView('study') }}
-                onBack={() => setScreen('study')} />
+              <Suspense key="portrait" fallback={<ViewFallback />}>
+                <Portrait result={portrait}
+                  onEnter={() => { setError(null); setScreen('study'); setView('study') }}
+                  onBack={() => setScreen('study')} />
+              </Suspense>
             )}
             {screen === 'list' && userId && view === 'todo' && (
-              <LearningPathHome key="plan" userId={userId}
-                onPick={(q) => { setError(null); setActiveQuestion(q); setScreen('flow'); setDiagnosis(null) }}
-                onMaterial={(domainId) => { setMaterialDomain(domainId); setScreen('material') }} />
+              <Suspense key="plan" fallback={<ViewFallback />}>
+                <LearningPathHome userId={userId}
+                  onPick={(q) => { setError(null); setActiveQuestion(q); setScreen('flow'); setDiagnosis(null) }}
+                  onMaterial={(domainId) => { setMaterialDomain(domainId); setScreen('material') }} />
+              </Suspense>
             )}
             {screen === 'material' && materialDomain && userId && (
-              <MaterialRoute key={materialDomain} userId={userId} domainId={materialDomain} goal={goal} onError={setError}
-                onPractice={(q) => { setActiveQuestion(q); setScreen('flow'); setDiagnosis(null) }}
-                onBack={() => { setScreen('list'); setView('todo') }}
-                onAskAi={handleAskAi} />
+              <Suspense key={materialDomain} fallback={<ViewFallback />}>
+                <MaterialRoute userId={userId} domainId={materialDomain} goal={goal} onError={setError}
+                  onPractice={(q) => { setActiveQuestion(q); setScreen('flow'); setDiagnosis(null) }}
+                  onBack={() => { setScreen('list'); setView('todo') }}
+                  onAskAi={handleAskAi} />
+              </Suspense>
             )}
             {screen === 'flow' && userId && activeQuestion && (
-              <PracticeFlow key={activeQuestion.id} userId={userId} question={activeQuestion}
-                onDiagnosis={setDiagnosis} onError={setError}
-                onStep={() => {}}
-                onAskAi={handleAskAi}
-                onExit={() => { setScreen('list'); setActiveQuestion(null); setDiagnosis(null); setView('todo') }} />
+              <Suspense key={activeQuestion.id} fallback={<ViewFallback />}>
+                <PracticeFlow userId={userId} question={activeQuestion}
+                  onDiagnosis={setDiagnosis} onError={setError}
+                  onStep={() => {}}
+                  onAskAi={handleAskAi}
+                  onExit={() => { setScreen('list'); setActiveQuestion(null); setDiagnosis(null); setView('todo') }} />
+              </Suspense>
             )}
             {screen === 'profile' && userId && view === 'profile' && (
-              <Profile key="profile" userId={userId} onGoTodo={() => goNav('todo')} onAskAi={handleAskAi} />
+              <Suspense key="profile" fallback={<ViewFallback />}>
+                <Profile userId={userId} onGoTodo={() => goNav('todo')} onAskAi={handleAskAi} />
+              </Suspense>
             )}
             {screen === 'profile' && userId && view === 'wrongbook' && (
-              <WrongBook key="wrongbook" userId={userId} onGoTodo={() => goNav('todo')} onAskAi={handleAskAi} onGoMap={() => { setActiveQuestion(null); setScreen('study'); window.scrollTo(0, 0); }} />
+              <Suspense key="wrongbook" fallback={<ViewFallback />}>
+                <WrongBook userId={userId} onGoTodo={() => goNav('todo')} onAskAi={handleAskAi} onGoMap={() => { setActiveQuestion(null); setScreen('study'); window.scrollTo(0, 0); }} />
+              </Suspense>
             )}
             {screen === 'custom_quiz' && userId && (
-              <CustomQuizView key="custom_quiz" userId={userId} onExit={() => goNav('todo')} onAskAi={handleAskAi} />
+              <Suspense key="custom_quiz" fallback={<ViewFallback />}>
+                <CustomQuizView userId={userId} onExit={() => goNav('todo')} onAskAi={handleAskAi} />
+              </Suspense>
             )}
             {screen === 'clinical_cases' && userId && (
-              <ClinicalCaseView key="clinical_cases" userId={userId} onAskAi={handleAskAi} onBackToTodo={() => goNav('todo')} />
+              <Suspense key="clinical_cases" fallback={<ViewFallback />}>
+                <ClinicalCaseView userId={userId} onAskAi={handleAskAi} onBackToTodo={() => goNav('todo')} />
+              </Suspense>
             )}
             {screen === 'qa' && userId && view === 'qa' && (
-              <QAView key="qa" userId={userId} onError={setError} prefill={qaPrefill} onClearPrefill={() => setQaPrefill(null)} />
+              <Suspense key="qa" fallback={<ViewFallback />}>
+                <QAView userId={userId} onError={setError} prefill={qaPrefill} onClearPrefill={() => setQaPrefill(null)} />
+              </Suspense>
             )}
 
           </AnimatePresence>
