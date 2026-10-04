@@ -64,7 +64,7 @@ function transformBackendEvalReport(data: any): EvalReportData {
     run_id: data.run_id || `RUN-${(data.run_at || '').replace(/[- :]/g, '').slice(0, 14)}`,
     dataset_version: data.dataset_version || 'v1.0 (80题黄金保护测试集)',
     timestamp: data.timestamp || data.run_at || new Date().toLocaleString(),
-    provider: data.provider || (data.provider_mode === 'mock' ? '规则基线引擎 (Mock)' : '通义千问 Qwen 3.7 Flash'),
+    provider: data.provider || (data.provider_mode === 'mock' ? '规则基线引擎 (Mock)' : '真实大模型（在线）'),
     case_count: data.case_count ?? data.total_cases ?? 80,
     overall: {
       accuracy: data.overall?.accuracy ?? data.accuracy ?? 0,

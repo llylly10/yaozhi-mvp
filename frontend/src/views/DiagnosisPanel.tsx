@@ -257,7 +257,7 @@ export function DiagnosisPanel({ diagnosis, questionId, onRefresh, onStartTraini
                   {diagnosis.card.ai_rationale}
                 </p>
                 <p className="mt-2 text-[11px] text-ink-3">
-                  由 Qwen 3.7 Flash 基于题干考点、选项药理机制与作答思维链深度比对生成
+                  由真实大模型基于题干考点、选项药理机制与作答思维链深度比对生成
                 </p>
               </motion.div>
             )}

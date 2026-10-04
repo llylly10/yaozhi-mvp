@@ -298,7 +298,7 @@ export function QAView({
         )}
       </div>
       <p className="mt-2 text-sm leading-relaxed text-ink-2">
-        只讲《药理学》课程内容：支持多轮深度追问与 DeepSeek 风格思维链，先检索教材切片，有依据才回答，并标出引用章节。
+        只讲《药理学》课程内容：支持多轮深度追问与深度思维链，先检索教材切片，有依据才回答，并标出引用章节。
         检索不到会直说不知道；用药决策类问题会拒绝（本系统不提供用药建议）。
       </p>
 
@@ -365,7 +365,7 @@ export function QAView({
             <div className={`card mt-2 p-5 ${m.refused ? 'border-gold/40' : ''}`}>
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${m.provider === 'external_api' ? 'bg-primary-soft text-primary' : m.provider === 'rule' || m.provider === 'retriever' ? 'bg-paper-2 text-ink-3' : 'bg-paper-2 text-ink-3'}`}>
-                  {m.provider === 'external_api' ? 'Qwen 3.7 Flash 真模型' : m.provider === 'rule' || m.provider === 'retriever' ? '规则回复' : '演示模式'}
+                  {m.provider === 'external_api' ? '真实模型在线' : m.provider === 'rule' || m.provider === 'retriever' ? '规则回复' : '演示模式'}
                 </span>
                 {m.thinking && (
                   <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700 border border-indigo-200/50 flex items-center gap-1">
