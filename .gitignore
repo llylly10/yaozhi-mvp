@@ -19,3 +19,5 @@ corpus/tools/shots/
 scratch/
 backend/eval_report.json
 frontend/scratch_shots/
+backend/rerank_shadow.jsonl
+backend/rerank_llm.jsonl
