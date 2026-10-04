@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     # 只落 JSONL 日志不采纳（排序仍为 rule_score 确定性透传，评测可回放性不变）。
     # 启用时每次种子域诊断多 1 次模型调用（~2-4s），仅实验环境开启。
     rerank_shadow: bool = False  # env: YAOZHI_RERANK_SHADOW
+    # ---- 条件 LLM 语义重排（2026-10-04 实装，影子实验结论驱动）----
+    # 仅在 LLM 有增量信息处触发并采纳：候选来自 fallback（无干扰项标注→全目录同分
+    # 乱序）或 Top1/Top2 分差 < rerank_llm_min_gap（歧义）；其余场景确定性透传。
+    # 采纳方式=LLM pick 与现 Top1 交换分数（保持分差结构，不扰动充分性门禁）。
+    rerank_llm_enabled: bool = False  # env: YAOZHI_RERANK_LLM_ENABLED
+    rerank_llm_min_gap: float = 0.25  # Top1/Top2 分差低于此值视为歧义（0.8/0.55 标注差=0.25 不触发）
     # ---- ③ RAG 检索（W3 落地，2026-09-08）----
     rag_enabled: bool = True   # 诊断时按题干检索教材切片作"知识库切片"证据；语料缺失自动 no-op
     rag_top_k: int = 2         # 每道错题并入的证据卡切片数

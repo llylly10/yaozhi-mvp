@@ -31,7 +31,7 @@ def start_session(db: Session, attempt: Attempt) -> DiagnosisSession:
     db.flush()
     audit(db, "system", "diagnosis.state", session.id, to="submitted")
     _collect_evidence(db, session, attempt, question)
-    _filter_candidates(db, session, attempt, question)
+    signal_exists = _filter_candidates(db, session, attempt, question)
     provider = get_provider()
     t0 = time_ms()
     ranked = provider.rerank([{"misconception_id": c.misconception_id, "rule_score": float(c.rule_score),
@@ -43,7 +43,9 @@ def start_session(db: Session, attempt: Attempt) -> DiagnosisSession:
             if r["misconception_id"] == c.misconception_id:
                 c.rerank_score, c.final_rank = r["rerank_score"], r["final_rank"]
     from ..config import settings as _settings
-    if getattr(_settings, "rerank_shadow", False):
+    if getattr(_settings, "rerank_llm_enabled", False):
+        _rerank_llm_adopt(db, session, attempt, question, fallback=not signal_exists)
+    elif getattr(_settings, "rerank_shadow", False):
         _rerank_shadow(db, session, attempt, question)
     session.state = "candidates_retrieved"
     audit(db, "system", "diagnosis.state", session.id, to="candidates_retrieved")
@@ -106,6 +108,90 @@ def _rerank_shadow(db: Session, session: DiagnosisSession, attempt: Attempt, que
             f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception as e:  # noqa: BLE001 影子失败不影响诊断
         _log.getLogger("yaozhi.rerank_shadow").warning("影子重排失败（不影响诊断）：%s", e)
+
+
+def _rerank_llm_adopt(db: Session, session: DiagnosisSession, attempt: Attempt,
+                      question: Question, fallback: bool):
+    """③ 条件 LLM 语义重排（2026-10-04 实装，YAOZHI_RERANK_LLM_ENABLED=1）。
+
+    影子实验（同日）证据：强标注+理由呼应场景 LLM 与静态排序一致率 100%；
+    理由与选项标注冲突场景 3/10 翻转且方向跟随学生自述（个性化价值）。
+    触发条件＝fallback（错项无标注→同分乱序）/ Top1-Top2 分差过小 /
+    学生提供了作答理由（静态排序未使用个性化证据，理由存在即应参与仲裁）；
+    无理由作答保持确定性透传（评测可回放性保留）。
+    采纳方式=LLM pick 与现 Top1 交换 rerank_score（保持分差结构，不扰动⑤
+    充分性门禁的间距判定），随后重排 final_rank。每笔触发改写 rerank_llm.jsonl
+    留痕；LLM 失败保持规则排序，绝不影响诊断主链路。
+    """
+    import json as _json
+    import logging as _log
+    import time as _time
+    from datetime import datetime as _dt
+    from pathlib import Path as _Path
+    t0 = _time.perf_counter()
+    try:
+        from ..config import settings
+        srt = sorted(session.candidates, key=lambda x: -(float(x.rerank_score or 0)))
+        if len(srt) < 2:
+            return
+        gap = round(float(srt[0].rerank_score or 0) - float(srt[1].rerank_score or 0), 3)
+        has_rationale = bool((attempt.rationale or "").strip())
+        if not (fallback or gap < float(settings.rerank_llm_min_gap) or has_rationale):
+            return
+        provider = get_provider()
+        rows, id_by_code = [], {}
+        for c in srt:
+            m = db.get(Misconception, c.misconception_id)
+            if not m:
+                continue
+            rows.append({"code": m.code, "name": m.name, "category": m.category,
+                         "indicators": list(m.indicators or [])[:2],
+                         "rule_score": round(float(c.rerank_score or 0), 3)})
+            id_by_code[m.code] = c.misconception_id
+        if len(rows) < 2:
+            return
+        options_text = "\n".join(f"{o.get('key')}. {o.get('text')}" for o in (question.options or []))
+        res = provider.rerank_semantic(
+            question_stem=question.stem or "", options_text=options_text,
+            selected_option=attempt.selected_option or "", correct_answer=question.answer or "",
+            student_rationale=attempt.rationale or "", candidates=rows)
+        latency = int((_time.perf_counter() - t0) * 1000)
+        rule_top1 = rows[0]["code"]
+        picked_code = (res or {}).get("picked_code")
+        if picked_code and picked_code != rule_top1 and id_by_code.get(picked_code):
+            picked = next(c for c in session.candidates
+                          if c.misconception_id == id_by_code[picked_code])
+            if float(picked.rerank_score or 0) == float(srt[0].rerank_score or 0):
+                # fallback 同分场景：交换是空转，必须显式置顶（+0.05 不触碰其他间距）
+                picked.rerank_score = round(float(srt[0].rerank_score or 0) + 0.05, 3)
+            else:
+                srt[0].rerank_score, picked.rerank_score = picked.rerank_score, srt[0].rerank_score
+            for i, c in enumerate(sorted(session.candidates,
+                                         key=lambda x: -(float(x.rerank_score or 0)))):
+                c.final_rank = i + 1
+        id2code = {v: k for k, v in id_by_code.items()}
+        final_top1 = id2code.get(sorted(session.candidates,
+                                        key=lambda x: -(float(x.rerank_score or 0)))[0].misconception_id)
+        entry = {
+            "ts": _dt.now().isoformat(timespec="seconds"), "mode": "adopt",
+            "session_id": session.id, "question_id": question.id, "question_code": question.code,
+            "trigger": "fallback" if fallback else ("gap" if gap < float(settings.rerank_llm_min_gap) else "rationale"),
+            "gap": gap,
+            "selected_option": attempt.selected_option,
+            "rationale": (attempt.rationale or "")[:120],
+            "rule_top1": rule_top1, "llm_pick": picked_code,
+            "llm_confidence": (res or {}).get("confidence"),
+            "llm_rationale": (res or {}).get("rationale"), "llm_responded": bool(res),
+            "adopted": final_top1 != rule_top1, "final_top1": final_top1,
+            "latency_ms": latency, "model": getattr(provider, "model", "?"),
+        }
+        raw = settings.database_url.split("sqlite:///")[-1]
+        log_path = _Path(raw).parent / "rerank_llm.jsonl"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:  # noqa: BLE001 仲裁失败保持规则排序，不影响诊断
+        _log.getLogger("yaozhi.rerank_llm").warning("条件语义重排失败（保持规则排序）：%s", e)
 
 
 # 章级通用错因四分类（与 seed.add_chapter_misconceptions.TEMPLATES 对应）。
@@ -340,6 +426,7 @@ def _filter_candidates(db: Session, session: DiagnosisSession, attempt: Attempt,
         db.add(DiagnosisCandidate(session_id=session.id, misconception_id=mid,
                                   rule_score=score, retrieval_score=0.0))
     db.flush()  # autoflush=False：关系加载前显式落库
+    return bool(signal and signal.get("misconception"))
 
 
 def _sufficiency(db: Session, session: DiagnosisSession):

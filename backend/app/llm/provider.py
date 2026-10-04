@@ -108,6 +108,11 @@ class _BaseProvider:
         """影子语义重排：LLM 独立给出 top-1 观点但不改变排序（实验用）。Mock 无实现返回 None。"""
         return None
 
+    def rerank_semantic(self, *, question_stem: str, options_text: str, selected_option: str,
+                        correct_answer: str, student_rationale: str, candidates: list[dict]) -> dict | None:
+        """条件语义重排：LLM 依作答理由给出 top-1 观点，采纳与否由调用方决定。Mock 返回 None。"""
+        return None
+
 
 class MockProvider(_BaseProvider):
     """确定性 Provider（评测基线 / external_api 故障时的降级兜底）。"""
@@ -547,12 +552,13 @@ class ExternalApiProvider(_BaseProvider):
                                                  "result": out}, latency)
         return out
 
-    def rerank_shadow(self, *, question_stem: str, options_text: str, selected_option: str,
-                      correct_answer: str, student_rationale: str, candidates: list[dict]) -> dict | None:
-        """影子语义重排（2026-10-04 实验）：漏斗③现状=rule_score 确定性透传（评测可回放）。
+    def rerank_semantic(self, *, question_stem: str, options_text: str, selected_option: str,
+                        correct_answer: str, student_rationale: str, candidates: list[dict]) -> dict | None:
+        """语义重排观点（2026-10-04 实装）：漏斗③基线=rule_score 确定性透传（可回放）。
 
-        本方法不参与排序，仅依学生作答理由独立给出 top-1 错因观点，由调用方落
-        JSONL 做分歧分析。任何失败返回 None，绝不影响诊断主链路。
+        本方法依学生作答理由独立给出 top-1 错因观点；采纳与否、触发条件由调用方
+        （engine._rerank_llm_adopt：fallback/分差过小才调）决定。任何失败返回 None，
+        调用方保持规则排序，绝不影响诊断主链路。
         candidates: [{"code","name","category","indicators":[...],"rule_score"}, ...]
         """
         if not candidates:
@@ -588,7 +594,11 @@ class ExternalApiProvider(_BaseProvider):
                 "confidence": result.get("confidence", "低") if result.get("confidence") in {"高", "中", "低"} else "中",
                 "rationale": (result.get("rationale") or "")[:100]}
 
-    # ---- 候选重排（规则分确定性排序；LLM 语义重排为计划态，见附录 D）----
+    # 影子模式复用同一观点方法（区别仅在调用方是否采纳结果）
+    rerank_shadow = rerank_semantic
+
+    # ---- 候选重排：基线=规则分确定性排序（可回放）；条件 LLM 仲裁见 engine._rerank_llm_adopt
+    #（fallback/分差过小才触发，2026-10-04 影子实验证据驱动），未触发场景保持透传 ----
     def rerank(self, candidates: list[dict]) -> list[dict]:
         """candidates: [{misconception_id, rule_score, retrieval_score, category?, desc?}]。
         如实口径（2026-09-29 逻辑复查修正）：两种模式下本方法均为「按 rule_score 确定性排序」的
