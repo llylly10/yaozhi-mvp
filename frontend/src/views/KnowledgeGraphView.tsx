@@ -96,11 +96,103 @@ export function kgLabelRotate(a: number): number {
   return Math.round(deg)
 }
 
-export function KnowledgeGraphView({ nodes, edges, title, tabDefs, labelTypes, centerMode, palette, onNodeClick, height }: {
+const KG_HUB_TYPE_ORDER = ['章节', '节', '类别', '靶点', '机制', '效应', '禁忌', '适应证', '知识点', '药物', '错因']
+
+/** 错题关联二部图布局（2026-10-07）：枢纽（章节/药物/错因等）内环按类型分组分扇区，
+    题目外环归入主枢纽扇区；跨枢纽的题落在其枢纽圆均值角（扇区交界）——
+    「连到同一枢纽的题该一起复习」在角度上直接可见，边短且少交叉。
+    纯函数、确定性（同数据同布局），仅错题关联图谱启用（layout="hub"）。 */
+export function kgHubLayout(names: string[], types: Map<string, string>, adj: Map<string, string[]>, W: number, H: number): { pos: Map<string, [number, number]>; ang: Map<string, number>; core: string | null } {
+  const isQ = (n: string) => types.get(n) === '题目'
+  const hubs0 = names.filter((n) => !isQ(n))
+  const qs = names.filter(isQ)
+  const cx = W / 2; const cy = H / 2
+  const R = Math.max(60, Math.min(W, H) / 2 - 46)
+  const pos = new Map<string, [number, number]>()
+  const ang = new Map<string, number>()
+  if (!hubs0.length) { // 纯题目互连：整圆均分兜底
+    qs.forEach((n, i) => {
+      const a = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(qs.length, 1)
+      ang.set(n, a); pos.set(n, [cx + R * 0.8 * Math.cos(a), cy + R * 0.8 * Math.sin(a)])
+    })
+    return { pos, ang, core: null }
+  }
+  const deg = (n: string) => (adj.get(n) ?? []).length
+  const typeRank = (t: string) => { const i = KG_HUB_TYPE_ORDER.indexOf(t); return i === -1 ? 50 : i }
+  const hubs = [...hubs0].sort((a, b) =>
+    typeRank(types.get(a) ?? '其他') - typeRank(types.get(b) ?? '其他')
+    || deg(b) - deg(a) || a.localeCompare(b))
+  // 扇区按 (度+2) 加权：大枢纽多占角度，装得下它的题
+  const weights = hubs.map((h) => deg(h) + 2)
+  const wSum = weights.reduce((s, x) => s + x, 0)
+  const spanOf = new Map<string, [number, number]>()
+  const hubAng = new Map<string, number>()
+  let acc = -Math.PI / 2
+  hubs.forEach((h, i) => {
+    const span = 2 * Math.PI * (weights[i] / wSum)
+    spanOf.set(h, [acc, acc + span])
+    hubAng.set(h, acc + span / 2)
+    acc += span
+  })
+  // 椭圆轨道吃满宽画布；三环：枢纽内环 / 多枢纽题中环 / 单枢纽题外环
+  const rx = Math.min(W / 2 - 56, R * 1.42)
+  const ry = R
+  const ring = (a: number, kx: number, ky: number): [number, number] => [cx + rx * kx * Math.cos(a), cy + ry * ky * Math.sin(a)]
+  for (const h of hubs) {
+    const a = hubAng.get(h)!
+    ang.set(h, a)
+    pos.set(h, ring(a, 0.5, 0.46))
+  }
+  // 连 ≥4 个枢纽的题是这张图的重心候选：取连枢纽最多者为圆心（边全变短辐条）；
+  // 其余多枢纽题放中环扇区交界；单枢纽题外环归入主枢纽扇区
+  const singles = new Map<string, string[]>()
+  const mid: string[] = []
+  const heavy: { q: string; n: number }[] = []
+  for (const q of qs) {
+    const hs = [...new Set(adj.get(q) ?? [])].filter((n) => hubAng.has(n))
+    if (!hs.length) { mid.push(q); continue }
+    if (hs.length >= 4) { heavy.push({ q, n: hs.length }); continue }
+    hs.sort((a, b) => deg(b) - deg(a) || hubs.indexOf(a) - hubs.indexOf(b))
+    if (hs.length === 1) {
+      const p = hs[0]
+      if (!singles.has(p)) singles.set(p, [])
+      singles.get(p)!.push(q)
+    } else mid.push(q)
+  }
+  heavy.sort((a, b) => b.n - a.n || deg(b.q) - deg(a.q) || a.q.localeCompare(b.q))
+  const core = heavy[0]?.q ?? null
+  for (const { q } of heavy) if (q !== core) mid.push(q)
+  if (core) { ang.set(core, 0); pos.set(core, [cx, cy]) }
+  for (const [h, group] of singles) {
+    const [s, e] = spanOf.get(h)!
+    group.sort()
+    group.forEach((q, i) => {
+      const a = s + (e - s) * ((i + 0.5) / group.length)
+      ang.set(q, a)
+      pos.set(q, ring(a, 0.94, 0.94 - (i % 2) * 0.13))
+    })
+  }
+  mid.sort()
+  const bucket = new Map<string, number>()
+  mid.forEach((q, i) => {
+    const hs = [...new Set(adj.get(q) ?? [])].filter((n) => hubAng.has(n))
+    let sx = 0; let sy = 0
+    for (const h of hs) { sx += Math.cos(hubAng.get(h)!); sy += Math.sin(hubAng.get(h)!) }
+    const base = hs.length ? Math.atan2(sy / hs.length, sx / hs.length) : -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(mid.length, 1)
+    const k = bucket.get(base.toFixed(2)) ?? 0
+    bucket.set(base.toFixed(2), k + 1)
+    const a = base + k * 0.16
+    ang.set(q, a)
+    pos.set(q, ring(a, 0.8, 0.78 - (i % 3) * 0.1))
+  })
+  return { pos, ang, core }
+}
+
+export function KnowledgeGraphView({ nodes, edges, title, tabDefs, labelTypes, centerMode, palette, onNodeClick, height, layout }: {
   nodes?: KgNodeT[]; edges: KgEdgeT[]; title?: string
   tabDefs?: KgTabDef[]; labelTypes?: Set<string>; centerMode?: 'auto' | 'degree'
   palette?: Record<string, string>; onNodeClick?: (name: string) => void
-  height?: number
+  height?: number; layout?: 'orbit' | 'hub'
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const chartRef = useRef<echarts.ECharts | null>(null)
@@ -187,7 +279,10 @@ export function KnowledgeGraphView({ nodes, edges, title, tabDefs, labelTypes, c
         adj.get(e.source.name)!.push(e.target.name)
         adj.get(e.target.name)!.push(e.source.name)
       }
-      const { pos, ang } = center ? kgOrbit(nodeList.map((n) => n.name), new Map(nodeList.map((n) => [n.name, n.type || '其他'])), adj, center, W, H) : { pos: new Map<string, [number, number]>(), ang: new Map<string, number>() }
+      const typesMap = new Map(nodeList.map((n) => [n.name, n.type || '其他']))
+      const hub = layout === 'hub' ? kgHubLayout(nodeList.map((n) => n.name), typesMap, adj, W, H) : null
+      const { pos, ang } = hub ?? (center ? kgOrbit(nodeList.map((n) => n.name), typesMap, adj, center, W, H) : { pos: new Map<string, [number, number]>(), ang: new Map<string, number>() })
+      const coreNode = hub?.core ?? null
       chart.setOption({
         animationDuration: reduceMotion ? 0 : 500,
         animationEasing: 'cubicOut',
@@ -203,7 +298,7 @@ export function KnowledgeGraphView({ nodes, edges, title, tabDefs, labelTypes, c
             const [x, y] = pos.get(n.name) ?? [W / 2, H / 2]
             const t = n.type || '其他'
             const showLabel = showSet.has(t)
-            const isCenter = n.name === center
+            const isCenter = layout === 'hub' ? n.name === coreNode : n.name === center
             const a = ang.get(n.name) ?? 0
             const outward = Math.cos(a) >= 0
             // 长名截断：节名多为长短语，超过 7 字只显示前 7 字（全名进 tooltip/详情）
@@ -212,7 +307,7 @@ export function KnowledgeGraphView({ nodes, edges, title, tabDefs, labelTypes, c
             return {
               name: n.name, x, y, category: t,
               tip: `<b>${n.name}</b><br/>${t} · 连边 ${degree.get(n.name) ?? 0} 条<br/><span style="color:#0e7a5f">${(t === '章节' || t === '示范' || t === '已达标') ? '点击聚焦并在下方进入章节自学' : '点击聚焦邻域'}</span>`,
-              symbolSize: t === '核心' ? 44 : t === '系统' ? 32 : (t === '章节' || t === '示范' || t === '已达标') ? (isCenter ? 40 : 20) : t === '题目' ? 26 : t === '药物' ? 20 : t === '节' ? 24 : t === '错因' ? 22 : 14,
+              symbolSize: t === '核心' ? 44 : t === '系统' ? 32 : (t === '章节' || t === '示范' || t === '已达标') ? (isCenter ? 40 : 20) : t === '题目' ? (isCenter ? 30 : 26) : t === '药物' ? 20 : t === '节' ? 24 : t === '错因' ? 22 : 14,
               itemStyle: {
                 color: dot(t),
                 borderColor: KG_RING[t] ?? '#ffffff', borderWidth: 2.5,
@@ -220,13 +315,14 @@ export function KnowledgeGraphView({ nodes, edges, title, tabDefs, labelTypes, c
               },
               label: {
                 show: showLabel,
-                position: isCenter ? 'inside' : outward ? 'right' : 'left',
-                distance: 7, rotate: isCenter ? 0 : kgLabelRotate(a),
+                // hub 模式核心题尺寸小，内置标签装不下——与其他节点一致用外置水平标签
+                position: isCenter && layout !== 'hub' ? 'inside' : outward ? 'right' : 'left',
+                distance: 7, rotate: isCenter || layout === 'hub' ? 0 : kgLabelRotate(a),
                 formatter: lbl,
                 fontSize: isCenter ? 13 : t === '系统' ? 11 : (t === '章节' || t === '示范' || t === '已达标') ? 10 : 10,
                 fontWeight: (isCenter || t === '系统') ? 700 : 500,
-                color: isCenter ? '#ffffff' : '#1f2a26',
-                textBorderColor: isCenter ? 'transparent' : 'rgba(255,255,255,0.92)',
+                color: isCenter && layout !== 'hub' ? '#ffffff' : '#1f2a26',
+                textBorderColor: isCenter && layout !== 'hub' ? 'transparent' : 'rgba(255,255,255,0.92)',
                 textBorderWidth: 3,
               },
               emphasis: { scale: 1.3, label: { show: true, rotate: 0 } },

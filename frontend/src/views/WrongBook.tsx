@@ -309,6 +309,7 @@ export function WrongBook({ userId, onGoTodo, onAskAi, onGoMap }: { userId: stri
           <KnowledgeGraphView
             nodes={wgraph.nodes} edges={wgraph.edges}
             title="错题关联图谱"
+            layout="hub"
             tabDefs={[
               { k: 'all', label: `全部 ${wgraph.edges.length}`, match: () => true },
               { k: 'know', label: '同知识', match: (e) => e.edge === '属于' || e.edge === '涉及' },
