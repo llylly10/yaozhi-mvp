@@ -105,7 +105,8 @@ def test_qa_no_evidence_refusal(monkeypatch):
 
 
 def test_external_provider_defaults_qwen(monkeypatch):
-    """外部 Provider 默认 qwen3.7-flash/阿里云百炼地址；external_* 优先，qwen_* 仅回退；无 key 抛错。"""
+    """外部 Provider 默认模型取 cfg.external_model（模型名随切换演变，不在此硬编码）/阿里云百炼地址；
+    external_* 优先，qwen_* 仅回退；无 key 抛错。"""
     from app.config import settings as cfg
     from app.llm import provider as pv
     monkeypatch.setattr(cfg, "external_api_key", "")
@@ -120,7 +121,7 @@ def test_external_provider_defaults_qwen(monkeypatch):
     monkeypatch.setattr(cfg, "external_api_key", "test-key")
     monkeypatch.setattr(cfg, "external_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     p = pv.ExternalApiProvider()
-    assert p.model == "qwen3.7-flash", p.model
+    assert p.model == cfg.external_model, p.model
     assert p._base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1", p._base_url
     # qwen 回退链
     monkeypatch.setattr(cfg, "external_api_key", "")
