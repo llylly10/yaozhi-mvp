@@ -410,10 +410,16 @@ export function QAView({
 
               {m.citations.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-1.5 border-t border-dashed border-line pt-3">
-                  {m.citations.map((c) => (
-                    <span key={c.ref} className={`rounded-full px-2.5 py-1 text-[11px] ${
-                      c.source === 'itembank' ? 'bg-gold-soft text-ink-2' : 'bg-paper text-ink-2'}`}>
-                      {c.ref} {c.label || `${c.chapter} · p${c.book_page}`}
+                  {m.citations.map((c) => c.source === 'itembank' ? (
+                    <span key={c.ref} className="badge-capsule gold" title={`题库依据 ${c.ref}`}>
+                      <span className="font-bold">{c.ref}</span>
+                      <span>题库 · {c.label || c.code || '题目解析'}</span>
+                    </span>
+                  ) : (
+                    <span key={c.ref} className="badge-capsule primary" title={`教材依据 ${c.ref}`}>
+                      <span className="font-bold">{c.ref}</span>
+                      <span className="font-semibold">📖 教材 P{c.book_page}</span>
+                      {c.chapter && <span className="font-normal opacity-75">{c.chapter}</span>}
                     </span>
                   ))}
                 </div>

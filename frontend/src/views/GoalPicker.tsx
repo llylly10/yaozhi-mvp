@@ -26,7 +26,7 @@ export function GoalPicker({ onNext, goal, onBack, isSubPage, examDate, onExamDa
       <p className="mt-2 text-sm text-ink-2">目标决定摸底后的学习路径排序，之后可以在学习档案里修改。</p>
       <div className="mt-7 space-y-3.5">
         {GOALS.map(([t, d]) => (
-          <motion.button key={t} whileTap={{ scale: 0.99 }} onClick={() => setPicked(t)}
+          <motion.button key={t} whileTap={{ scale: 0.99 }} aria-pressed={picked === t} onClick={() => setPicked(t)}
             className={`relative w-full rounded-2xl border p-5 text-left transition-colors duration-150
               ${picked === t ? 'border-primary bg-primary-soft/80 shadow-xs' : 'border-line-2 bg-white hover:border-line hover:bg-paper-2/40'}`}>
             <span className="relative z-10 flex items-start gap-3.5">
@@ -60,7 +60,7 @@ export function GoalPicker({ onNext, goal, onBack, isSubPage, examDate, onExamDa
               顶部胶囊按此日期计算；预设日期以官方公告为准，可自定义覆盖。
             </p>
           </div>
-          <span className="whitespace-nowrap rounded-full bg-amber-50 px-2.5 py-1 text-[12px] font-bold text-amber-700">
+          <span className="whitespace-nowrap rounded-full bg-cat-orange-soft px-2.5 py-1 text-[12px] font-bold text-cat-orange">
             {effectiveIso ? (days >= 0 ? `D-${days}` : '已结束') : '未设置'}
           </span>
         </div>

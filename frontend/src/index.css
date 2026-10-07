@@ -37,6 +37,15 @@
   --color-ok: #2E9E6B;
   --color-ok-soft: #E1F1E8;
 
+  /* 补档 token（2026-10-06）：以下 6 个此前被多处样式引用但从未在 @theme 定义，
+     对应背景/文字/悬停全部静默失效（Tailwind v4 不生成未知 token 的 utility）。 */
+  --color-paper-1: #EDF1EC;       /* paper 与 paper-2 的过渡档：卡内浅底/输入框底/状态条底 */
+  --color-paper-3: #DDE5DC;       /* paper-2 加深一档：hover 用 */
+  --color-surface: #F5F8F4;       /* 区块/表头浅表面 */
+  --color-ink-1: #142A24;         /* 标题墨色（与 ink 同档） */
+  --color-warn: #C97F26;          /* 警示琥珀（诊断卡「证据·低」印章等） */
+  --color-primary-focus: #085043; /* primary 悬停加深一档 */
+
   --radius-card: 18px;
   --shadow-card: 0 1px 2px rgba(20, 42, 36, 0.05), 0 14px 34px -24px rgba(20, 42, 36, 0.30);
   --shadow-lg: 0 2px 8px rgba(20, 42, 36, 0.07), 0 32px 70px -32px rgba(20, 42, 36, 0.38);

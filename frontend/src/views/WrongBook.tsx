@@ -413,17 +413,21 @@ export function WrongGroups({ wrong, openId, loadingRecall, recallMap, onToggle,
                             <span
                               className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
                                 w.decay_level === 'fresh'
-                                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                  ? 'bg-ok-soft text-ok'
                                   : w.decay_level === 'warning'
-                                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                                  : 'bg-rose-500/15 text-rose-700 animate-pulse dark:text-rose-300'
+                                  ? 'bg-cat-orange-soft text-cat-orange'
+                                  : 'bg-cat-red-soft text-cat-red'
                               }`}
                             >
                               <Hourglass size={12} weight="fill" />
                               新鲜度 {w.retention_pct}% · {w.decay_level === 'fresh' ? '保鲜良好' : w.decay_level === 'warning' ? '遗忘警戒' : '衰退严重'}
                             </span>
                           )}
-                          <span className="ml-auto text-xs text-ink-3">选 {w.selected} · 正确 {w.answer}</span>
+                          <span className="ml-auto text-xs text-ink-3">
+                            选 <span className="font-bold text-cat-red">{w.selected}</span>
+                            <span className="mx-1 text-line">·</span>
+                            正确 <span className="font-bold text-ok">{w.answer}</span>
+                          </span>
                         </div>
                         <p className="mt-2.5 text-[15px] font-medium leading-relaxed">{w.stem}</p>
                         {w.misconception && <p className="mt-1.5 text-xs text-ink-2">归因：{w.misconception.name}</p>}
@@ -595,7 +599,10 @@ export function RecallCardView({ data }: { data: RecallData }) {
           <div className="mt-2 space-y-2">
             {anchors.map((a, i) => (
               <div key={i} className="rounded-lg border border-line-2 bg-paper px-3 py-2">
-                <p className="text-[10.5px] text-ink-3">{a.chapter || '教材'} · 教材定位第{a.book_page || a.page}页</p>
+                <p className="flex flex-wrap items-center gap-1.5 text-[10.5px] text-ink-3">
+                  <span className="rounded bg-gold-soft px-1.5 py-0.5 font-bold text-gold">📖 教材 P{a.book_page || a.page}</span>
+                  {a.chapter && <span>{a.chapter}</span>}
+                </p>
                 <p className="mt-1 text-[12.5px] leading-relaxed text-ink-2">{a.text}</p>
               </div>
             ))}

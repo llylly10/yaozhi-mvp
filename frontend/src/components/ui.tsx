@@ -73,15 +73,15 @@ export function EvidenceNote({ ev, reviewStatus }: { ev: KgEvidence; reviewStatu
     <div className="mt-2 rounded-xl border border-line-2 bg-paper-1/40 p-2.5 text-[11.5px] leading-relaxed">
       <div className="flex flex-wrap items-center justify-between gap-1 mb-1.5 text-ink-3">
         <div className="flex items-center gap-1.5">
-          <span className="rounded-md bg-[var(--color-gold-soft)] border border-gold/30 px-1.5 py-0.5 text-[10px] font-extrabold text-gold">
+          <span className="rounded-md bg-gold-soft border border-gold/30 px-1.5 py-0.5 text-[10px] font-extrabold text-gold">
             📖 教材 P{ev.book_page ?? '—'}
           </span>
           {ev.chapter && <span className="font-semibold text-ink-2">{ev.chapter}</span>}
         </div>
         {!reviewed ? (
-          <span className="rounded bg-paper-2 px-1.5 py-0.2 text-[9.5px] font-semibold text-ink-3">待顾问审校</span>
+          <span className="rounded bg-paper-2 px-1.5 py-0.5 text-[9.5px] font-semibold text-ink-3">待顾问审校</span>
         ) : (
-          <span className="rounded bg-emerald-50 px-1.5 py-0.2 text-[9.5px] font-bold text-emerald-700">专家已审校</span>
+          <span className="rounded bg-ok-soft px-1.5 py-0.5 text-[9.5px] font-bold text-ok">专家已审校</span>
         )}
       </div>
       <div className="text-ink-2 pl-2 border-l-2 border-primary/50 leading-relaxed font-medium">

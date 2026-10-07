@@ -68,19 +68,20 @@ export function Assessment({ userId, onDone, onError, onBack }: {
                   onClick={() => toggleFlag(q.id, i)}
                   className={`flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium transition ${
                     flagged[q.id]
-                      ? 'bg-amber-500/15 text-amber-700 border border-amber-500/30'
+                      ? 'bg-cat-orange-soft text-cat-orange border border-cat-orange/30'
                       : 'text-ink-3 hover:text-ink bg-paper-2'
                   }`}
                   title="标记本题存疑"
                 >
-                  <BookmarkSimple size={12} weight={flagged[q.id] ? 'fill' : 'regular'} className={flagged[q.id] ? 'text-amber-600' : ''} />
+                  <BookmarkSimple size={12} weight={flagged[q.id] ? 'fill' : 'regular'} className={flagged[q.id] ? 'text-cat-orange' : ''} />
                   {flagged[q.id] ? '已存疑' : '标记存疑'}
                 </button>
               </div>
               <p className="mb-4 text-[15px] font-medium leading-relaxed">{q.stem}</p>
               <div className="space-y-2.5">
                 {q.options.map((o) => (
-                  <motion.button key={o.key} whileTap={{ scale: 0.99 }} onClick={() => setAnswers({ ...answers, [q.id]: o.key })}
+                  <motion.button key={o.key} whileTap={{ scale: 0.99 }} aria-pressed={answers[q.id] === o.key}
+                    onClick={() => setAnswers({ ...answers, [q.id]: o.key })}
                     className={`relative w-full rounded-xl border px-4 py-3 text-left text-sm transition-colors duration-150
                       ${answers[q.id] === o.key ? 'border-primary bg-primary-soft/75 shadow-xs' : 'border-line bg-white hover:border-ink-3/40 hover:bg-paper-2/40'}`}>
                     <span className="relative z-10 flex items-center gap-3">
@@ -107,14 +108,14 @@ export function Assessment({ userId, onDone, onError, onBack }: {
                   onClick={() => document.getElementById(`assess-q-${idx}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
                   className={`relative size-6 text-[10px] font-bold rounded-md flex items-center justify-center transition flex-none ${
                     answers[item.id]
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300/60'
+                      ? 'bg-ok-soft text-ok border border-ok/30'
                       : 'bg-paper-2 text-ink-3 hover:bg-paper'
                   }`}
                   title={`第 ${idx + 1} 题${answers[item.id] ? '（已答）' : '（未答）'}${flagged[item.id] ? ' · 存疑待查' : ''}`}
                 >
                   {idx + 1}
                   {flagged[item.id] && (
-                    <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-amber-500 ring-1 ring-white" />
+                    <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-cat-orange ring-1 ring-white" />
                   )}
                 </button>
               ))}
