@@ -4,14 +4,15 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # W1 开发/测试用 SQLite；部署切 PostgreSQL：postgresql+psycopg://…（模型层未用 PG 专有类型）
     database_url: str = "sqlite:///./yaozhi_w1.db"
-    model_provider: str = "external_api"  # mock | external_api（OpenAI 兼容，默认 deepseek-v4-flash-0731）| vllm（保留）
+    model_provider: str = "external_api"  # mock | external_api（OpenAI 兼容，默认 qwen3.7-flash-2026-07-15）| vllm（保留）
     # ---- external_api（通用外部模型，OpenAI 兼容接口）----
-    # 2026-09-15 起默认 qwen3.7-flash；2026-10-02 起 deepseek-v4-flash-0731（仍走阿里云百炼
-    # DashScope compatible-mode，同一 Key；qwen 免费额度当日耗尽后切换，新模型额度独立）。
+    # 2026-09-15 起默认 qwen3.7-flash；2026-10-02 起 deepseek-v4-flash-0731；2026-10-06 起
+    # qwen3.7-flash-2026-07-15（仍走阿里云百炼 DashScope compatible-mode，同一 Key；
+    # 每次切换均为免费额度耗尽所致，新模型周期额度独立）。
     # qwen_* 为旧字段，仅作回退。
     external_api_key: str = ""  # env: YAOZHI_EXTERNAL_API_KEY（阿里云百炼 Key）
     external_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"  # env: YAOZHI_EXTERNAL_BASE_URL
-    external_model: str = "deepseek-v4-flash-0731"  # env: YAOZHI_EXTERNAL_MODEL
+    external_model: str = "qwen3.7-flash-2026-07-15"  # env: YAOZHI_EXTERNAL_MODEL
     # ---- external_api（Qwen，旧字段：仅当 external_* 为空时回退）----
     qwen_api_key: str = ""          # 阿里云百炼 DashScope API Key（env: YAOZHI_QWEN_API_KEY）
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
