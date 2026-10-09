@@ -448,6 +448,13 @@ def _restore_course_assets(db):
         r_cp = apply_refined_confusion_pairs(db)
         if r_cp["updated"] or r_cp["created"]:
             print(f"[seed] 34章混淆对精细化恢复: 更新 {r_cp['updated']} 对，补全 {r_cp['created']} 对，清理脏数据 {r_cp['deleted_bad']}")
+        # 图谱 A/B 类机械核验边转 published（2026-10-07）：A 大纲转写重推导 diff、
+        # B 题库共现引用核验，通过即转；C 类保持 draft 待药理顾问。幂等可重放。
+        from seed.promote_graph_review import promote_verified_edges
+        r_pg = promote_verified_edges(db)
+        if r_pg["published"]:
+            print(f"[seed] 图谱评审晋升: A 类 {r_pg['a']} + B 类 {r_pg['b']} 边转 published，"
+                  f"C 类 {r_pg['kept_draft']} 边保持 draft")
     except Exception as e:  # noqa: BLE001
         # 醒目提示：异常会导致补章(4章)与内容化(published)静默缺失，reset-demo
         # 接口仍返回 ok，演示方不易察觉。打印类型便于定位（如枚举非法值拦截）。

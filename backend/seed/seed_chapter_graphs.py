@@ -16,7 +16,9 @@ DOM-PHARMO-ANS 的 11 条机制深边互补：
 纪律（与 seed_knowledge_graph / seed_knowledge_evidence 一致）：
   - 不新增机制断言：34 章不写"作用于/禁忌用于/适应证"等机制边；
     药物边只表达"本章题目涉及该药"（属于），不表达药效。
-  - 全部 review_status=draft（待药理顾问审校），种子域 11 条不动。
+  - 新建边 review_status=draft；A 大纲转写/B 题库共现两类由
+    seed.promote_graph_review 机械核验后转 published（见 _restore_course_assets
+    末尾重放），C 类保持 draft 待药理顾问。
   - 幂等：以 (domain_id, source, edge, target) 判重；混淆对以
     (domain_id, drug_a, drug_b) 有序判重。reset-demo 重放安全。
 """

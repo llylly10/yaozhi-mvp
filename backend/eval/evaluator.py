@@ -51,13 +51,16 @@ def _predict_rule_mock(stem: str, selected_opt: str, rationale: str = "") -> tup
 _LATEST_REPORT: dict[str, Any] | None = None
 
 
-def evaluate_benchmark(provider_mode: str = "mock", api_key: str | None = None) -> dict[str, Any]:
+def evaluate_benchmark(provider_mode: str = "mock", api_key: str | None = None,
+                       cases: list[dict] | None = None) -> dict[str, Any]:
     """执行标准保护测试集全量自动化评测。
-    
+
     参数：
       provider_mode: 'mock' (确定性基线) 或 'external_api' / 'glm' (大模型推理)
+      cases: 案例集（默认 None = 标准保护测试集 80 例；独立留存集等外部传入）
     """
-    cases = get_benchmark_cases()
+    if cases is None:
+        cases = get_benchmark_cases()
     results = []
 
     provider = None
