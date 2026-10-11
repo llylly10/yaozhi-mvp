@@ -1,0 +1,46 @@
+[project]
+name = "yaozhi-backend"
+version = "0.1.0"
+description = "药知 MVP 后端（FastAPI 模块化单体）"
+requires-python = ">=3.13"
+# 版本区间与迁移前实际运行环境对齐（2026-10-11 用pip list 反查得到）：
+#   openai 实为 3.8.0（不是 requirements.txt 字面写的 1.x）、pytest 实为 9.1.1。
+#   requirements.txt 的 `>=1.40` / `>=8.3` 区间过宽，是"依赖漂移"的根源。
+#   此处按**实际验证可用的版本**收紧上界，避免 uv 解析时把大版本跳回去或降下去。
+dependencies = [
+    "fastapi>=0.141,<0.142",
+    "uvicorn>=0.52,<0.53",
+    "sqlalchemy>=2.0.52,<2.0.53",
+    "pydantic>=2.13,<2.14",
+    "pydantic-settings>=2.6,<3",
+    "httpx>=0.28,<0.29",
+    "openai>=3.8,<3.9",
+    "fastembed>=0.8,<0.9",
+]
+
+[dependency-groups]
+# dev 组：测试 + 可选依赖
+# pyBKT 是掌握度引擎的可选加速/校验后端（app/mastery/bkt.py 做了 ImportError降级，
+#   未装走纯 Python BKT）。它此前是"某台机器上手工装的"，从未声明进 requirements
+#   —— 这是依赖管理缺口的典型样本，现显式声明保证跨机可复现。
+dev = ["pytest>=9.1,<10", "pybkt>=1.4,<2"]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# 本项目以源码运行（app/ 由工作目录引入），不做包分发
+packages = []
+
+# 依赖管理说明
+#
+# pyBKT 1.4.3 需要一行补丁才能在现代 sklearn 下import：
+#   util/metrics.py 的 `except TypeError` -> `except Exception`
+# 该补丁**不通过版本锁定解决**（试过numpy/pandas/threadpoolctl 降级，均无效），
+# 而是通过 scripts/patch_pybkt.py 在部署时打进 site-packages。
+# 详见 scripts/patch_pybkt.py 顶部注释。
+#
+# 换环境后必须执行：python scripts/patch_pybkt.py
+# 未打补丁的症状：test_mastery_bkt 的可选依赖用例被静默 skip
+#   → 140 passed 1 skipped 变成 139 passed 2 skipped（不报错不告警）。

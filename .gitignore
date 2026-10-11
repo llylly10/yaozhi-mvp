@@ -21,3 +21,9 @@ backend/eval_report.json
 frontend/scratch_shots/
 backend/rerank_shadow.jsonl
 backend/rerank_llm.jsonl
+
+# Python 环境（uv 管理；.venv 内自带 * 规则，此处显式声明防uv 行为变化）
+.venv/
+.venv-*/
+# setuptools 构建产物（pyproject.toml 引入后生成）
+*.egg-info/
